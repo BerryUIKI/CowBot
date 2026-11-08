@@ -153,9 +153,10 @@ agent editor is not part of this release.
 
 Progress refreshes from live events; all history persists across restarts.
 
-> Answering needs a model provider. Without a configured provider nothing runs;
-> with a provider that cannot answer, the channel shows a system notice with
-> the error instead of staying silent.
+> Answers use the active model provider. With no provider configured the app
+> falls back to the offline mock model, which only echoes the prompt; with a
+> provider that cannot answer, the channel shows a system notice with the error
+> instead of staying silent.
 
 ### Approval policies
 

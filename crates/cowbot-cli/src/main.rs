@@ -25,7 +25,7 @@ use config::{FileConfig, Overrides, Settings};
 #[derive(Parser)]
 #[command(name = "cowbot")]
 #[command(author = "CowBot Contributors")]
-#[command(version = "0.1.3")]
+#[command(version = "0.1.4")]
 #[command(about = "CowBot: High-performance Multi-Agent Collaboration Platform in Rust", long_about = None)]
 struct Cli {
     #[arg(short, long, global = true)]
