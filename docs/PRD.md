@@ -66,7 +66,7 @@ CowBot fills exactly this gap: **a self-hosted, channel-native multi-agent team 
 
 CowBot's core differentiation is not "a stronger single agent", but **putting multiple agents and humans in the same collaboration space**:
 
-- Channels and threads are the primary interface; humans and agents are both channel members. Every agent also has a direct conversation where messages reach it without a mention; group channels keep mention-based addressing (ADR-0024).
+- Channels and threads are the primary interface; humans and agents are both channel members. Every agent also has a direct conversation where messages reach it without a mention; group channels keep mention-based addressing (ADR-0024). Users can also create single-agent conversation sessions with an independent, visible model context and manual or automatic compaction (ADR-0030).
 - Agents are addressed via @mention in a group channel and answer in that channel; in an agent's direct conversation every message is addressed to that agent. Proactive task claiming by role is not implemented in 0.1.x.
 - Tasks, reasoning, tool calls, approvals, and deliverables all live in the channel timeline, traceable and auditable.
 - Humans can step in at any time to correct, approve, or take over.
@@ -156,7 +156,7 @@ CowBot follows a "single core, two forms" model:
 - Docker sandbox backend.
 - Webhooks and Mattermost / Slack / Feishu integrations.
 - Long-term agent memory and knowledge base.
-- Streaming responses, retries, rate limiting, and token/cost accounting.
+- Streaming responses, retries, rate limiting, and cost/billing views (per-call token usage is recorded, ADR-0029).
 - Audit log and operation replay.
 
 ### 5.3 P2 (Ecosystem)
