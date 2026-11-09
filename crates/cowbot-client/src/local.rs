@@ -235,7 +235,61 @@ impl LocalClient {
 #[async_trait]
 impl Client for LocalClient {
     async fn session(&self) -> CowResult<ClientSession> {
-        Ok(self.session.clone())
+        let user_id = self.session.user.id.clone();
+        let user = self
+            .store
+            .get_user(&user_id)
+            .await?
+            .ok_or_else(|| CowError::Storage(format!("user '{}' was not found", user_id.0)))?;
+        Ok(ClientSession {
+            user: ClientUser {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+            },
+            workspace: self.session.workspace.clone(),
+        })
+    }
+
+    async fn update_user_profile(&self, name: &str, email: &str) -> CowResult<ClientSession> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CowError::Config("Display name is required.".to_string()));
+        }
+        if name.chars().count() > 80 {
+            return Err(CowError::Config(
+                "Display name is limited to 80 characters.".to_string(),
+            ));
+        }
+
+        let email = email.trim().to_lowercase();
+        let email_valid = email
+            .split_once('@')
+            .map(|(local, domain)| !local.is_empty() && !domain.is_empty())
+            .unwrap_or(false);
+        if !email_valid {
+            return Err(CowError::Config("Enter a valid email address.".to_string()));
+        }
+        if let Some(existing) = self.store.get_user_by_email(&email).await? {
+            if existing.id != self.session.user.id {
+                return Err(CowError::Config(
+                    "That email is already used by another local user.".to_string(),
+                ));
+            }
+        }
+
+        self.store
+            .update_user(&self.session.user.id, name, &email)
+            .await?;
+
+        Ok(ClientSession {
+            user: ClientUser {
+                id: self.session.user.id.clone(),
+                name: name.to_string(),
+                email,
+            },
+            workspace: self.session.workspace.clone(),
+        })
     }
 
     fn subscribe(&self) -> EventStream {

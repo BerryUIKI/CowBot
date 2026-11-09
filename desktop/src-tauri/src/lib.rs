@@ -175,6 +175,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_session,
+            commands::update_user_profile,
             commands::list_channels,
             commands::ensure_agent_channels,
             commands::create_channel,
@@ -205,6 +206,7 @@ pub fn run() {
             commands::save_model_provider,
             commands::delete_model_provider,
             commands::activate_model_provider,
+            commands::set_active_model,
             commands::test_model_provider,
             commands::fetch_provider_models,
             commands::get_onboarding_state,
