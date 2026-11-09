@@ -4,11 +4,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
-use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::error::CowResult;
 use cowbot_core::risk::RiskLevel;
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use serde::Deserialize;
-use serde_json::json;
 
 const MAX_ARGUMENT_CHARS: usize = 2_000;
 const MAX_RECENT_CALLS: usize = 5;
@@ -234,6 +233,7 @@ mod tests {
     use super::*;
     use cowbot_core::agent::AgentId;
     use cowbot_llm::{ChatCompletionResponse, MockLlmProvider};
+    use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn request(arguments: serde_json::Value) -> PermissionRequest {

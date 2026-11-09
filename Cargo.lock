@@ -391,6 +391,7 @@ dependencies = [
  "cowbot-llm",
  "cowbot-store",
  "cowbot-tools",
+ "serde",
  "serde_json",
  "tokio",
 ]
