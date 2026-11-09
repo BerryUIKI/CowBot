@@ -31,6 +31,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0025](0025-database-migration-checksum-compatibility.md) | Database migration checksum compatibility |
 | [0026](0026-channel-and-conversation-management.md) | Channel and conversation management |
 | [0027](0027-rich-agent-output.md) | Rich agent output: Markdown and sandboxed HTML artifacts |
+| [0028](0028-main-assistant-and-workspace-actions.md) | Main assistant and desktop workspace actions |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

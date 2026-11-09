@@ -19,6 +19,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+async-trait = "0.1"
 parking_lot = "0.12"
 tokio = { version = "1", features = ["time"] }
 cowbot-agent = { path = "../../crates/cowbot-agent" }

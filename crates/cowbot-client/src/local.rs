@@ -18,7 +18,7 @@ use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
-    bootstrap_local, bootstrap_local_named, ApprovalService, AssignmentService,
+    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
     ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport, CrewRunOptions,
     CrewRunner, LocalContext, TaskService, TemplateService,
 };
@@ -27,7 +27,9 @@ use cowbot_tools::ToolRegistry;
 use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
-use crate::{Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport};
+use crate::{
+    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport,
+};
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
 pub struct LocalClient {
@@ -40,6 +42,7 @@ pub struct LocalClient {
     tasks: TaskService,
     assignments: AssignmentService,
     approvals: ApprovalService,
+    agents: AgentService,
 }
 
 impl LocalClient {
@@ -73,6 +76,7 @@ impl LocalClient {
             ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone());
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
+        let agents = AgentService::new(store.clone(), bus.clone());
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -92,6 +96,7 @@ impl LocalClient {
             tasks,
             assignments,
             approvals,
+            agents,
         })
     }
 
@@ -438,6 +443,12 @@ impl Client for LocalClient {
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>> {
         self.store.list_agents(&self.session.workspace.id).await
     }
+
+    async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile> {
+        self.agents
+            .update_agent(&self.session.workspace.id, update)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -600,6 +611,32 @@ mod tests {
 
         let channels = imported.list_channels().await.unwrap();
         assert!(channels.iter().any(|channel| channel.name == "general"));
+    }
+
+    #[tokio::test]
+    async fn update_agent_roundtrips_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let added = client
+            .instantiate_agents("builtin-general-assistant")
+            .await
+            .unwrap();
+        let agent = added.first().unwrap();
+
+        let updated = client
+            .update_agent(&AgentUpdate {
+                id: agent.id.clone(),
+                name: "chief".to_string(),
+                role: "Chief of Staff".to_string(),
+                tools: vec!["read_file".to_string()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "chief");
+
+        let channels = client.list_channels().await.unwrap();
+        assert!(channels.iter().any(|channel| {
+            channel.agent_id.as_ref() == Some(&agent.id) && channel.name == "chief"
+        }));
     }
 
     #[tokio::test]

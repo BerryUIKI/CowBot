@@ -193,9 +193,10 @@ impl ChannelAgentService {
         let history = self.render_history(&channel, message, &agents).await?;
 
         let mut tasks = Vec::new();
+        let platform = Self::platform_context(&agents);
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
-            let task = Self::turn_task(agent, &channel, message, &history, direct);
+            let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
             scheduler
                 .enqueue(
                     &task,
@@ -223,12 +224,45 @@ impl ChannelAgentService {
         })
     }
 
+    /// Environment shared by every channel turn.
+    fn platform_context(agents: &[AgentProfile]) -> String {
+        let mut roster = agents
+            .iter()
+            .take(20)
+            .map(|agent| format!("- {} — {}", agent.name, agent.role))
+            .collect::<Vec<_>>();
+        if agents.len() > 20 {
+            roster.push(format!("- and {} more", agents.len() - 20));
+        }
+        if roster.is_empty() {
+            roster.push("- (no agents yet)".to_string());
+        }
+
+        format!(
+            "Environment: you are running inside CowBot, a local desktop workspace for a \
+             one-person company. The user is the operator and sees your reply in the CowBot app.\n\n\
+             Workspace agents:\n{roster}\n\n\
+             Workspace actions (only when enabled for you): create_channel creates a group \
+             channel; create_task queues work for another agent but does not run it; \
+             instantiate_team adds agents from a template; list_agents and list_templates \
+             inspect the workspace. Deleting channels or agents is a UI action you cannot perform.\n\n\
+             Rendering: normal answers use Markdown. For an interactive interface, put a \
+             complete HTML document in a ```html code block; it runs in a sandbox with inline \
+             CSS and JavaScript but no network access, and it cannot send messages back.\n\n\
+             Rules: reply in the language of the latest user message. Do not invent or refer to \
+             external products such as Slack, Discord, Teams, or Feishu. If a request needs an \
+             action you cannot perform, explain the matching CowBot UI action plainly.",
+            roster = roster.join("\n"),
+        )
+    }
+
     fn turn_task(
         agent: &AgentProfile,
         channel: &Channel,
         message: &ChannelMessage,
         history: &str,
         direct: bool,
+        platform: &str,
     ) -> Task {
         let author = match &message.sender {
             Sender::User(_) => "the user".to_string(),
@@ -238,23 +272,27 @@ impl ChannelAgentService {
 
         let description = if direct {
             format!(
-                "You are the agent in a direct conversation with {author}.\n\n\
+                "{platform}\n\n\
+                 You are the agent in a direct conversation with {author}.\n\n\
                  Recent messages in this conversation:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
                  Reply as yourself. Be concise, answer what was asked, and do not \
                  repeat the conversation history back to the user.",
+                platform = platform,
                 history = history,
                 author = author,
                 content = message.content.trim(),
             )
         } else {
             format!(
-                "You were mentioned in the channel #{channel_name}.\n\n\
+                "{platform}\n\n\
+                 You were mentioned in the channel #{channel_name}.\n\n\
                  Recent channel messages:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
                  Reply to the latest message as a teammate in this channel. \
                  Be concise, answer what was asked, and do not repeat the channel \
                  history back to the user.",
+                platform = platform,
                 channel_name = channel.name,
                 history = history,
                 author = author,

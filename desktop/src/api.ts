@@ -19,6 +19,7 @@ import type {
   Task,
   TemplateDocument,
   ToolCallRecord,
+  ToolDefinition,
   WorkspaceSummary,
 } from "./types";
 
@@ -84,6 +85,19 @@ export function listTemplates(): Promise<TemplateDocument[]> {
 
 export function instantiateAgents(templateId: string): Promise<AgentProfile[]> {
   return invoke<AgentProfile[]>("instantiate_agents", { templateId });
+}
+
+export function updateAgent(
+  agentId: string,
+  name: string,
+  role: string,
+  tools: string[],
+): Promise<AgentProfile> {
+  return invoke<AgentProfile>("update_agent", { agentId, name, role, tools });
+}
+
+export function listAvailableTools(): Promise<ToolDefinition[]> {
+  return invoke<ToolDefinition[]>("list_available_tools");
 }
 
 export function createTask(input: {

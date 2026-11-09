@@ -1,5 +1,5 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{Client, NewTask};
+use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
@@ -8,6 +8,7 @@ use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::tool::ToolDefinition;
 use cowbot_llm::{ChatCompletionRequest, ChatMessage};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
@@ -214,6 +215,31 @@ pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentProfile>
         .list_agents()
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_agent(
+    state: State<'_, AppState>,
+    agent_id: String,
+    name: String,
+    role: String,
+    tools: Vec<String>,
+) -> Result<AgentProfile, String> {
+    state
+        .client
+        .update_agent(&AgentUpdate {
+            id: AgentId::new(agent_id),
+            name,
+            role,
+            tools,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_available_tools(state: State<'_, AppState>) -> Vec<ToolDefinition> {
+    state.tools.definitions()
 }
 
 #[tauri::command]

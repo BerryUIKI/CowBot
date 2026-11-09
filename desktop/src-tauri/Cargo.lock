@@ -654,6 +654,7 @@ dependencies = [
 name = "cowbot-desktop"
 version = "0.1.5"
 dependencies = [
+ "async-trait",
  "cowbot-agent",
  "cowbot-client",
  "cowbot-core",

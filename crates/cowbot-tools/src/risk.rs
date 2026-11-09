@@ -24,6 +24,26 @@ impl StaticRiskClassifier {
                 self.classify_path_tool(call, RiskLevel::Medium, RiskLevel::High, "write_file")
             }
             "execute_code" => self.classify_command(call),
+            "list_agents" | "list_templates" => RiskAssessment {
+                level: RiskLevel::ReadOnly,
+                rule_id: "workspace.read_only".to_string(),
+                reason: format!("{} reads workspace metadata", call.name),
+            },
+            "create_channel" => RiskAssessment {
+                level: RiskLevel::Medium,
+                rule_id: "workspace.create_channel".to_string(),
+                reason: "create_channel changes the workspace channel list".to_string(),
+            },
+            "create_task" => RiskAssessment {
+                level: RiskLevel::Medium,
+                rule_id: "workspace.create_task".to_string(),
+                reason: "create_task queues work for another agent".to_string(),
+            },
+            "instantiate_team" => RiskAssessment {
+                level: RiskLevel::High,
+                rule_id: "workspace.instantiate_team".to_string(),
+                reason: "instantiate_team adds agents to the workspace".to_string(),
+            },
             other => RiskAssessment {
                 level: RiskLevel::High,
                 rule_id: "unknown_tool".to_string(),
@@ -306,6 +326,49 @@ mod tests {
             json!({ "command": "git push --force" }),
         ));
         assert_eq!(assessment.level, RiskLevel::High);
+    }
+
+    #[test]
+    fn workspace_tools_have_static_risk_levels() {
+        let classifier = StaticRiskClassifier;
+        assert_eq!(
+            classifier.classify(&call("list_agents", json!({}))).level,
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            classifier
+                .classify(&call("list_templates", json!({})))
+                .level,
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            classifier
+                .classify(&call("create_channel", json!({ "name": "ops" })))
+                .level,
+            RiskLevel::Medium
+        );
+        assert_eq!(
+            classifier
+                .classify(&call(
+                    "create_task",
+                    json!({
+                        "description": "x",
+                        "expected_output": "y",
+                        "assignee": "main"
+                    })
+                ))
+                .level,
+            RiskLevel::Medium
+        );
+        assert_eq!(
+            classifier
+                .classify(&call(
+                    "instantiate_team",
+                    json!({ "template": "software-team" })
+                ))
+                .level,
+            RiskLevel::High
+        );
     }
 
     #[test]

@@ -147,6 +147,16 @@ export interface ToolCallRecord {
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
+export interface ToolCallDetail {
+  name: string;
+  arguments: unknown;
+}
+
+export interface ApprovalRisk {
+  risk: string;
+  reason: string;
+}
+
 export interface Approval {
   id: string;
   task_id: string;
@@ -168,6 +178,12 @@ export interface AgentProfile {
   allow_delegation: boolean;
   max_iterations: number;
   verbose: boolean;
+}
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: unknown;
 }
 
 export interface TemplateDocument {
