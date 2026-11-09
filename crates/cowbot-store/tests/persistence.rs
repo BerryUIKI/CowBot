@@ -413,6 +413,22 @@ async fn tasks_runs_approvals_and_audit_roundtrip() {
 }
 
 #[tokio::test]
+async fn update_user_changes_name_and_email() {
+    let store = test_store().await;
+    let (user, _workspace) = seed_workspace(&store).await;
+
+    store
+        .update_user(&user.id, "Alice Cooper", "alice.cooper@example.com")
+        .await
+        .unwrap();
+
+    let updated = store.get_user(&user.id).await.unwrap().unwrap();
+    assert_eq!(updated.name, "Alice Cooper");
+    assert_eq!(updated.email, "alice.cooper@example.com");
+    assert_eq!(updated.password_hash, user.password_hash);
+}
+
+#[tokio::test]
 async fn task_title_and_archive_roundtrip() {
     let store = test_store().await;
     let (_user, workspace) = seed_workspace(&store).await;

@@ -115,6 +115,9 @@ pub trait Client: Send + Sync {
     /// The local user and workspace this client is bound to.
     async fn session(&self) -> CowResult<ClientSession>;
 
+    /// Update the local user's display name and email.
+    async fn update_user_profile(&self, name: &str, email: &str) -> CowResult<ClientSession>;
+
     /// Subscribe to live platform events.
     ///
     /// Local mode starts a forwarding task, so call this from within a Tokio
