@@ -10,7 +10,12 @@ import {
   testModelProvider,
 } from "./api";
 import { errorMessage } from "./errors";
-import type { ModelProvider, ModelSettings, ProviderProtocol } from "./types";
+import type {
+  ModelMetadata,
+  ModelProvider,
+  ModelSettings,
+  ProviderProtocol,
+} from "./types";
 
 interface ProtocolOption {
   id: ProviderProtocol;
@@ -266,6 +271,7 @@ interface ProviderDraft {
   baseUrl: string;
   model: string;
   models: string[];
+  modelMetadata: Record<string, ModelMetadata>;
   apiKey: string;
   clearApiKey: boolean;
   /// Whether the free-text model input is shown alongside the dropdown.
@@ -290,6 +296,19 @@ function mergeModels(...lists: string[][]): string[] {
   return merged;
 }
 
+function modelMetadataFor(draft: ProviderDraft): ModelMetadata {
+  const model = draft.model.trim();
+  return model ? (draft.modelMetadata[model] ?? {}) : {};
+}
+
+function optionalTokenCount(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
 function draftForCatalogueEntry(entry: CatalogueEntry): ProviderDraft {
   return {
     providerId: null,
@@ -298,6 +317,7 @@ function draftForCatalogueEntry(entry: CatalogueEntry): ProviderDraft {
     baseUrl: entry.baseUrl,
     model: entry.model,
     models: entry.model ? [entry.model] : [],
+    modelMetadata: {},
     apiKey: "",
     clearApiKey: false,
     manualModel: !entry.model,
@@ -312,6 +332,7 @@ function blankDraft(): ProviderDraft {
     baseUrl: "",
     model: "",
     models: [],
+    modelMetadata: {},
     apiKey: "",
     clearApiKey: false,
     manualModel: true,
@@ -326,6 +347,7 @@ function draftForProvider(provider: ModelProvider): ProviderDraft {
     baseUrl: provider.base_url,
     model: provider.model,
     models: mergeModels(provider.models, [provider.model]),
+    modelMetadata: { ...(provider.model_metadata ?? {}) },
     apiKey: "",
     clearApiKey: false,
     manualModel: false,
@@ -387,6 +409,27 @@ export default function ModelProviderSettings({
     }
   }
 
+  function updateModelMetadata(patch: Partial<ModelMetadata>) {
+    if (!draft) return;
+    const model = draft.model.trim();
+    if (!model) return;
+
+    const next: ModelMetadata = { ...(draft.modelMetadata[model] ?? {}) };
+    if ("context_window" in patch) {
+      if (patch.context_window === undefined) delete next.context_window;
+      else next.context_window = patch.context_window;
+    }
+    if ("max_output_tokens" in patch) {
+      if (patch.max_output_tokens === undefined) delete next.max_output_tokens;
+      else next.max_output_tokens = patch.max_output_tokens;
+    }
+
+    const metadata = { ...draft.modelMetadata };
+    if (Object.keys(next).length === 0) delete metadata[model];
+    else metadata[model] = next;
+    updateDraft({ modelMetadata: metadata });
+  }
+
   function resetTransientState() {
     setModelError(null);
     setModelNotice(null);
@@ -438,6 +481,7 @@ export default function ModelProviderSettings({
         baseUrl: draft.baseUrl,
         models: mergeModels(draft.models, [draft.model]),
         model: draft.model,
+        modelMetadata: draft.modelMetadata,
         apiKey: draft.apiKey,
         clearApiKey: draft.clearApiKey,
       });
@@ -794,6 +838,48 @@ export default function ModelProviderSettings({
               {draft.models.length > 0
                 ? `${modelCountLabel(draft.models.length)} known for this provider. Fetch again to refresh, or add a name by hand.`
                 : "Fetch the endpoint's model list, or add a model name by hand."}
+            </span>
+          </div>
+
+          <div className="field">
+            <span>Context window</span>
+            <div className="settings-form-row">
+              <label className="field">
+                <span>Window (tokens)</span>
+                <input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  value={modelMetadataFor(draft).context_window ?? ""}
+                  onChange={(event) =>
+                    updateModelMetadata({
+                      context_window: optionalTokenCount(event.target.value),
+                    })
+                  }
+                  placeholder="128000"
+                  disabled={modelBusy !== null || !draft.model.trim()}
+                />
+              </label>
+              <label className="field">
+                <span>Max output (tokens)</span>
+                <input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  value={modelMetadataFor(draft).max_output_tokens ?? ""}
+                  onChange={(event) =>
+                    updateModelMetadata({
+                      max_output_tokens: optionalTokenCount(event.target.value),
+                    })
+                  }
+                  placeholder="8192"
+                  disabled={modelBusy !== null || !draft.model.trim()}
+                />
+              </label>
+            </div>
+            <span className="settings-hint">
+              Optional. Leave blank when unknown; CowBot will not show a context
+              percentage for a model without a window.
             </span>
           </div>
 

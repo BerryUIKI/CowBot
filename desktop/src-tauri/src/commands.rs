@@ -12,6 +12,7 @@ use cowbot_core::tool::ToolDefinition;
 use cowbot_llm::{ChatCompletionRequest, ChatMessage};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
@@ -486,6 +487,7 @@ pub struct ProviderView {
     pub base_url: String,
     pub models: Vec<String>,
     pub model: String,
+    pub model_metadata: BTreeMap<String, config::ModelMetadata>,
     pub has_api_key: bool,
     pub active: bool,
 }
@@ -526,6 +528,7 @@ fn model_settings(state: &AppState, config: &config::AppConfig) -> ModelSettings
             base_url: provider.base_url.clone(),
             models: provider.models.clone(),
             model: provider.model.clone(),
+            model_metadata: provider.model_metadata.clone(),
             has_api_key: provider.api_key.is_some(),
             active: active_id.as_deref() == Some(provider.id.as_str()),
         })
@@ -561,6 +564,8 @@ pub struct ProviderDraft {
     pub models: Vec<String>,
     pub model: String,
     #[serde(default)]
+    pub model_metadata: BTreeMap<String, config::ModelMetadata>,
+    #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub clear_api_key: bool,
@@ -593,6 +598,7 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 &draft.models,
                 &draft.model,
                 key.as_deref(),
+                draft.model_metadata.clone(),
             )?;
         }
         None => {
@@ -605,6 +611,7 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 &draft.models,
                 &draft.model,
                 typed_key.as_deref(),
+                draft.model_metadata.clone(),
             )?);
             if config.active_provider().is_none() {
                 config.active_provider_id = Some(id);
@@ -1060,6 +1067,7 @@ mod tests {
             base_url: base_url.to_string(),
             models: vec![model.to_string()],
             model: model.to_string(),
+            model_metadata: BTreeMap::new(),
             api_key: api_key.map(str::to_string),
             clear_api_key: false,
         }
@@ -1074,6 +1082,12 @@ mod tests {
             "baseUrl": "https://api.anthropic.com",
             "models": ["claude-sonnet-5-5", "claude-opus-5-5"],
             "model": "claude-sonnet-5-5",
+            "modelMetadata": {
+                "claude-sonnet-5-5": {
+                    "context_window": 200000,
+                    "max_output_tokens": 8192
+                }
+            },
             "apiKey": "secret",
             "clearApiKey": false
         }))
@@ -1088,6 +1102,14 @@ mod tests {
                 "claude-sonnet-5-5".to_string(),
                 "claude-opus-5-5".to_string()
             ]
+        );
+        assert_eq!(
+            draft.model_metadata["claude-sonnet-5-5"].context_window,
+            Some(200_000)
+        );
+        assert_eq!(
+            draft.model_metadata["claude-sonnet-5-5"].max_output_tokens,
+            Some(8_192)
         );
         assert_eq!(draft.api_key.as_deref(), Some("secret"));
         assert!(!draft.clear_api_key);

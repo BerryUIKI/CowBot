@@ -5,6 +5,7 @@
 //! the id of the active one. API keys never cross the Tauri command boundary
 //! back to the frontend; the UI only learns whether a provider has a stored key.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::io::Write;
@@ -51,6 +52,19 @@ pub enum ProviderProtocol {
     OpenAiResponses,
 }
 
+/// Optional context-window metadata for one model.
+///
+/// The desktop never guesses these values: a model without metadata is treated
+/// as having an unknown window, and later context UI falls back to absolute
+/// token counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+}
+
 /// One model provider saved by the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -69,6 +83,9 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
     /// The active model used for runs.
     pub model: String,
+    /// Optional per-model context-window metadata.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_metadata: BTreeMap<String, ModelMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
@@ -281,6 +298,10 @@ pub fn normalize_api_key(raw: Option<&str>) -> Option<String> {
 }
 
 /// Build a validated provider.
+///
+/// The explicit parameters mirror the persisted provider fields; grouping them
+/// into a temporary struct would not add validation value.
+#[allow(clippy::too_many_arguments)]
 pub fn make_provider(
     id: String,
     name: &str,
@@ -289,6 +310,7 @@ pub fn make_provider(
     models: &[String],
     model: &str,
     api_key: Option<&str>,
+    model_metadata: BTreeMap<String, ModelMetadata>,
 ) -> Result<ProviderConfig, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -302,8 +324,20 @@ pub fn make_provider(
         base_url,
         models: normalized_models(models, &model),
         model,
+        model_metadata: normalized_metadata(model_metadata),
         api_key: normalize_api_key(api_key),
     })
+}
+
+fn normalized_metadata(
+    metadata: BTreeMap<String, ModelMetadata>,
+) -> BTreeMap<String, ModelMetadata> {
+    metadata
+        .into_iter()
+        .filter(|(_, metadata)| {
+            metadata.context_window.is_some() || metadata.max_output_tokens.is_some()
+        })
+        .collect()
 }
 
 /// Generate an id for a new provider that does not collide with existing ones.
@@ -380,6 +414,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             models: vec!["example-model".to_string()],
             model: "example-model".to_string(),
+            model_metadata: BTreeMap::new(),
             api_key: Some("secret".to_string()),
         }
     }
@@ -664,6 +699,7 @@ mod tests {
             ],
             "gpt-4o-mini",
             None,
+            BTreeMap::new(),
         )
         .unwrap();
 
@@ -680,6 +716,7 @@ mod tests {
             &["gpt-4o".to_string()],
             "o3",
             None,
+            BTreeMap::new(),
         )
         .unwrap();
 
@@ -687,6 +724,62 @@ mod tests {
             provider.models,
             vec!["gpt-4o".to_string(), "o3".to_string()]
         );
+    }
+
+    #[test]
+    fn legacy_provider_files_load_without_model_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(
+            &path,
+            r#"{"version":1,"active_provider_id":"p1","providers":[{"id":"p1","name":"Legacy","base_url":"https://api.example.com/v1","model":"m"}]}"#,
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+        assert!(config.providers[0].model_metadata.is_empty());
+    }
+
+    #[test]
+    fn model_metadata_round_trips_and_empty_values_are_dropped() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "deepseek-chat".to_string(),
+            ModelMetadata {
+                context_window: Some(128_000),
+                max_output_tokens: Some(8_192),
+            },
+        );
+        metadata.insert("empty-model".to_string(), ModelMetadata::default());
+
+        let provider = make_provider(
+            "p1".into(),
+            "DeepSeek",
+            ProviderProtocol::OpenAi,
+            "https://api.deepseek.com",
+            &["deepseek-chat".to_string(), "empty-model".to_string()],
+            "deepseek-chat",
+            None,
+            metadata,
+        )
+        .unwrap();
+        assert_eq!(provider.model_metadata.len(), 1);
+
+        let config = AppConfig {
+            providers: vec![provider],
+            active_provider_id: Some("p1".to_string()),
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert_eq!(load(&path).unwrap(), config);
+        let raw = fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let metadata = &value["providers"][0]["model_metadata"];
+        assert_eq!(metadata["deepseek-chat"]["context_window"], 128_000);
+        assert!(metadata.get("empty-model").is_none());
     }
 
     #[test]
@@ -709,7 +802,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -719,7 +813,8 @@ mod tests {
             "",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -729,7 +824,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             " ",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -739,7 +835,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_ok());
     }
