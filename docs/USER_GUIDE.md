@@ -127,9 +127,24 @@ on the next start.
 ## Team
 
 **Settings → Team** lists the built-in templates and the agents in the
-workspace. **Add agents** instantiates every agent in a template with its role,
-goal, and tool access. The 0.1.x app creates agents from templates; a standalone
-agent editor is not part of this release.
+workspace. The **Main Assistant** is the primary agent for a one-person
+company: agent `main` plans work, can create channels, start specialist teams,
+and queue tasks for other agents. **Add agents** instantiates every agent in a
+template with its role, goal, and tool access. The 0.1.x app creates agents
+from templates; a standalone agent editor is not part of this release.
+
+- **Edit an agent** with **Edit** in Settings → Team or **Edit agent…** in an
+  agent conversation's context menu. You can change its name, role, and tool
+  selection. Names must be unique; the agent's conversation follows the new
+  name.
+- To turn an existing Assistant into the main assistant, open **Edit**, set the
+  name to `main`, choose a role such as `Primary Assistant`, and enable the
+  workspace tools (`create_channel`, `create_task`, `instantiate_team`,
+  `list_agents`, `list_templates`). Adding the Main Assistant template is the
+  alternative.
+- Agent actions that change the workspace ask for approval under the
+  **Ask** and **Safe auto** policies. The approval card shows the tool name,
+  arguments, risk, and reason.
 
 ## Agents, channels, and tasks
 
@@ -139,14 +154,28 @@ agent editor is not part of this release.
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
 - **Channels** — group rooms sit below the agents. Create one with **New
-  channel** or the **+** button, post messages, and follow the timeline.
-  Mention an agent by name to get an answer in the channel: `@Planner, which
-  module owns the parser?` The agents in the workspace are listed in the
+  channel** or the **+** button, post messages, and follow the timeline. Names
+  must be unique in the workspace, case-insensitively. Mention an agent by name
+  to get an answer in the channel: `@Planner, which module owns the parser?`
+  The agents in the workspace are listed in the
   channel header, and `@team` (also `@all`, `@everyone`, `@here`) addresses all
   of them. Matching is case-insensitive; an unknown name produces a system
   notice listing the agents that exist.
+- **Manage conversations** — right-click an agent or channel row (or use its
+  **⋯** button) to pin it to the top, rename a channel, delete a group channel,
+  or clear an agent conversation's history. Deleting a channel deletes its
+  messages; tasks keep their history but are no longer linked to that channel.
+  Clearing a conversation keeps the agent and removes only its messages. Agent
+  conversations cannot be deleted from the channel list.
 - **Search** — the field above the sidebar list filters agents, channels, and
   tasks by name.
+- **Rich answers** — agent and user messages render Markdown: headings, lists,
+  tables, code blocks, and links. Links open in your system browser. A fenced
+  `html` code block appears as an **HTML preview** card with **Preview**,
+  **Code**, and **Expand**; the preview runs in a sandbox that permits inline
+  CSS and JavaScript but blocks network access, external images, form
+  submission, and access to the app. Use it for interactive results such as
+  forms, calculators, or small dashboards.
 - **Approval** — the dropdown in the conversation header sets the approval
   policy for answers in that conversation. It uses the same policies as tasks,
   so a risky tool call raised while an agent answers appears in **Approvals**.
@@ -305,6 +334,14 @@ reporting, see [SECURITY.md](../SECURITY.md).
 - Channel answers are one turn per addressed agent: no threads as conversation
   scope, no proactive agent replies to unmentioned messages in group channels,
   and no streaming.
+- HTML previews cannot reach the network, external images, or the app, and a
+  button inside one cannot send a message back to the agent yet. Reply in the
+  composer after using the preview.
+- Workspace tools are available in the desktop app only; the CLI's channel
+  turns do not expose them. `create_task` queues a pending task and does not run
+  the assigned agent automatically.
+- Agents cannot be deleted from the UI; edit their name, role, or tools
+  instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
 - No streaming responses, retries, rate limiting, or token accounting.

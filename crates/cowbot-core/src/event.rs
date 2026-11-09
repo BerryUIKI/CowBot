@@ -1,4 +1,4 @@
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentProfile};
 use crate::approval::Approval;
 use crate::channel::{Channel, ChannelId, ChannelMessage};
 use crate::risk::RiskLevel;
@@ -16,6 +16,12 @@ pub enum EventPayload {
     MessagePosted(ChannelMessage),
     /// A new collaboration channel was created
     ChannelCreated(Channel),
+    /// A channel's metadata or pin state changed
+    ChannelUpdated(Channel),
+    /// A channel was deleted
+    ChannelDeleted { channel_id: ChannelId },
+    /// An agent profile was updated
+    AgentUpdated(AgentProfile),
     /// A new task has been created
     TaskCreated(Task),
     /// A task has been assigned to a specific agent

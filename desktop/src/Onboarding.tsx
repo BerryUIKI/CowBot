@@ -153,8 +153,9 @@ export default function Onboarding({
               <p className="onboarding-kicker">Step 3 of 3</p>
               <h1 className="onboarding-title">Assemble a starter team</h1>
               <p className="onboarding-copy">
-                A template adds agents with roles, goals, and tool access. You can
-                add more from Settings later.
+                Start with the Main Assistant, the primary agent that can create
+                channels, start specialist teams, and assign work. You can add
+                more from Settings later.
               </p>
               {templates.length === 0 ? (
                 <p className="settings-empty">No templates available.</p>

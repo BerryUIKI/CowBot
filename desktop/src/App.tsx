@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 
 import ApprovalCards from "./ApprovalCards";
 import Avatar from "./Avatar";
+import ContextMenu from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
+import Modal from "./Modal";
+import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView from "./SettingsView";
 import TaskDetail from "./TaskDetail";
@@ -10,10 +18,12 @@ import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
   cancelTask,
+  clearChannelMessages,
   completeOnboarding,
   createChannel,
   createTask,
   decideApproval,
+  deleteChannel,
   ensureAgentChannels,
   getOnboardingState,
   getSession,
@@ -21,6 +31,7 @@ import {
   listAgents,
   listAssignmentEvents,
   listAssignments,
+  listAvailableTools,
   listChannels,
   listMessages,
   listRuns,
@@ -32,12 +43,15 @@ import {
   onRunFinished,
   pendingApprovals,
   postMessage,
+  renameChannel,
   runTask,
+  setChannelPinned,
+  updateAgent,
 } from "./api";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
-import { formatListTime, formatTime } from "./format";
+import { dayKey, formatDayLabel, formatListTime, formatTime } from "./format";
 import type {
   AgentProfile,
   Approval,
@@ -48,6 +62,9 @@ import type {
   OnboardingState,
   Task,
   TemplateDocument,
+  ToolCallDetail,
+  ToolDefinition,
+  ApprovalRisk,
 } from "./types";
 import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
 import { useUpdater } from "./updater";
@@ -59,6 +76,21 @@ interface PendingReply {
   messageId: string;
   agents: AgentProfile[];
 }
+
+interface MenuState {
+  kind: "agent" | "channel";
+  channel: Channel;
+  agent: AgentProfile | null;
+  x: number;
+  y: number;
+}
+
+type DialogState =
+  | { kind: "rename-channel"; channel: Channel }
+  | { kind: "delete-channel"; channel: Channel }
+  | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
+  | { kind: "edit-agent"; agent: AgentProfile }
+  | null;
 
 const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
 
@@ -88,6 +120,19 @@ function senderLabel(
 function agentName(agents: AgentProfile[], id: string | null): string {
   if (!id) return "Unassigned";
   return agents.find((agent) => agent.id === id)?.name ?? `Agent ${id.slice(0, 8)}`;
+}
+
+/** Compact plain text for sidebar previews; strips Markdown and HTML. */
+function plainTextPreview(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, " [code] ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_~#>]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function mentionedNames(content: string): string[] {
@@ -135,12 +180,31 @@ function byRecentActivity(
   right: { channel: Channel; agent?: AgentProfile; name?: string },
   previews: Record<string, ChannelMessage | null>,
 ): number {
+  if (left.channel.pinned !== right.channel.pinned) {
+    return left.channel.pinned ? -1 : 1;
+  }
   const leftTime = previewTime(previews[left.channel.id]);
   const rightTime = previewTime(previews[right.channel.id]);
   if (leftTime !== rightTime) return leftTime < rightTime ? 1 : -1;
   const leftName = left.agent?.name ?? left.name ?? left.channel.name;
   const rightName = right.agent?.name ?? right.name ?? right.channel.name;
   return leftName.localeCompare(rightName);
+}
+
+function PinMark() {
+  return (
+    <svg
+      className="pin-mark"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      aria-hidden="true"
+    >
+      <path d="M12 16v5" />
+      <path d="M8 3h8l-1 6 3 3H6l3-3-1-6z" />
+    </svg>
+  );
 }
 
 export default function App() {
@@ -177,6 +241,17 @@ export default function App() {
   const [runningTasks, setRunningTasks] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [dialogName, setDialogName] = useState("");
+  const [dialogTopic, setDialogTopic] = useState("");
+  const [dialogRole, setDialogRole] = useState("");
+  const [dialogTools, setDialogTools] = useState<string[]>([]);
+  const [availableTools, setAvailableTools] = useState<ToolDefinition[]>([]);
+  const [toolCallDetails, setToolCallDetails] = useState<Record<string, ToolCallDetail>>({});
+  const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
@@ -361,13 +436,61 @@ export default function App() {
   }, [templates, templateId]);
 
   useEffect(() => {
+    listAvailableTools()
+      .then((tools) =>
+        setAvailableTools(
+          [...tools].sort((left, right) => left.name.localeCompare(right.name)),
+        ),
+      )
+      .catch((err) => setError(errorMessage(err)));
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
       if (type === "ChannelCreated") {
+        const channel = event.payload.payload as Channel | undefined;
+        if (channel?.agent_id) {
+          refreshAgents().catch((err) => setError(errorMessage(err)));
+        }
         refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "ChannelUpdated" || type === "ChannelDeleted") {
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "AgentUpdated") {
+        refreshAgents().catch((err) => setError(errorMessage(err)));
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "ToolCallRequested") {
+        const payload = event.payload.payload as
+          | { call?: { id?: string; name?: string; arguments?: unknown } }
+          | undefined;
+        const call = payload?.call;
+        if (call?.id && call.name) {
+          setToolCallDetails((current) => ({
+            ...current,
+            [call.id as string]: { name: call.name as string, arguments: call.arguments },
+          }));
+        }
+      }
+      if (type === "ApprovalRequested") {
+        const payload = event.payload.payload as
+          | { approval?: { id?: string }; risk?: string; reason?: string }
+          | undefined;
+        const approval = payload?.approval;
+        if (approval?.id) {
+          setApprovalDetails((current) => ({
+            ...current,
+            [approval.id as string]: {
+              risk: payload?.risk ?? "unknown",
+              reason: payload?.reason ?? "",
+            },
+          }));
+        }
       }
       if (type === "MessagePosted") {
         const message = event.payload.payload as ChannelMessage | undefined;
@@ -405,6 +528,7 @@ export default function App() {
       unlisten?.();
     };
   }, [
+    refreshAgents,
     refreshApprovals,
     refreshChannels,
     refreshMessages,
@@ -574,6 +698,160 @@ export default function App() {
     }
   }
 
+  function openMenu(
+    event: ReactMouseEvent,
+    kind: "agent" | "channel",
+    channel: Channel,
+    agent: AgentProfile | null = null,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenu({ kind, channel, agent, x: event.clientX, y: event.clientY });
+  }
+
+  function openMenuFromButton(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    kind: "agent" | "channel",
+    channel: Channel,
+    agent: AgentProfile | null = null,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setMenu({ kind, channel, agent, x: rect.right - 4, y: rect.bottom + 4 });
+  }
+
+  function openMenuFromKey(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    kind: "agent" | "channel",
+    channel: Channel,
+    agent: AgentProfile | null = null,
+  ) {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setMenu({ kind, channel, agent, x: rect.left + 24, y: rect.bottom + 4 });
+  }
+
+  async function togglePin(channel: Channel) {
+    setError(null);
+    try {
+      await setChannelPinned(channel.id, !channel.pinned);
+      await refreshChannels();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  function openRenameDialog(channel: Channel) {
+    setDialog({ kind: "rename-channel", channel });
+    setDialogName(channel.name);
+    setDialogTopic(channel.topic);
+    setDialogError(null);
+  }
+
+  function openDeleteDialog(channel: Channel) {
+    setDialog({ kind: "delete-channel", channel });
+    setDialogError(null);
+  }
+
+  function openClearDialog(channel: Channel, agent: AgentProfile) {
+    setDialog({ kind: "clear-history", channel, agent });
+    setDialogError(null);
+  }
+
+  function closeDialog() {
+    if (!dialogBusy) setDialog(null);
+  }
+
+  async function submitRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!dialog || dialog.kind !== "rename-channel") return;
+    const target = dialog.channel;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await renameChannel(target.id, dialogName, dialogTopic);
+      setDialog(null);
+      await refreshChannels(target.id);
+    } catch (err) {
+      setDialogError(errorMessage(err));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  async function submitDelete() {
+    if (!dialog || dialog.kind !== "delete-channel") return;
+    const target = dialog.channel;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await deleteChannel(target.id);
+      setDialog(null);
+      await refreshChannels();
+    } catch (err) {
+      setDialogError(errorMessage(err));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  async function submitClear() {
+    if (!dialog || dialog.kind !== "clear-history") return;
+    const target = dialog.channel;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await clearChannelMessages(target.id);
+      setDialog(null);
+      await refreshChannels(target.id);
+      await refreshMessages(target.id);
+    } catch (err) {
+      setDialogError(errorMessage(err));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  function openEditAgentDialog(agent: AgentProfile) {
+    setDialog({ kind: "edit-agent", agent });
+    setDialogName(agent.name);
+    setDialogRole(agent.role);
+    setDialogTools([...agent.tools]);
+    setDialogError(null);
+  }
+
+  function toggleTool(name: string) {
+    setDialogTools((current) =>
+      current.includes(name)
+        ? current.filter((tool) => tool !== name)
+        : [...current, name],
+    );
+  }
+
+  async function submitEditAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!dialog || dialog.kind !== "edit-agent") return;
+    const target = dialog.agent;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await updateAgent(target.id, dialogName, dialogRole, dialogTools);
+      setDialog(null);
+      await refreshAgents();
+      await refreshChannels();
+    } catch (err) {
+      setDialogError(errorMessage(err));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  function handleEditAgent(agent: AgentProfile) {
+    openEditAgentDialog(agent);
+  }
+
   async function sendMessage() {
     const content = draft.trim();
     if (!content || !selectedChannel || sending) return;
@@ -739,6 +1017,70 @@ export default function App() {
       ? `#${selectedChannel.name}`
       : "your team";
 
+  function previewSnippet(message: ChannelMessage, channel: Channel): string {
+    const text = plainTextPreview(message.content);
+    const fromOwnAgent =
+      channel.agent_id !== null &&
+      message.sender.type === "Agent" &&
+      message.sender.id === channel.agent_id;
+    return fromOwnAgent
+      ? text
+      : `${senderLabel(message, session, agents)}: ${text}`;
+  }
+
+  const renderedMessages = useMemo(() => {
+    let lastDay = "";
+    return messages.map((message) => {
+      const day = dayKey(message.created_at);
+      const separator = day !== lastDay ? day : null;
+      lastDay = day;
+      return { message, separator };
+    });
+  }, [messages]);
+
+  const menuAgent = menu?.agent ?? null;
+  const menuItems: ContextMenuItem[] = menu
+    ? menu.kind === "agent"
+      ? [
+          ...(menuAgent
+            ? [
+                {
+                  label: "Edit agent…",
+                  onSelect: () => openEditAgentDialog(menuAgent),
+                },
+              ]
+            : []),
+          {
+            label: menu.channel.pinned ? "Unpin" : "Pin to top",
+            onSelect: () => void togglePin(menu.channel),
+          },
+          ...(menuAgent
+            ? [
+                {
+                  label: "Clear history…",
+                  danger: true,
+                  onSelect: () => openClearDialog(menu.channel, menuAgent),
+                },
+              ]
+            : []),
+        ]
+      : [
+          {
+            label: "Rename channel…",
+            onSelect: () => openRenameDialog(menu.channel),
+          },
+          {
+            label: menu.channel.pinned ? "Unpin" : "Pin to top",
+            onSelect: () => void togglePin(menu.channel),
+          },
+          {
+            label: "Delete channel…",
+            danger: true,
+            onSelect: () => openDeleteDialog(menu.channel),
+          },
+        ]
+    : [];
+
   return (
     <div className="app">
       <aside className="sidebar" inert={onboardingOpen}>
@@ -796,27 +1138,45 @@ export default function App() {
                     {visibleAgentRows.map(({ agent, channel }) => {
                       const preview = previews[channel.id] ?? null;
                       return (
-                        <li key={agent.id}>
+                        <li key={agent.id} className="contact-item">
                           <button
                             type="button"
                             className="contact-row"
                             aria-current={channel.id === selectedId ? "page" : undefined}
                             onClick={() => setSelectedId(channel.id)}
+                            onContextMenu={(event) =>
+                              openMenu(event, "agent", channel, agent)
+                            }
+                            onKeyDown={(event) =>
+                              openMenuFromKey(event, "agent", channel, agent)
+                            }
                           >
                             <Avatar name={agent.name} kind="agent" />
                             <span className="contact-text">
                               <span className="contact-top">
-                                <span className="contact-name">{agent.name}</span>
+                                <span className="contact-name">
+                                  {channel.pinned ? <PinMark /> : null}
+                                  {agent.name}
+                                </span>
                                 <time className="contact-time">
                                   {preview ? formatListTime(preview.created_at) : ""}
                                 </time>
                               </span>
                               <span className="contact-snippet">
-                                {preview
-                                  ? `${senderLabel(preview, session, agents)}: ${preview.content}`
-                                  : agent.role}
+                                {preview ? previewSnippet(preview, channel) : agent.role}
                               </span>
                             </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="contact-more"
+                            title="Conversation actions"
+                            aria-label={`Actions for ${agent.name}`}
+                            onClick={(event) =>
+                              openMenuFromButton(event, "agent", channel, agent)
+                            }
+                          >
+                            ⋯
                           </button>
                         </li>
                       );
@@ -838,27 +1198,45 @@ export default function App() {
                       {visibleChannels.map(({ channel }) => {
                         const preview = previews[channel.id] ?? null;
                         return (
-                          <li key={channel.id}>
+                          <li key={channel.id} className="contact-item">
                             <button
                               type="button"
                               className="contact-row"
                               aria-current={channel.id === selectedId ? "page" : undefined}
                               onClick={() => setSelectedId(channel.id)}
+                              onContextMenu={(event) => openMenu(event, "channel", channel)}
+                              onKeyDown={(event) =>
+                                openMenuFromKey(event, "channel", channel)
+                              }
                             >
                               <Avatar name={channel.name} kind="channel" />
                               <span className="contact-text">
                                 <span className="contact-top">
-                                  <span className="contact-name">{channel.name}</span>
+                                  <span className="contact-name">
+                                    {channel.pinned ? <PinMark /> : null}
+                                    {channel.name}
+                                  </span>
                                   <time className="contact-time">
                                     {preview ? formatListTime(preview.created_at) : ""}
                                   </time>
                                 </span>
                                 <span className="contact-snippet">
                                   {preview
-                                    ? `${senderLabel(preview, session, agents)}: ${preview.content}`
+                                    ? previewSnippet(preview, channel)
                                     : channel.topic || "No messages yet"}
                                 </span>
                               </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="contact-more"
+                              title="Channel actions"
+                              aria-label={`Actions for ${channel.name}`}
+                              onClick={(event) =>
+                                openMenuFromButton(event, "channel", channel)
+                              }
+                            >
+                              ⋯
                             </button>
                           </li>
                         );
@@ -1131,42 +1509,56 @@ export default function App() {
                   </div>
                 ) : (
                   <ol className="chat-messages">
-                    {messages.map((message) => {
-                      if (message.sender.type === "System") {
-                        return (
-                          <li className="chat-system" key={message.id}>
-                            {message.content}
+                    {renderedMessages.map(({ message, separator }) => (
+                      <Fragment key={message.id}>
+                        {separator ? (
+                          <li className="chat-day">
+                            {formatDayLabel(message.created_at)}
                           </li>
-                        );
-                      }
-
-                      const fromUser = message.sender.type === "User";
-                      const name = senderLabel(message, session, agents);
-                      return (
-                        <li
-                          className={`chat-row ${fromUser ? "chat-row-user" : "chat-row-agent"}`}
-                          key={message.id}
-                        >
-                          {fromUser ? null : <Avatar name={name} kind="agent" size="small" />}
-                          <div className="chat-bubble-wrap">
-                            {fromUser ? null : <span className="chat-sender">{name}</span>}
-                            <div
-                              className={`chat-bubble ${
-                                fromUser ? "chat-bubble-user" : "chat-bubble-agent"
-                              }`}
-                            >
-                              {message.content}
+                        ) : null}
+                        {message.sender.type === "System" ? (
+                          <li className="chat-system">{message.content}</li>
+                        ) : (
+                          <li
+                            className={`chat-row ${
+                              message.sender.type === "User"
+                                ? "chat-row-user"
+                                : "chat-row-agent"
+                            }`}
+                          >
+                            {message.sender.type === "User" ? null : (
+                              <Avatar
+                                name={senderLabel(message, session, agents)}
+                                kind="agent"
+                                size="small"
+                              />
+                            )}
+                            <div className="chat-bubble-wrap">
+                              {message.sender.type === "User" ? null : (
+                                <span className="chat-sender">
+                                  {senderLabel(message, session, agents)}
+                                </span>
+                              )}
+                              <div
+                                className={`chat-bubble ${
+                                  message.sender.type === "User"
+                                    ? "chat-bubble-user"
+                                    : "chat-bubble-agent"
+                                }`}
+                              >
+                                <RichText content={message.content} />
+                              </div>
+                              <span className="chat-meta">
+                                <time dateTime={message.created_at}>
+                                  {formatTime(message.created_at)}
+                                </time>
+                                {message.thread_id ? " · In a thread" : null}
+                              </span>
                             </div>
-                            <span className="chat-meta">
-                              <time dateTime={message.created_at}>
-                                {formatTime(message.created_at)}
-                              </time>
-                              {message.thread_id ? " · In a thread" : null}
-                            </span>
-                          </div>
-                        </li>
-                      );
-                    })}
+                          </li>
+                        )}
+                      </Fragment>
+                    ))}
                     {replyingHere
                       ? pendingReply.agents.map((agent) => (
                           <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
@@ -1394,6 +1786,8 @@ export default function App() {
           <ApprovalCards
             approvals={approvals}
             tasks={tasks}
+            toolCalls={toolCallDetails}
+            risks={approvalDetails}
             decidingId={busy}
             onDecide={handleDecideApproval}
           />
@@ -1408,6 +1802,7 @@ export default function App() {
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
+            onEditAgent={handleEditAgent}
           />
         )}
       </main>
@@ -1419,6 +1814,206 @@ export default function App() {
           onAddAgents={instantiateTemplate}
           onComplete={handleCompleteOnboarding}
         />
+      ) : null}
+
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === "rename-channel" ? (
+        <Modal
+          title="Rename channel"
+          onClose={closeDialog}
+          footer={
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={closeDialog}
+                disabled={dialogBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="rename-channel-form"
+                className="primary-button"
+                disabled={dialogBusy || !dialogName.trim()}
+              >
+                {dialogBusy ? "Saving…" : "Save"}
+              </button>
+            </>
+          }
+        >
+          <form id="rename-channel-form" className="dialog-form" onSubmit={submitRename}>
+            <label className="field">
+              <span>Name</span>
+              <input
+                value={dialogName}
+                onChange={(event) => setDialogName(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Topic</span>
+              <input
+                value={dialogTopic}
+                onChange={(event) => setDialogTopic(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            {dialogError ? (
+              <p className="dialog-error" role="alert">
+                {dialogError}
+              </p>
+            ) : null}
+          </form>
+        </Modal>
+      ) : dialog?.kind === "delete-channel" ? (
+        <Modal
+          title="Delete channel"
+          onClose={closeDialog}
+          footer={
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={closeDialog}
+                disabled={dialogBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => void submitDelete()}
+                disabled={dialogBusy}
+              >
+                {dialogBusy ? "Deleting…" : "Delete channel"}
+              </button>
+            </>
+          }
+        >
+          <p className="dialog-copy">
+            Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
+            deleted. Tasks keep their history but are no longer linked to the
+            channel.
+          </p>
+          {dialogError ? (
+            <p className="dialog-error" role="alert">
+              {dialogError}
+            </p>
+          ) : null}
+        </Modal>
+      ) : dialog?.kind === "clear-history" ? (
+        <Modal
+          title="Clear conversation"
+          onClose={closeDialog}
+          footer={
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={closeDialog}
+                disabled={dialogBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => void submitClear()}
+                disabled={dialogBusy}
+              >
+                {dialogBusy ? "Clearing…" : "Clear history"}
+              </button>
+            </>
+          }
+        >
+          <p className="dialog-copy">
+            Clear the conversation with <strong>{dialog.agent.name}</strong>? All
+            messages in this conversation will be deleted; the agent stays.
+          </p>
+          {dialogError ? (
+            <p className="dialog-error" role="alert">
+              {dialogError}
+            </p>
+          ) : null}
+        </Modal>
+      ) : dialog?.kind === "edit-agent" ? (
+        <Modal
+          title="Edit agent"
+          onClose={closeDialog}
+          footer={
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={closeDialog}
+                disabled={dialogBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="edit-agent-form"
+                className="primary-button"
+                disabled={dialogBusy || !dialogName.trim()}
+              >
+                {dialogBusy ? "Saving…" : "Save"}
+              </button>
+            </>
+          }
+        >
+          <form id="edit-agent-form" className="dialog-form" onSubmit={submitEditAgent}>
+            <label className="field">
+              <span>Name</span>
+              <input
+                value={dialogName}
+                onChange={(event) => setDialogName(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Role</span>
+              <input
+                value={dialogRole}
+                onChange={(event) => setDialogRole(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <fieldset className="tool-picker">
+              <legend>Tools</legend>
+              {availableTools.length === 0 ? (
+                <p className="dialog-copy">Loading tools…</p>
+              ) : (
+                availableTools.map((tool) => (
+                  <label key={tool.name} className="tool-option">
+                    <input
+                      type="checkbox"
+                      checked={dialogTools.includes(tool.name)}
+                      onChange={() => toggleTool(tool.name)}
+                    />
+                    <span>
+                      <strong>{tool.name}</strong>
+                      <small>{tool.description}</small>
+                    </span>
+                  </label>
+                ))
+              )}
+            </fieldset>
+            {dialogError ? (
+              <p className="dialog-error" role="alert">
+                {dialogError}
+              </p>
+            ) : null}
+          </form>
+        </Modal>
       ) : null}
     </div>
   );

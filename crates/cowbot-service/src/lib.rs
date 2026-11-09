@@ -3,6 +3,7 @@
 //! This crate contains the local bootstrap flow and the channel/message
 //! services that keep SQLite persistence and the event bus in sync.
 
+mod agents;
 mod approvals;
 mod assignments;
 mod bootstrap;
@@ -13,6 +14,7 @@ mod scheduler;
 mod task_service;
 mod templates;
 
+pub use agents::{AgentService, AgentUpdate};
 pub use approvals::{decision_for, ApprovalDecision, ApprovalService, ScopedApprovalGate};
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};

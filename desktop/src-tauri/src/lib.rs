@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod migration;
+mod workspace_tools;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -52,7 +53,7 @@ impl AppState {
         runtime.llm = llm;
     }
 
-    fn build_tools(workspace_dir: &std::path::Path) -> ToolRegistry {
+    fn build_tools(workspace_dir: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
         let sandbox = Arc::new(SubprocessSandbox::default());
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CodeExecutionTool::new(sandbox)));
@@ -62,6 +63,19 @@ impl AppState {
         tools.register(Arc::new(WriteFileTool::new(Some(
             workspace_dir.to_path_buf(),
         ))));
+        tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::ListTemplatesTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::CreateChannelTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::CreateTaskTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::InstantiateTeamTool::new(client)));
         tools
     }
 }
@@ -107,7 +121,7 @@ pub fn run() {
                     ),
                 };
 
-            let client = tauri::async_runtime::block_on(LocalClient::open(&db_path))?;
+            let client = Arc::new(tauri::async_runtime::block_on(LocalClient::open(&db_path))?);
             let session = tauri::async_runtime::block_on(client.session())?;
 
             // Keep the switcher registry in sync with the database in use and
@@ -144,9 +158,10 @@ pub fn run() {
                 }
             });
 
+            let tools = AppState::build_tools(&data_dir, client.clone());
             app.manage(AppState {
-                client: Arc::new(client),
-                tools: AppState::build_tools(&data_dir),
+                client,
+                tools,
                 model: RwLock::new(ModelRuntime {
                     llm: config::build_provider(&resolved),
                     model: resolved.model,
@@ -163,9 +178,15 @@ pub fn run() {
             commands::list_channels,
             commands::ensure_agent_channels,
             commands::create_channel,
+            commands::rename_channel,
+            commands::delete_channel,
+            commands::set_channel_pinned,
+            commands::clear_channel_messages,
             commands::list_messages,
             commands::post_message,
             commands::list_agents,
+            commands::update_agent,
+            commands::list_available_tools,
             commands::list_templates,
             commands::instantiate_agents,
             commands::create_task,

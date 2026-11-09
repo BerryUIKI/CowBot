@@ -18,7 +18,7 @@ use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
-    bootstrap_local, bootstrap_local_named, ApprovalService, AssignmentService,
+    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
     ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport, CrewRunOptions,
     CrewRunner, LocalContext, TaskService, TemplateService,
 };
@@ -27,7 +27,9 @@ use cowbot_tools::ToolRegistry;
 use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
-use crate::{Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport};
+use crate::{
+    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport,
+};
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
 pub struct LocalClient {
@@ -40,6 +42,7 @@ pub struct LocalClient {
     tasks: TaskService,
     assignments: AssignmentService,
     approvals: ApprovalService,
+    agents: AgentService,
 }
 
 impl LocalClient {
@@ -73,6 +76,7 @@ impl LocalClient {
             ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone());
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
+        let agents = AgentService::new(store.clone(), bus.clone());
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -92,6 +96,7 @@ impl LocalClient {
             tasks,
             assignments,
             approvals,
+            agents,
         })
     }
 
@@ -268,6 +273,29 @@ impl Client for LocalClient {
             .await
     }
 
+    async fn rename_channel(
+        &self,
+        channel_id: &ChannelId,
+        name: &str,
+        topic: &str,
+    ) -> CowResult<Channel> {
+        self.channels
+            .rename_channel(&self.session.workspace.id, channel_id, name, topic)
+            .await
+    }
+
+    async fn delete_channel(&self, channel_id: &ChannelId) -> CowResult<Channel> {
+        self.channels.delete_channel(channel_id).await
+    }
+
+    async fn set_channel_pinned(&self, channel_id: &ChannelId, pinned: bool) -> CowResult<Channel> {
+        self.channels.set_channel_pinned(channel_id, pinned).await
+    }
+
+    async fn clear_channel_messages(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.channels.clear_channel_messages(channel_id).await
+    }
+
     async fn post_message(
         &self,
         channel_id: &ChannelId,
@@ -414,6 +442,12 @@ impl Client for LocalClient {
 
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>> {
         self.store.list_agents(&self.session.workspace.id).await
+    }
+
+    async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile> {
+        self.agents
+            .update_agent(&self.session.workspace.id, update)
+            .await
     }
 }
 
@@ -577,6 +611,55 @@ mod tests {
 
         let channels = imported.list_channels().await.unwrap();
         assert!(channels.iter().any(|channel| channel.name == "general"));
+    }
+
+    #[tokio::test]
+    async fn update_agent_roundtrips_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let added = client
+            .instantiate_agents("builtin-general-assistant")
+            .await
+            .unwrap();
+        let agent = added.first().unwrap();
+
+        let updated = client
+            .update_agent(&AgentUpdate {
+                id: agent.id.clone(),
+                name: "chief".to_string(),
+                role: "Chief of Staff".to_string(),
+                tools: vec!["read_file".to_string()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "chief");
+
+        let channels = client.list_channels().await.unwrap();
+        assert!(channels.iter().any(|channel| {
+            channel.agent_id.as_ref() == Some(&agent.id) && channel.name == "chief"
+        }));
+    }
+
+    #[tokio::test]
+    async fn channel_management_roundtrips_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let channel = client.create_channel("general", "").await.unwrap();
+        assert!(!channel.pinned);
+
+        let renamed = client
+            .rename_channel(&channel.id, "ops", "Operations")
+            .await
+            .unwrap();
+        assert_eq!(renamed.name, "ops");
+        assert_eq!(renamed.topic, "Operations");
+
+        let pinned = client.set_channel_pinned(&channel.id, true).await.unwrap();
+        assert!(pinned.pinned);
+
+        client.post_message(&channel.id, "hello").await.unwrap();
+        assert_eq!(client.clear_channel_messages(&channel.id).await.unwrap(), 1);
+
+        client.delete_channel(&channel.id).await.unwrap();
+        assert!(client.list_channels().await.unwrap().is_empty());
     }
 
     #[tokio::test]

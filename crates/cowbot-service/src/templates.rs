@@ -12,9 +12,9 @@ const GENERAL_ASSISTANT: &str =
 /// Load and validate the templates compiled into the binary.
 pub fn builtin_templates() -> CowResult<Vec<TemplateDocument>> {
     let sources = [
+        ("general-assistant", GENERAL_ASSISTANT),
         ("software-team", SOFTWARE_TEAM),
         ("research-team", RESEARCH_TEAM),
-        ("general-assistant", GENERAL_ASSISTANT),
     ];
 
     let mut documents = Vec::with_capacity(sources.len());

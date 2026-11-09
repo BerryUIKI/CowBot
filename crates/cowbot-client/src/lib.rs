@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
+pub use cowbot_service::AgentUpdate;
 pub use local::LocalClient;
 
 /// User identity as seen by the client.
@@ -122,6 +123,15 @@ pub trait Client: Send + Sync {
 
     async fn list_channels(&self) -> CowResult<Vec<Channel>>;
     async fn create_channel(&self, name: &str, topic: &str) -> CowResult<Channel>;
+    async fn rename_channel(
+        &self,
+        channel_id: &ChannelId,
+        name: &str,
+        topic: &str,
+    ) -> CowResult<Channel>;
+    async fn delete_channel(&self, channel_id: &ChannelId) -> CowResult<Channel>;
+    async fn set_channel_pinned(&self, channel_id: &ChannelId, pinned: bool) -> CowResult<Channel>;
+    async fn clear_channel_messages(&self, channel_id: &ChannelId) -> CowResult<u64>;
     async fn post_message(
         &self,
         channel_id: &ChannelId,
@@ -169,4 +179,5 @@ pub trait Client: Send + Sync {
     async fn export_template(&self, id: &str) -> CowResult<String>;
     async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>>;
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
+    async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
 }

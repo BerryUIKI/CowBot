@@ -17,14 +17,27 @@ as completed so upgrades do not show the guide again.
 The current UI is conversation-first: the sidebar lists every agent as a contact
 with its latest message and a search field, group channels sit below the agents,
 and the main pane is a chat timeline with bubbles, a typing indicator, and a
-floating composer. **Tasks** (create tasks, inspect assignment/run history,
-cancel, and run a crew on a submitted task), **Approvals** (approve or reject
-tool calls requested by running agents), and **Settings** (with **Model**,
-**Team**, **Workspace**, and **About** sections for model providers, agents and
-templates, workspace creation and transfer, and version and update controls) are
-reached from the sidebar footer. A message in an agent's conversation reaches it
-without an `@mention`; group channels keep mention-driven replies (ADR-0022,
-ADR-0024).
+floating composer. Right-clicking a row (or using its **⋯** button) pins the
+conversation, renames or deletes a group channel, or clears an agent
+conversation's history; channel names are unique per workspace. **Tasks**
+(create tasks, inspect assignment/run history, cancel, and run a crew on a
+submitted task), **Approvals** (approve or reject tool calls requested by
+running agents), and **Settings** (with **Model**, **Team**, **Workspace**, and
+**About** sections for model providers, agents and templates, workspace creation
+and transfer, and version and update controls) are reached from the sidebar
+footer. A message in an agent's conversation reaches it without an `@mention`;
+group channels keep mention-driven replies (ADR-0022, ADR-0024, ADR-0026).
+Messages and task deliverables render Markdown and sanitized inline HTML;
+fenced `html` blocks open as sandboxed HTML artifacts with a Preview/Code
+toggle, where inline scripts run but network access, external images, forms,
+and the app itself stay out of reach (ADR-0027).
+
+The starter template is **Main Assistant** (agent `main`), which can create
+channels, instantiate specialist teams, and queue tasks for other agents via
+desktop workspace tools; those actions go through the normal approval policy and
+their arguments and risk appear on the approval card (ADR-0028). Agents can be
+edited from Settings → Team or the conversation context menu (name, role,
+tools); names are unique and the direct conversation follows a rename.
 
 Model providers are OpenAI Chat Completions, Anthropic Messages, or OpenAI
 Responses endpoints kept in `config.json` under the same app-data directory as

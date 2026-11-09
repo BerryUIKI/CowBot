@@ -154,6 +154,64 @@ async fn collaboration_roundtrip() {
 }
 
 #[tokio::test]
+async fn channel_management_roundtrip() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let channel = Channel::new("general", "Team coordination");
+    store.create_channel(&workspace.id, &channel).await.unwrap();
+
+    assert!(store
+        .channel_name_taken(&workspace.id, "GENERAL", None)
+        .await
+        .unwrap());
+    assert!(!store
+        .channel_name_taken(&workspace.id, "GENERAL", Some(&channel.id))
+        .await
+        .unwrap());
+
+    store.set_channel_pinned(&channel.id, true).await.unwrap();
+    let pinned = store.get_channel(&channel.id).await.unwrap().unwrap();
+    assert!(pinned.pinned);
+
+    store
+        .rename_channel(&channel.id, "ops", "Operations")
+        .await
+        .unwrap();
+    let renamed = store.get_channel(&channel.id).await.unwrap().unwrap();
+    assert_eq!(renamed.name, "ops");
+    assert_eq!(renamed.topic, "Operations");
+    assert!(renamed.pinned);
+    assert!(store
+        .channel_name_taken(&workspace.id, "ops", None)
+        .await
+        .unwrap());
+    assert!(!store
+        .channel_name_taken(&workspace.id, "ops", Some(&channel.id))
+        .await
+        .unwrap());
+
+    let message = ChannelMessage::new(channel.id.clone(), Sender::System, "hello");
+    store.append_message(&message).await.unwrap();
+    assert_eq!(store.clear_channel_messages(&channel.id).await.unwrap(), 1);
+    assert!(store
+        .list_messages(&channel.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+
+    store.append_message(&message).await.unwrap();
+    store.delete_channel(&channel.id).await.unwrap();
+    assert!(store.get_channel(&channel.id).await.unwrap().is_none());
+    // Channel deletion cascades to messages.
+    assert!(store
+        .list_messages(&channel.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn direct_channels_are_unique_per_agent() {
     let store = test_store().await;
     let (_user, workspace) = seed_workspace(&store).await;

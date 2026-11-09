@@ -1,9 +1,11 @@
-import type { Approval, Task } from "./types";
+import type { Approval, ApprovalRisk, Task, ToolCallDetail } from "./types";
 import { formatDateTime } from "./format";
 
 interface ApprovalCardsProps {
   approvals: Approval[];
   tasks: Task[];
+  toolCalls: Record<string, ToolCallDetail>;
+  risks: Record<string, ApprovalRisk>;
   decidingId: string | null;
   onDecide: (approval: Approval, approved: boolean) => void;
 }
@@ -11,6 +13,8 @@ interface ApprovalCardsProps {
 export default function ApprovalCards({
   approvals,
   tasks,
+  toolCalls,
+  risks,
   decidingId,
   onDecide,
 }: ApprovalCardsProps) {
@@ -31,6 +35,8 @@ export default function ApprovalCards({
           {approvals.map((approval) => {
             const task = tasks.find((candidate) => candidate.id === approval.task_id);
             const deciding = decidingId === approval.id;
+            const call = toolCalls[approval.tool_call_id];
+            const risk = risks[approval.id];
             return (
               <li className="approval-card" key={approval.id}>
                 <div className="approval-head">
@@ -41,8 +47,27 @@ export default function ApprovalCards({
                   {task?.description ?? `Task ${approval.task_id.slice(0, 8)}`}
                 </p>
                 <p className="approval-meta">
-                  Tool call <code>{approval.tool_call_id}</code>
+                  {call ? (
+                    <>
+                      Tool <code>{call.name}</code>
+                    </>
+                  ) : (
+                    <>
+                      Tool call <code>{approval.tool_call_id}</code>
+                    </>
+                  )}
                 </p>
+                {call ? (
+                  <pre className="approval-args">
+                    {JSON.stringify(call.arguments ?? null, null, 2)}
+                  </pre>
+                ) : null}
+                {risk ? (
+                  <p className={`approval-risk risk-${risk.risk}`}>
+                    {risk.risk.replaceAll("_", " ")}
+                    {risk.reason ? ` — ${risk.reason}` : ""}
+                  </p>
+                ) : null}
                 <div className="approval-actions">
                   <button
                     type="button"
