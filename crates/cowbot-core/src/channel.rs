@@ -1,4 +1,4 @@
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentProfile};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -33,12 +33,18 @@ pub enum Sender {
 }
 
 /// A collaboration channel where agents and users interact (inspired by Mattermost).
+///
+/// A channel with `agent_id` set is that agent's direct conversation: it has a
+/// single addressee, so messages do not need an `@mention` to reach the agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub id: ChannelId,
     pub name: String,
     pub topic: String,
     pub created_at: DateTime<Utc>,
+    /// Agent that owns this direct conversation, if any.
+    #[serde(default)]
+    pub agent_id: Option<AgentId>,
 }
 
 impl Channel {
@@ -48,6 +54,18 @@ impl Channel {
             name: name.into(),
             topic: topic.into(),
             created_at: Utc::now(),
+            agent_id: None,
+        }
+    }
+
+    /// Create the direct conversation channel for `agent`.
+    pub fn direct(agent: &AgentProfile, topic: impl Into<String>) -> Self {
+        Self {
+            id: ChannelId::random(),
+            name: agent.name.clone(),
+            topic: topic.into(),
+            created_at: Utc::now(),
+            agent_id: Some(agent.id.clone()),
         }
     }
 }
@@ -78,5 +96,28 @@ impl ChannelMessage {
     pub fn with_thread(mut self, thread_id: impl Into<String>) -> Self {
         self.thread_id = Some(thread_id.into());
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channels_without_agent_id_still_deserialize() {
+        let json = r#"{"id":"c1","name":"general","topic":"","created_at":"2026-01-01T00:00:00Z"}"#;
+        let channel: Channel = serde_json::from_str(json).unwrap();
+        assert_eq!(channel.agent_id, None);
+    }
+
+    #[test]
+    fn direct_channels_keep_the_agent_id() {
+        let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+        let channel = Channel::direct(&agent, "Architect");
+        assert_eq!(channel.agent_id.as_ref(), Some(&agent.id));
+
+        let json = serde_json::to_string(&channel).unwrap();
+        let restored: Channel = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.agent_id.as_ref(), Some(&agent.id));
     }
 }
