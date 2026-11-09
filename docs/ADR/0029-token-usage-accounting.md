@@ -1,6 +1,6 @@
 # ADR 0029: Token usage accounting
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-09
 - Plan: [M1 — usage accounting foundation](../plans/M1-usage-accounting.md)
 - Discussion: None yet

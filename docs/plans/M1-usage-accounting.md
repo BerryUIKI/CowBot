@@ -1,6 +1,6 @@
 # M1 — LLM usage accounting foundation
 
-- Status: Planned
+- Status: Implemented
 - Date: 2026-11-09
 - Related: [ADR-0029](../ADR/0029-token-usage-accounting.md)
 - Follow-ups: M2 context meter and conversations, M3 group conversations and
@@ -472,19 +472,19 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
 ## Acceptance criteria
 
-- [ ] Every provider response that includes usage yields a normalized
+- [x] Every provider response that includes usage yields a normalized
       `TokenUsage`, including DeepSeek cache hit/miss fields.
-- [ ] The raw provider usage object is persisted unchanged.
-- [ ] The agent loop writes one `llm_calls` row per completion, including each
+- [x] The raw provider usage object is persisted unchanged.
+- [x] The agent loop writes one `llm_calls` row per completion, including each
       tool iteration.
-- [ ] A response without usage still writes a row with null token columns.
-- [ ] A recorder failure is logged and the task still completes.
-- [ ] Usage can be listed by run and task, and summed per task.
-- [ ] Deleting a run cascades its usage rows; rows without a run are kept.
-- [ ] Existing databases migrate through a new `0005` migration only.
-- [ ] Old desktop `config.json` files parse; model metadata round-trips.
-- [ ] No prompt, chat, or task behavior changes.
-- [ ] Workspace and desktop gates pass.
+- [x] A response without usage still writes a row with null token columns.
+- [x] A recorder failure is logged and the task still completes.
+- [x] Usage can be listed by run and task, and summed per task.
+- [x] Deleting a run cascades its usage rows; rows without a run are kept.
+- [x] Existing databases migrate through a new `0005` migration only.
+- [x] Old desktop `config.json` files parse; model metadata round-trips.
+- [x] No prompt, chat, or task behavior changes.
+- [x] Workspace and desktop gates pass.
 
 ## Risks and mitigations
 
