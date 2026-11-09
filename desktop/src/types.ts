@@ -21,6 +21,7 @@ export interface Channel {
   topic: string;
   created_at: string;
   agent_id: string | null;
+  pinned: boolean;
 }
 
 export type Sender =

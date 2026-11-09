@@ -45,6 +45,9 @@ pub struct Channel {
     /// Agent that owns this direct conversation, if any.
     #[serde(default)]
     pub agent_id: Option<AgentId>,
+    /// Whether the user pinned this channel or conversation.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl Channel {
@@ -55,6 +58,7 @@ impl Channel {
             topic: topic.into(),
             created_at: Utc::now(),
             agent_id: None,
+            pinned: false,
         }
     }
 
@@ -66,6 +70,7 @@ impl Channel {
             topic: topic.into(),
             created_at: Utc::now(),
             agent_id: Some(agent.id.clone()),
+            pinned: false,
         }
     }
 }

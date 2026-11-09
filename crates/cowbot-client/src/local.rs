@@ -268,6 +268,29 @@ impl Client for LocalClient {
             .await
     }
 
+    async fn rename_channel(
+        &self,
+        channel_id: &ChannelId,
+        name: &str,
+        topic: &str,
+    ) -> CowResult<Channel> {
+        self.channels
+            .rename_channel(&self.session.workspace.id, channel_id, name, topic)
+            .await
+    }
+
+    async fn delete_channel(&self, channel_id: &ChannelId) -> CowResult<Channel> {
+        self.channels.delete_channel(channel_id).await
+    }
+
+    async fn set_channel_pinned(&self, channel_id: &ChannelId, pinned: bool) -> CowResult<Channel> {
+        self.channels.set_channel_pinned(channel_id, pinned).await
+    }
+
+    async fn clear_channel_messages(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.channels.clear_channel_messages(channel_id).await
+    }
+
     async fn post_message(
         &self,
         channel_id: &ChannelId,
@@ -577,6 +600,29 @@ mod tests {
 
         let channels = imported.list_channels().await.unwrap();
         assert!(channels.iter().any(|channel| channel.name == "general"));
+    }
+
+    #[tokio::test]
+    async fn channel_management_roundtrips_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let channel = client.create_channel("general", "").await.unwrap();
+        assert!(!channel.pinned);
+
+        let renamed = client
+            .rename_channel(&channel.id, "ops", "Operations")
+            .await
+            .unwrap();
+        assert_eq!(renamed.name, "ops");
+        assert_eq!(renamed.topic, "Operations");
+
+        let pinned = client.set_channel_pinned(&channel.id, true).await.unwrap();
+        assert!(pinned.pinned);
+
+        client.post_message(&channel.id, "hello").await.unwrap();
+        assert_eq!(client.clear_channel_messages(&channel.id).await.unwrap(), 1);
+
+        client.delete_channel(&channel.id).await.unwrap();
+        assert!(client.list_channels().await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -78,6 +78,57 @@ pub async fn create_channel(
 }
 
 #[tauri::command]
+pub async fn rename_channel(
+    state: State<'_, AppState>,
+    channel_id: String,
+    name: String,
+    topic: String,
+) -> Result<Channel, String> {
+    state
+        .client
+        .rename_channel(&ChannelId::new(channel_id), &name, &topic)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_channel(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<Channel, String> {
+    state
+        .client
+        .delete_channel(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_channel_pinned(
+    state: State<'_, AppState>,
+    channel_id: String,
+    pinned: bool,
+) -> Result<Channel, String> {
+    state
+        .client
+        .set_channel_pinned(&ChannelId::new(channel_id), pinned)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_channel_messages(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<u64, String> {
+    state
+        .client
+        .clear_channel_messages(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn list_messages(
     state: State<'_, AppState>,
     channel_id: String,

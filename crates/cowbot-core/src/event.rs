@@ -16,6 +16,10 @@ pub enum EventPayload {
     MessagePosted(ChannelMessage),
     /// A new collaboration channel was created
     ChannelCreated(Channel),
+    /// A channel's metadata or pin state changed
+    ChannelUpdated(Channel),
+    /// A channel was deleted
+    ChannelDeleted { channel_id: ChannelId },
     /// A new task has been created
     TaskCreated(Task),
     /// A task has been assigned to a specific agent

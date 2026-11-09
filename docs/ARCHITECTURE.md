@@ -65,8 +65,9 @@ CLI (cowbot) -- cowbot-client -- local mode or remote server
 - Humans and agents are both channel members; messages are persisted and shown on a timeline.
 - A message that mentions an agent (`@Name`, or `@team`/`@all`/`@everyone`/`@here`) becomes one task per mentioned agent, run through the assignment scheduler with the channel's approval policy; the answer is written back to the channel as a message from that agent. Unknown mentions, failures, and empty answers produce a system notice (ADR-0022).
 - An agent's direct conversation is created on demand and reconciled at desktop startup: every message there is addressed to that agent, so mentions are not required and never fan out. Group channels keep the mention rules above (ADR-0024).
+- Channel names are unique per workspace, case-insensitively, and are validated in the service so existing duplicates remain editable. Channels and conversations carry a `pinned` flag; group channels can be renamed or deleted, while direct conversations can only have their history cleared (ADR-0026). `ChannelUpdated` and `ChannelDeleted` events keep clients in sync.
 - Channels are the primary collaboration surface but do not restrict usage: users can create channels and threads freely.
-- `cowbot-service` provides the local bootstrap (idempotent owner and default workspace), channel/message services that persist writes before publishing `ChannelCreated` and `MessagePosted` events, idempotent provisioning of agent direct conversations, and the channel agent service that turns mentions or direct messages into assignment-backed turns.
+- `cowbot-service` provides the local bootstrap (idempotent owner and default workspace), channel/message services that persist writes before publishing `ChannelCreated`, `ChannelUpdated`, `ChannelDeleted`, and `MessagePosted` events, channel name validation and management (rename, pin, delete, clear history), idempotent provisioning of agent direct conversations, and the channel agent service that turns mentions or direct messages into assignment-backed turns.
 
 ### 3.3 Agents and Templates
 
@@ -175,7 +176,7 @@ Inspired by Claude Code's permission modes:
 | `Session` | id, user_id, token_hash, expires_at, created_at |
 | `ApiToken` | id, user_id, workspace_id, token_hash, scopes, revoked_at |
 | `Invite` | id, workspace_id, token_hash, role, expires_at |
-| `Channel` | id, workspace_id, name, topic, created_at, agent_id (direct conversation owner) |
+| `Channel` | id, workspace_id, name, topic, created_at, agent_id (direct conversation owner), pinned |
 | `Message` | id, channel_id, sender, content, thread_id, created_at |
 | `AgentProfile` | id, workspace_id, name, role, goal, backstory, model, tools, limits |
 | `Template` | id, kind (agent/team), name, payload |

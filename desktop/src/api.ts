@@ -38,6 +38,26 @@ export function createChannel(name: string, topic: string): Promise<Channel> {
   return invoke<Channel>("create_channel", { name, topic });
 }
 
+export function renameChannel(
+  channelId: string,
+  name: string,
+  topic: string,
+): Promise<Channel> {
+  return invoke<Channel>("rename_channel", { channelId, name, topic });
+}
+
+export function deleteChannel(channelId: string): Promise<Channel> {
+  return invoke<Channel>("delete_channel", { channelId });
+}
+
+export function setChannelPinned(channelId: string, pinned: boolean): Promise<Channel> {
+  return invoke<Channel>("set_channel_pinned", { channelId, pinned });
+}
+
+export function clearChannelMessages(channelId: string): Promise<number> {
+  return invoke<number>("clear_channel_messages", { channelId });
+}
+
 export function listMessages(channelId: string, limit = 200): Promise<ChannelMessage[]> {
   return invoke<ChannelMessage[]>("list_messages", { channelId, limit });
 }

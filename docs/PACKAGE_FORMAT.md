@@ -41,7 +41,8 @@ serialize.
 - `agents.json`: array of agent profiles.
 - `templates.json`: array of template documents.
 - `channels.jsonl`: one channel per line; an optional `agent_id` marks the
-  agent's direct conversation (ADR-0024).
+  agent's direct conversation (ADR-0024), and `pinned` records whether the user
+  pinned it (ADR-0026).
 - `messages.jsonl`: one channel message per line, sorted by `created_at`.
 - `tasks.json`: array of tasks.
 - `runs.jsonl`: one run per line.
