@@ -411,3 +411,24 @@ async fn tasks_runs_approvals_and_audit_roundtrip() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].action, "approval.approved");
 }
+
+#[tokio::test]
+async fn task_title_and_archive_roundtrip() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let task = Task::new("First line\nSecond line", "Output").with_title("Short title");
+    store.create_task(&workspace.id, None, &task).await.unwrap();
+
+    let loaded = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(loaded.title, "Short title");
+    assert!(!loaded.archived);
+
+    store.set_task_archived(&task.id, true).await.unwrap();
+    let archived = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(archived.archived);
+
+    store.set_task_archived(&task.id, false).await.unwrap();
+    let restored = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(!restored.archived);
+}

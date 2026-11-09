@@ -24,6 +24,8 @@ pub enum EventPayload {
     AgentUpdated(AgentProfile),
     /// A new task has been created
     TaskCreated(Task),
+    /// A task's metadata changed, for example its archived flag
+    TaskUpdated(Task),
     /// A task has been assigned to a specific agent
     TaskAssigned { task_id: TaskId, agent_id: AgentId },
     /// A task has successfully finished execution

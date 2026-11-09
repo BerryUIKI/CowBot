@@ -304,6 +304,7 @@ impl ChannelAgentService {
             description,
             "A concise reply addressed to the user, ready to post in the channel.",
         )
+        .with_title(message.content.lines().next().unwrap_or_default())
         .assign_to(agent.id.clone())
     }
 

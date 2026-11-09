@@ -193,6 +193,8 @@ pub fn run() {
             commands::run_task,
             commands::list_tasks,
             commands::cancel_task,
+            commands::archive_task,
+            commands::unarchive_task,
             commands::list_assignments,
             commands::list_assignment_events,
             commands::list_runs,

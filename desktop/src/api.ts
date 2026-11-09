@@ -151,6 +151,14 @@ export function cancelTask(taskId: string, reason: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId, reason });
 }
 
+export function archiveTask(taskId: string): Promise<Task> {
+  return invoke<Task>("archive_task", { taskId });
+}
+
+export function unarchiveTask(taskId: string): Promise<Task> {
+  return invoke<Task>("unarchive_task", { taskId });
+}
+
 export function listAssignments(taskId: string): Promise<Assignment[]> {
   return invoke<Assignment[]>("list_assignments", { taskId });
 }
