@@ -178,6 +178,7 @@ enum MessageCommands {
 #[serde(rename_all = "kebab-case")]
 enum ApprovalLevelArg {
     Ask,
+    AcceptEdits,
     SafeAuto,
     PlanOnly,
     Trusted,
@@ -187,6 +188,7 @@ impl From<ApprovalLevelArg> for ApprovalLevel {
     fn from(value: ApprovalLevelArg) -> Self {
         match value {
             ApprovalLevelArg::Ask => ApprovalLevel::Ask,
+            ApprovalLevelArg::AcceptEdits => ApprovalLevel::AcceptEdits,
             ApprovalLevelArg::SafeAuto => ApprovalLevel::SafeAuto,
             ApprovalLevelArg::PlanOnly => ApprovalLevel::PlanOnly,
             ApprovalLevelArg::Trusted => ApprovalLevel::Trusted,

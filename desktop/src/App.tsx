@@ -6,6 +6,7 @@ import type {
 } from "react";
 
 import ApprovalCards from "./ApprovalCards";
+import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -72,7 +73,7 @@ import type {
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
+import { taskStatusKind, taskStatusLabel } from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "approvals" | "settings";
@@ -98,8 +99,6 @@ type DialogState =
   | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
   | { kind: "edit-agent"; agent: AgentProfile }
   | null;
-
-const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
 
 const broadcastNames = ["team", "all", "everyone", "here"];
 
@@ -1660,23 +1659,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {agents.length > 0 ? (
-                    <label className="channel-approval">
-                      <span>Approval</span>
-                      <select
-                        value={channelApproval}
-                        onChange={(event) =>
-                          setChannelApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
                   {selectedAgent ? <span className="chat-kind">Direct</span> : null}
                 </div>
               </header>
@@ -1823,6 +1805,12 @@ export default function App() {
                 </div>
                 <div className="composer-footer">
                   <span className="composer-footer-spacer" />
+                  {agents.length > 0 ? (
+                    <ApprovalModeMenu
+                      value={channelApproval}
+                      onChange={setChannelApproval}
+                    />
+                  ) : null}
                   <button
                     type="button"
                     className="composer-model"
@@ -1937,21 +1925,13 @@ export default function App() {
                         ))}
                       </select>
                     </label>
-                    <label className="field">
+                    <div className="field">
                       <span>Approval</span>
-                      <select
+                      <ApprovalModeMenu
                         value={taskApproval}
-                        onChange={(event) =>
-                          setTaskApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={setTaskApproval}
+                      />
+                    </div>
                   </div>
                   <div className="form-actions">
                     <button

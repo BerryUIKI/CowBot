@@ -26,7 +26,7 @@ Both commands open `LocalClient`, which migrates SQLite, bootstraps the local ow
 
 ### 4. Approvals in the CLI
 
-`cowai run` gains `--approval <ask|safe-auto|plan-only|trusted>` (default `ask`). While the crew runs, the CLI subscribes to client events; each `ApprovalRequested` prints the risk, reason, and tool call id and prompts `y/N`. The decision goes through `Client::decide_approval`, so the session user is recorded as the approver. EOF or an unanswered prompt rejects.
+`cowai run` gains `--approval <ask|accept-edits|safe-auto|plan-only|trusted>` (default `ask`). While the crew runs, the CLI subscribes to client events; each `ApprovalRequested` prints the risk, reason, and tool call id and prompts `y/N`. The decision goes through `Client::decide_approval`, so the session user is recorded as the approver. EOF or an unanswered prompt rejects.
 
 ## Consequences
 

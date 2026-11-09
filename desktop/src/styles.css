@@ -1512,21 +1512,106 @@ button {
   gap: 8px;
 }
 
-.channel-approval {
-  display: flex;
+.approval-mode {
+  position: relative;
+}
+
+.approval-mode-button {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   color: var(--paper-faint);
   font-size: 12px;
 }
 
-.channel-approval select {
-  padding: 4px 8px;
-  border: 1px solid var(--rule-strong);
-  border-radius: 7px;
-  background: var(--ink-raised);
+.approval-mode-button:hover {
+  background: var(--ink-hover);
   color: var(--paper);
+}
+
+.approval-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brass);
+}
+
+.approval-mode-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: min(300px, 80vw);
+  padding: 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 10px;
+  background: var(--ink-raised);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.approval-mode-header {
+  padding: 5px 8px;
+  color: var(--paper-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.approval-mode-option {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--paper-dim);
+  text-align: left;
+}
+
+.approval-mode-option:hover,
+.approval-mode-option.is-active {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.approval-mode-check {
+  width: 12px;
+  flex: none;
+  padding-top: 1px;
+  color: var(--brass);
+  font-size: 11px;
+}
+
+.approval-mode-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.approval-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
+  font-weight: 600;
+}
+
+.approval-mode-shortcut {
+  color: var(--paper-faint);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.approval-mode-description {
+  color: var(--paper-faint);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 /* Empty and loading states */

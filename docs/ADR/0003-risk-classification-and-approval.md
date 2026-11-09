@@ -6,7 +6,7 @@
 
 ## Context
 
-CowBot offers multiple approval modes (Ask / SafeAuto / PlanOnly / Trusted) and lets agents execute commands and modify files. Risk classification must be deterministic, auditable, and configurable; the safety boundary cannot be handed entirely to an LLM.
+CowBot offers multiple approval modes (Ask / AcceptEdits / SafeAuto / PlanOnly / Trusted) and lets agents execute commands and modify files. Risk classification must be deterministic, auditable, and configurable; the safety boundary cannot be handed entirely to an LLM.
 
 ## Decision
 
@@ -20,12 +20,13 @@ CowBot offers multiple approval modes (Ask / SafeAuto / PlanOnly / Trusted) and 
 3. **Optional LLM classifier**: only for operations unmatched by static rules, returning a risk suggestion. The classifier **may only raise the risk level, never lower the static floor**. Disabled by default; workspaces may enable it (preferring local models).
 4. **Approval modes**:
    - `Ask` (default): ReadOnly auto-approves; Low and above require per-call approval; Critical is denied;
+   - `AcceptEdits`: ReadOnly auto-approves; `write_file` calls inside the workspace auto-approve; all other calls follow `Ask`; Critical is denied;
    - `SafeAuto`: ReadOnly/Low auto-approve; Medium and above require approval; Critical is denied;
    - `PlanOnly`: only ReadOnly auto-approves; every write or execution is denied;
    - `Trusted`: everything except Critical auto-approves; Critical is denied in v1 (a future explicit allowlist may permit it).
 5. **Undecidable operations default to High** (fail-safe), never auto-approve.
 6. **Audit**: record the decision source (rule ID / LLM classifier / human), approver, timestamp, and operation arguments.
-7. **Enforcement**: a `ToolGate` is consulted before every tool execution. `ApprovalService` classifies the call, applies the assignment's approval level, creates a pending approval when required, waits for the decision, and writes audit events. Delegated assignments inherit `inherit_approval_level(parent, requested)`, where `PlanOnly` is a hard read-only boundary and otherwise the more permissive level wins.
+7. **Enforcement**: a `ToolGate` is consulted before every tool execution. `ApprovalService` classifies the call, applies the assignment's approval level, creates a pending approval when required, waits for the decision, and writes audit events. Delegated assignments inherit `inherit_approval_level(parent, requested)`, where `PlanOnly` is a hard read-only boundary and otherwise the more permissive level wins in the order `Ask < AcceptEdits < SafeAuto < Trusted`.
 
 ## Rationale
 

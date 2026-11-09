@@ -47,7 +47,47 @@ export interface CowEvent {
   };
 }
 
-export type ApprovalLevel = "ask" | "safe_auto" | "plan_only" | "trusted";
+export type ApprovalLevel =
+  | "ask"
+  | "accept_edits"
+  | "safe_auto"
+  | "plan_only"
+  | "trusted";
+
+export interface ApprovalMode {
+  value: ApprovalLevel;
+  label: string;
+  description: string;
+}
+
+/// Modes in the order Claude presents them.
+export const approvalModes: ApprovalMode[] = [
+  {
+    value: "safe_auto",
+    label: "Auto",
+    description: "Low-risk tools run automatically; medium and high risk ask.",
+  },
+  {
+    value: "ask",
+    label: "Manual",
+    description: "Read-only tools run; anything that changes state waits for approval.",
+  },
+  {
+    value: "accept_edits",
+    label: "Accept edits",
+    description: "Workspace file edits run; other tools follow Manual.",
+  },
+  {
+    value: "plan_only",
+    label: "Plan",
+    description: "Only read-only tools run; everything else is denied.",
+  },
+  {
+    value: "trusted",
+    label: "Bypass permissions",
+    description: "Every tool call runs; critical-risk calls remain blocked.",
+  },
+];
 
 export type TaskStatus =
   | "pending"
@@ -261,13 +301,15 @@ export function taskStatusLabel(status: TaskStatus): string {
 export function approvalLevelLabel(level: ApprovalLevel): string {
   switch (level) {
     case "ask":
-      return "Ask";
+      return "Manual";
+    case "accept_edits":
+      return "Accept edits";
     case "safe_auto":
-      return "Safe auto";
+      return "Auto";
     case "plan_only":
-      return "Plan only";
+      return "Plan";
     case "trusted":
-      return "Trusted";
+      return "Bypass permissions";
   }
 }
 

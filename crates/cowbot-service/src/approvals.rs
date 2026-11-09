@@ -27,7 +27,7 @@ pub enum ApprovalDecision {
 /// Apply the workspace/assignment approval level to a risk level.
 pub fn decision_for(level: ApprovalLevel, risk: RiskLevel) -> ApprovalDecision {
     match level {
-        ApprovalLevel::Ask => match risk {
+        ApprovalLevel::Ask | ApprovalLevel::AcceptEdits => match risk {
             RiskLevel::ReadOnly => ApprovalDecision::AutoApprove,
             RiskLevel::Low | RiskLevel::Medium | RiskLevel::High => {
                 ApprovalDecision::RequireApproval
@@ -48,6 +48,25 @@ pub fn decision_for(level: ApprovalLevel, risk: RiskLevel) -> ApprovalDecision {
             _ => ApprovalDecision::AutoApprove,
         },
     }
+}
+
+/// Apply the approval level with the tool call in hand.
+///
+/// `AcceptEdits` auto-approves only `write_file` calls whose path is inside the
+/// workspace; all other calls follow the Manual policy.
+pub fn decision_for_call(
+    level: ApprovalLevel,
+    risk: RiskLevel,
+    tool_name: &str,
+    rule_id: &str,
+) -> ApprovalDecision {
+    if level == ApprovalLevel::AcceptEdits
+        && tool_name == "write_file"
+        && rule_id == "write_file.workspace"
+    {
+        return ApprovalDecision::AutoApprove;
+    }
+    decision_for(level, risk)
 }
 
 /// Approval service used by the local runtime and the agent tool gate.
@@ -87,7 +106,12 @@ impl ApprovalService {
             .ok_or_else(|| CowError::Task(format!("assignment '{assignment_id}' was not found")))?;
         let assessment = StaticRiskClassifier.classify(call);
 
-        match decision_for(assignment.approval_level, assessment.level) {
+        match decision_for_call(
+            assignment.approval_level,
+            assessment.level,
+            &call.name,
+            &assessment.rule_id,
+        ) {
             ApprovalDecision::AutoApprove => {
                 self.record_audit(&agent_id.0, "tool.auto_approved", call, &assessment)
                     .await?;
