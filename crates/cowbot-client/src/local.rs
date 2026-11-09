@@ -5,13 +5,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cowbot_agent::Crew;
 use cowbot_bus::EventBus;
-use cowbot_core::agent::AgentProfile;
+use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
 use cowbot_core::assignment::{
     Assignment, AssignmentEvent, AssignmentId, AssignmentOrigin, AssignmentRequester,
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
+use cowbot_core::conversation::{
+    CompactionOutcome, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -19,8 +22,8 @@ use cowbot_core::template::TemplateDocument;
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
-    ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport, CrewRunOptions,
-    CrewRunner, LocalContext, TaskService, TemplateService,
+    ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, TaskService, TemplateService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -38,6 +41,7 @@ pub struct LocalClient {
     session: ClientSession,
     channels: ChannelService,
     channel_agents: ChannelAgentService,
+    conversations: ConversationService,
     templates: TemplateService,
     tasks: TaskService,
     assignments: AssignmentService,
@@ -74,6 +78,8 @@ impl LocalClient {
         let channels = ChannelService::new(store.clone(), bus.clone());
         let channel_agents =
             ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+        let conversations =
+            ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone());
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
@@ -92,6 +98,7 @@ impl LocalClient {
             session,
             channels,
             channel_agents,
+            conversations,
             templates,
             tasks,
             assignments,
@@ -230,6 +237,19 @@ impl LocalClient {
             .reply(channel_id, message, llm, tools, model, &options)
             .await
     }
+
+    /// Compact a conversation context with the caller's fixed model client.
+    ///
+    /// Local-only for the same reason as [`Self::reply_to_mentions`]: the LLM
+    /// handle lives in the desktop runtime, not in the workspace database.
+    pub async fn compact_conversation(
+        &self,
+        channel_id: &ChannelId,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+    ) -> CowResult<CompactionOutcome> {
+        self.conversations.compact(channel_id, llm, model).await
+    }
 }
 
 #[async_trait]
@@ -321,6 +341,10 @@ impl Client for LocalClient {
             .await
     }
 
+    async fn get_channel(&self, channel_id: &ChannelId) -> CowResult<Option<Channel>> {
+        self.store.get_channel(channel_id).await
+    }
+
     async fn create_channel(&self, name: &str, topic: &str) -> CowResult<Channel> {
         self.channels
             .create_channel(&self.session.workspace.id, name, topic)
@@ -382,6 +406,41 @@ impl Client for LocalClient {
         limit: u32,
     ) -> CowResult<Vec<ChannelMessage>> {
         self.channels.list_messages(channel_id, limit).await
+    }
+
+    async fn create_conversation(
+        &self,
+        title: Option<&str>,
+        agent_id: &AgentId,
+        provider_id: Option<String>,
+        model: &str,
+    ) -> CowResult<Channel> {
+        self.conversations
+            .create(title, agent_id, provider_id, model)
+            .await
+    }
+
+    async fn conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<ConversationSettings> {
+        self.conversations.settings(channel_id).await
+    }
+
+    async fn update_conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+        update: &ConversationSettingsUpdate,
+    ) -> CowResult<ConversationSettings> {
+        self.conversations.update_settings(channel_id, update).await
+    }
+
+    async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
+        self.conversations.context(channel_id).await
+    }
+
+    async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.conversations.clear_context(channel_id).await
     }
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
@@ -526,6 +585,7 @@ mod tests {
     };
     use cowbot_core::run::RunStatus;
     use cowbot_core::task::Task;
+    use cowbot_llm::MockLlmProvider;
     use serde_json::json;
 
     #[tokio::test]
@@ -767,5 +827,81 @@ mod tests {
         assert!(LocalClient::create_workspace_database(&path, "  ")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn conversation_operations_roundtrip_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let added = client
+            .instantiate_agents("builtin-general-assistant")
+            .await
+            .unwrap();
+        let agent = added.first().unwrap();
+
+        let channel = client
+            .create_conversation(
+                Some("Design review"),
+                &agent.id,
+                Some("provider-1".to_string()),
+                "mock-model",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            channel.kind,
+            cowbot_core::conversation::ChannelKind::Conversation
+        );
+        assert_eq!(
+            client.get_channel(&channel.id).await.unwrap().unwrap().kind,
+            cowbot_core::conversation::ChannelKind::Conversation
+        );
+
+        let settings = client.conversation_settings(&channel.id).await.unwrap();
+        assert_eq!(settings.model, "mock-model");
+        assert_eq!(settings.provider_id.as_deref(), Some("provider-1"));
+        assert!(!settings.auto_compact);
+
+        let updated = client
+            .update_conversation_settings(
+                &channel.id,
+                &cowbot_core::conversation::ConversationSettingsUpdate {
+                    auto_compact: Some(true),
+                    compact_threshold: Some(70),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(updated.auto_compact);
+        assert_eq!(updated.compact_threshold, 70);
+
+        let message = client
+            .post_message(&channel.id, "hello there")
+            .await
+            .unwrap();
+        let report = client
+            .reply_to_mentions(
+                &channel.id,
+                &message,
+                Arc::new(MockLlmProvider::echo()),
+                ToolRegistry::new(),
+                "mock-model",
+                ChannelTurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.agents, vec![agent.id.clone()]);
+
+        let context = client.conversation_context(&channel.id).await.unwrap();
+        assert_eq!(context.agent_id, agent.id);
+        assert_eq!(context.projection.active_entries, 2);
+        assert!(context.projection.total_tokens() > 0);
+
+        let cleared = client
+            .clear_conversation_context(&channel.id)
+            .await
+            .unwrap();
+        assert!(cleared >= 2);
+        let context = client.conversation_context(&channel.id).await.unwrap();
+        assert_eq!(context.projection.active_entries, 0);
     }
 }

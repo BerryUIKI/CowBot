@@ -107,7 +107,8 @@ automatically; **Settings → Workspace** manages the rest.
 - **Switch** — selects another registered workspace and restarts CowBot.
 - **Export workspace** — writes the active workspace to a `.cowpkg` package.
   Exported packages contain channels, messages, agents, templates, tasks, runs,
-  and audit events with SHA-256 checksums; credentials are never included.
+  audit events, and conversation participants, settings, and context branches
+  with SHA-256 checksums; credentials are never included.
 - **Import package** — verifies a `.cowpkg` package, creates a new workspace
   database named `<name> (imported)`, registers it, and restarts into it. Import
   never merges with or overwrites existing data.
@@ -153,6 +154,12 @@ from templates; a standalone agent editor is not part of this release.
   that agent directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
+- **Conversations** — the **Conversations** section holds user-created
+  single-agent sessions. Choose **New conversation**, give it a title, and pick
+  an agent. Unlike an agent contact, a conversation keeps its own model context
+  and a fixed model; you can have several conversations with the same agent, and
+  the header shows a context meter (see below). Conversations can be pinned,
+  renamed, deleted, compacted, and cleared like other sidebar rows.
 - **Channels** — group rooms sit below the agents. Create one with **New
   channel** or the **+** button, post messages, and follow the timeline. Names
   must be unique in the workspace, case-insensitively. Mention an agent by name
@@ -161,14 +168,16 @@ from templates; a standalone agent editor is not part of this release.
   channel header, and `@team` (also `@all`, `@everyone`, `@here`) addresses all
   of them. Matching is case-insensitive; an unknown name produces a system
   notice listing the agents that exist.
-- **Manage conversations** — right-click an agent or channel row (or use its
-  **⋯** button) to pin it to the top, rename a channel, delete a group channel,
-  or clear an agent conversation's history. Deleting a channel deletes its
-  messages; tasks keep their history but are no longer linked to that channel.
-  Clearing a conversation keeps the agent and removes only its messages. Agent
+- **Manage conversations** — right-click an agent, conversation, or channel row
+  (or use its **⋯** button) to pin it to the top, rename it, delete a group
+  channel or conversation, clear an agent conversation's history, or compact and
+  clear a user-created conversation's context. Deleting a channel or
+  conversation deletes its messages (and, for a conversation, its context);
+  tasks keep their history but are no longer linked to that channel. Clearing an
+  agent conversation keeps the agent and removes only its messages. Agent
   conversations cannot be deleted from the channel list.
-- **Search** — the field above the sidebar list filters agents, channels, and
-  tasks by name.
+- **Search** — the field above the sidebar list filters agents, conversations,
+  channels, and tasks by name.
 - **Rich answers** — agent and user messages render Markdown: headings, lists,
   tables, code blocks, and links. Links open in your system browser. A fenced
   `html` code block appears as an **HTML preview** card with **Preview**,
@@ -196,6 +205,39 @@ Progress refreshes from live events; all history persists across restarts.
 > falls back to the offline mock model, which only echoes the prompt; with a
 > provider that cannot answer, the channel shows a system notice with the error
 > instead of staying silent.
+
+### Conversation context
+
+A user-created conversation keeps an independent, append-only context for its
+agent. The visible timeline and the model context are separate: clearing or
+compacting the context never deletes messages.
+
+- The **context ring** in the header shows how much of the model's usable
+  context window is occupied. Hover it for percent used and left, the token
+  ratio, and a breakdown into system prompt, tool schemas, history, and the
+  latest message. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is
+  a danger colour, and 100% blocks sending.
+- Percentages need a context window. Set **Context window** (and optionally
+  **Max output**) for the model in **Settings → Models**. Without it the ring
+  shows absolute tokens only.
+- **Cache hit rate** for the last turn and the whole conversation comes from
+  the usage the provider reports. Providers without prompt caching show no
+  cached tokens.
+- **Compact now** summarizes older context entries into one summary and stops
+  sending the summarized entries; recent turns stay verbatim. A system notice in
+  the timeline reports the token change, and the original messages remain
+  visible.
+- **Compact automatically** is off by default. When enabled, CowBot compacts
+  before a send if the next message would cross the configured percentage
+  (80% by default) of the usable window.
+- **Clear context** stops sending every earlier message but keeps them in the
+  timeline. **Delete conversation** removes the conversation, its messages, and
+  its context. At 100% the composer is blocked and offers compact, clear, and
+  new-conversation actions.
+- The fixed model is recorded when the conversation is created; changing the
+  active provider in Settings does not switch existing conversations. A
+  conversation whose provider was deleted falls back to the active provider
+  with its recorded model name.
 
 ### Approval policies
 
@@ -347,7 +389,12 @@ reporting, see [SECURITY.md](../SECURITY.md).
   instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
-- No streaming responses, retries, rate limiting, or token accounting.
+- User-created conversations are single-agent in this release; group
+  conversations and mention routing arrive in a later milestone.
+- No streaming responses, retries, or rate limiting. Token usage is recorded per
+  model call, but there are no cost or billing views.
+- Context occupancy and compaction are estimated from a character heuristic
+  between calls; provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
 - Workspace deletion and renaming are not available in the UI.
 - Builds are unsigned; macOS may require approval again after an update.

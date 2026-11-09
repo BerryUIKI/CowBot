@@ -54,3 +54,14 @@ export function formatDayLabel(value: string): string {
   if (dayKey(value) === dayKey(yesterday.toISOString())) return "Yesterday";
   return fullDayFormatter.format(date);
 }
+
+/** Compact token count: 987, 12.3k, 1.2M. */
+export function formatTokens(tokens: number): string {
+  if (tokens < 1_000) return `${Math.round(tokens)}`;
+  if (tokens < 1_000_000) {
+    const value = tokens / 1_000;
+    return `${value >= 100 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  const value = tokens / 1_000_000;
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, "")}M`;
+}
