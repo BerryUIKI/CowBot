@@ -12,6 +12,7 @@ use crate::types::{
 };
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::usage::TokenUsage;
 use serde_json::{json, Value};
 use tracing::{debug, error};
 
@@ -164,6 +165,7 @@ fn request_body(request: &ChatCompletionRequest) -> Value {
 }
 
 fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
+    let raw_usage = value.get("usage").cloned();
     let blocks = value
         .get("content")
         .and_then(Value::as_array)
@@ -215,6 +217,36 @@ fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
         content,
         tool_calls,
         finish_reason,
+        usage: raw_usage.as_ref().and_then(parse_usage),
+        raw_usage,
+    })
+}
+
+fn token_field(value: &Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
+}
+
+/// Anthropic input tokens exclude cached tokens, so the three fields are
+/// additive without subtraction.
+fn parse_usage(raw: &Value) -> Option<TokenUsage> {
+    let input = token_field(raw, "input_tokens");
+    let output = token_field(raw, "output_tokens");
+    let cached = token_field(raw, "cache_read_input_tokens");
+    let cache_write = token_field(raw, "cache_creation_input_tokens");
+
+    if input.is_none() && output.is_none() && cached.is_none() && cache_write.is_none() {
+        return None;
+    }
+
+    Some(TokenUsage {
+        uncached_input_tokens: input.unwrap_or(0),
+        cached_input_tokens: cached.unwrap_or(0),
+        cache_write_input_tokens: cache_write.unwrap_or(0),
+        output_tokens: output.unwrap_or(0),
+        reasoning_tokens: 0,
     })
 }
 
@@ -455,6 +487,31 @@ mod tests {
         assert_eq!(response.tool_calls[0].name, "run");
         assert_eq!(response.tool_calls[0].arguments, json!({"cmd": "ls"}));
         assert_eq!(response.finish_reason.as_deref(), Some("tool_use"));
+    }
+
+    #[test]
+    fn parses_usage_with_cache_accounting() {
+        let usage_json = json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 300,
+            "cache_creation_input_tokens": 50
+        });
+        let payload = json!({
+            "content": [{"type": "text", "text": "Hello."}],
+            "stop_reason": "end_turn",
+            "usage": usage_json
+        });
+
+        let response = parse_response(payload).unwrap();
+        let usage = response.usage.expect("usage should parse");
+
+        assert_eq!(usage.uncached_input_tokens, 100);
+        assert_eq!(usage.cached_input_tokens, 300);
+        assert_eq!(usage.cache_write_input_tokens, 50);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 0);
+        assert_eq!(response.raw_usage, Some(usage_json));
     }
 
     #[test]

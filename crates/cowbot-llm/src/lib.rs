@@ -7,6 +7,7 @@ pub mod responses;
 pub mod types;
 
 pub use anthropic::AnthropicProvider;
+pub use cowbot_core::usage::TokenUsage;
 pub use mock::MockLlmProvider;
 pub use openai::OpenAiCompatibleProvider;
 pub use provider::LlmProvider;
