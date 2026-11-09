@@ -1,11 +1,15 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::{Approval, ApprovalLevel, ApprovalStatus};
 use cowbot_core::assignment::{
     Assignment, AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
 };
+use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::{Workspace, WorkspaceId};
 use cowbot_core::risk::RiskLevel;
 use cowbot_core::task::Task;
@@ -13,6 +17,7 @@ use cowbot_core::tool::ToolAuthorization;
 use cowbot_core::tool::ToolCall;
 use cowbot_service::{
     bootstrap_local, decision_for, decision_for_call, ApprovalDecision, ApprovalService,
+    PermissionDecision, PermissionDecisionKind, PermissionEvaluator, PermissionRequest,
 };
 use cowbot_store::Store;
 use serde_json::json;
@@ -146,6 +151,165 @@ fn policy_decisions_are_distinct_per_mode() {
         decision_for(ApprovalLevel::Trusted, RiskLevel::Critical),
         ApprovalDecision::Deny
     );
+}
+
+#[tokio::test]
+async fn model_allow_auto_approves_a_mutating_call() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service.with_evaluator(Some(Arc::new(ScriptedEvaluator {
+        decision: PermissionDecisionKind::Allow,
+        calls: calls.clone(),
+    })));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        authorization,
+        ToolAuthorization::Approved { approved_by: None }
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let events = store.list_audit_events(&workspace_id, 20).await.unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.action == "tool.model_decision"));
+}
+
+#[tokio::test]
+async fn model_deny_denies_the_call() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let service = service.with_evaluator(Some(Arc::new(ScriptedEvaluator {
+        decision: PermissionDecisionKind::Deny,
+        calls: Arc::new(AtomicUsize::new(0)),
+    })));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    let ToolAuthorization::Denied { reason } = authorization else {
+        unreachable!()
+    };
+    assert!(reason.contains("model denied"));
+}
+
+#[tokio::test]
+async fn critical_calls_skip_the_evaluator() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service.with_evaluator(Some(Arc::new(ScriptedEvaluator {
+        decision: PermissionDecisionKind::Allow,
+        calls: calls.clone(),
+    })));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call("execute_code", json!({"command": "rm -rf /"})),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn evaluator_failure_falls_back_to_human_approval() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_millis(20)).await;
+    let service = service.with_evaluator(Some(Arc::new(FailingEvaluator)));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    let events = store.list_audit_events(&workspace_id, 20).await.unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.action == "tool.model_fallback"));
+}
+
+#[tokio::test]
+async fn delete_channel_never_uses_the_model() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_millis(20)).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service.with_evaluator(Some(Arc::new(ScriptedEvaluator {
+        decision: PermissionDecisionKind::Allow,
+        calls: calls.clone(),
+    })));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call("delete_channel", json!({"channel": "ops"})),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+struct ScriptedEvaluator {
+    decision: PermissionDecisionKind,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl PermissionEvaluator for ScriptedEvaluator {
+    async fn evaluate(&self, _request: &PermissionRequest) -> CowResult<PermissionDecision> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(PermissionDecision {
+            decision: self.decision,
+            reason: "scripted".to_string(),
+            confidence: 0.95,
+            model: "scripted-model".to_string(),
+        })
+    }
+}
+
+struct FailingEvaluator;
+
+#[async_trait]
+impl PermissionEvaluator for FailingEvaluator {
+    async fn evaluate(&self, _request: &PermissionRequest) -> CowResult<PermissionDecision> {
+        Err(CowError::Task("evaluator unavailable".to_string()))
+    }
 }
 
 #[tokio::test]

@@ -426,6 +426,7 @@ async fn reply_to_mentions(
     tools.register(Arc::new(ReadFileTool::new(None)));
     tools.register(Arc::new(WriteFileTool::new(None)));
 
+    let use_model_permissions = !dry_run && (api_key.is_some() || settings.base_url.is_some());
     let llm: Arc<dyn LlmProvider> = if dry_run || (api_key.is_none() && settings.base_url.is_none())
     {
         println!("Note: replying with the offline MockLlmProvider.");
@@ -448,6 +449,7 @@ async fn reply_to_mentions(
             ChannelTurnOptions {
                 approval_level: settings.approval.into(),
                 max_concurrency: settings.concurrency,
+                use_model_permissions,
             },
         )
         .await?;
@@ -621,6 +623,7 @@ async fn run_crew(
     tools.register(Arc::new(WriteFileTool::new(None)));
 
     // Initialize LLM Provider
+    let use_model_permissions = !dry_run && (api_key.is_some() || settings.base_url.is_some());
     let llm: Arc<dyn LlmProvider> = if dry_run || (api_key.is_none() && settings.base_url.is_none())
     {
         println!("Note: Running in dry-run mode using MockLlmProvider.");
@@ -696,6 +699,7 @@ async fn run_crew(
                 approval_level: settings.approval.into(),
                 channel_id,
                 max_concurrency: settings.concurrency,
+                use_model_permissions,
             },
         )
         .await?;

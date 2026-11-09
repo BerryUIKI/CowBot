@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -15,6 +16,10 @@ use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
 use cowbot_store::Store;
 use cowbot_tools::{RiskAssessment, StaticRiskClassifier};
 use tokio::time::{sleep, Instant};
+
+use crate::permissions::{
+    PermissionDecision, PermissionDecisionKind, PermissionEvaluator, PermissionRequest,
+};
 
 /// Policy outcome before a tool call executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +88,7 @@ pub struct ApprovalService {
     bus: EventBus,
     workspace_id: WorkspaceId,
     timeout: Duration,
+    evaluator: Option<Arc<dyn PermissionEvaluator>>,
 }
 
 impl ApprovalService {
@@ -92,11 +98,17 @@ impl ApprovalService {
             bus,
             workspace_id,
             timeout: Duration::from_secs(300),
+            evaluator: None,
         }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    pub fn with_evaluator(mut self, evaluator: Option<Arc<dyn PermissionEvaluator>>) -> Self {
+        self.evaluator = evaluator;
         self
     }
 
@@ -112,13 +124,68 @@ impl ApprovalService {
             .await?
             .ok_or_else(|| CowError::Task(format!("assignment '{assignment_id}' was not found")))?;
         let assessment = StaticRiskClassifier.classify(call);
-
-        match decision_for_call(
+        let base = decision_for_call(
             assignment.approval_level,
             assessment.level,
             &call.name,
             &assessment.rule_id,
-        ) {
+        );
+
+        let model_decision = if base == ApprovalDecision::RequireApproval
+            && assignment.approval_level == ApprovalLevel::SafeAuto
+            && assessment.level != RiskLevel::Critical
+            && call.name != "delete_channel"
+        {
+            if let Some(evaluator) = &self.evaluator {
+                let profile = self.store.get_agent(agent_id).await?;
+                let recent = self
+                    .recent_tool_calls(&assignment.task_id)
+                    .await
+                    .unwrap_or_default();
+                let request = PermissionRequest {
+                    agent_id: agent_id.clone(),
+                    agent_role: profile
+                        .as_ref()
+                        .map(|profile| profile.role.clone())
+                        .unwrap_or_default(),
+                    agent_goal: profile
+                        .as_ref()
+                        .map(|profile| profile.goal.clone())
+                        .unwrap_or_default(),
+                    tool_name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    risk: assessment.level,
+                    risk_reason: assessment.reason.clone(),
+                    approval_level: assignment.approval_level,
+                    recent_tool_calls: recent,
+                };
+                match evaluator.evaluate(&request).await {
+                    Ok(decision) => {
+                        self.record_model_decision(&agent_id.0, call, &decision)
+                            .await?;
+                        Some(decision)
+                    }
+                    Err(error) => {
+                        self.record_model_fallback(&agent_id.0, call, &error.to_string())
+                            .await?;
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let decision = match model_decision.as_ref().map(|decision| decision.decision) {
+            Some(PermissionDecisionKind::Allow) => ApprovalDecision::AutoApprove,
+            Some(PermissionDecisionKind::Deny) => ApprovalDecision::Deny,
+            Some(PermissionDecisionKind::Ask) => ApprovalDecision::RequireApproval,
+            None => base,
+        };
+
+        match decision {
             ApprovalDecision::AutoApprove => {
                 self.record_audit(&agent_id.0, "tool.auto_approved", call, &assessment)
                     .await?;
@@ -127,22 +194,35 @@ impl ApprovalService {
             ApprovalDecision::Deny => {
                 self.record_audit(&agent_id.0, "tool.denied", call, &assessment)
                     .await?;
-                Ok(ToolAuthorization::Denied {
-                    reason: format!(
-                        "approval policy denied {} risk operation: {}",
-                        assessment.level.as_str(),
-                        assessment.reason
-                    ),
-                })
+                let reason = model_decision
+                    .as_ref()
+                    .map(|decision| format!("model denied the tool call: {}", decision.reason))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "approval policy denied {} risk operation: {}",
+                            assessment.level.as_str(),
+                            assessment.reason
+                        )
+                    });
+                Ok(ToolAuthorization::Denied { reason })
             }
             ApprovalDecision::RequireApproval => {
                 let approval = Approval::new(assignment.task_id.clone(), call.id.clone());
                 self.store.create_approval(&approval).await?;
+                let reason = model_decision
+                    .as_ref()
+                    .map(|decision| {
+                        format!(
+                            "{} (model: {} confidence {:.2})",
+                            decision.reason, decision.model, decision.confidence
+                        )
+                    })
+                    .unwrap_or_else(|| assessment.reason.clone());
                 self.bus
                     .publish(Event::new(EventPayload::ApprovalRequested {
                         approval: approval.clone(),
                         risk: assessment.level,
-                        reason: assessment.reason.clone(),
+                        reason,
                     }));
                 self.record_audit(&agent_id.0, "tool.approval_requested", call, &assessment)
                     .await?;
@@ -309,6 +389,63 @@ impl ApprovalService {
                 _ => Err(error),
             },
         }
+    }
+
+    async fn recent_tool_calls(&self, task_id: &TaskId) -> CowResult<Vec<String>> {
+        let runs = self.store.list_runs(task_id).await?;
+        let Some(run) = runs.last() else {
+            return Ok(Vec::new());
+        };
+        let calls = self.store.list_tool_calls(&run.id).await?;
+        Ok(calls
+            .iter()
+            .rev()
+            .take(5)
+            .map(|call| format!("{} {}", call.name, call.arguments))
+            .collect())
+    }
+
+    async fn record_model_decision(
+        &self,
+        actor: &str,
+        call: &ToolCall,
+        decision: &PermissionDecision,
+    ) -> CowResult<()> {
+        self.store
+            .append_audit_event(&AuditEvent::new(
+                self.workspace_id.clone(),
+                actor,
+                "tool.model_decision",
+                format!(
+                    "{} ({}) model={} decision={:?} confidence={:.2} reason={}",
+                    call.name,
+                    call.id,
+                    decision.model,
+                    decision.decision,
+                    decision.confidence,
+                    decision.reason
+                ),
+            ))
+            .await
+    }
+
+    async fn record_model_fallback(
+        &self,
+        actor: &str,
+        call: &ToolCall,
+        error: &str,
+    ) -> CowResult<()> {
+        self.store
+            .append_audit_event(&AuditEvent::new(
+                self.workspace_id.clone(),
+                actor,
+                "tool.model_fallback",
+                format!(
+                    "{} ({}) fell back to human approval: {error}",
+                    call.name, call.id
+                ),
+            ))
+            .await
     }
 
     async fn record_audit(

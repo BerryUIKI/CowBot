@@ -26,6 +26,7 @@ use tokio::task::JoinSet;
 
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
+use crate::permissions::ModelPermissionEvaluator;
 
 /// A conversation turn whose model request is assembled before the assignment
 /// is enqueued. The per-agent context branch receives the assistant and tool
@@ -46,6 +47,8 @@ pub struct CrewRunOptions {
     pub channel_id: Option<ChannelId>,
     /// Maximum number of assignments that may execute at the same time.
     pub max_concurrency: usize,
+    /// Let Auto mode ask the active model for permission decisions.
+    pub use_model_permissions: bool,
 }
 
 impl Default for CrewRunOptions {
@@ -54,6 +57,7 @@ impl Default for CrewRunOptions {
             approval_level: ApprovalLevel::Ask,
             channel_id: None,
             max_concurrency: 4,
+            use_model_permissions: false,
         }
     }
 }
@@ -156,6 +160,8 @@ pub struct AssignmentScheduler {
     max_concurrency: usize,
     /// When set, only assignments rooted in a task enqueued here are claimed.
     scope: Option<Arc<StdMutex<HashSet<AssignmentId>>>>,
+    /// Ask the active model for Auto-mode permission decisions.
+    use_model_permissions: bool,
     /// Model requests prepared for conversation turns, keyed by task id.
     prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
 }
@@ -187,8 +193,15 @@ impl AssignmentScheduler {
             executions: HashMap::new(),
             max_concurrency,
             scope: None,
+            use_model_permissions: false,
             prepared: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    /// Enable model-decided Auto mode for assignments run by this scheduler.
+    pub fn with_model_permissions(mut self, enabled: bool) -> Self {
+        self.use_model_permissions = enabled;
+        self
     }
 
     /// Limit this scheduler to the roots enqueued through it.
@@ -551,7 +564,13 @@ impl AssignmentScheduler {
         self.assignments.store().create_run(&run).await?;
 
         let gate = Arc::new(ScopedApprovalGate::new(
-            self.approvals.clone(),
+            if self.use_model_permissions {
+                self.approvals.clone().with_evaluator(Some(Arc::new(
+                    ModelPermissionEvaluator::new(executor.llm.clone(), executor.model.clone()),
+                )))
+            } else {
+                self.approvals.clone()
+            },
             assignment.id.clone(),
         ));
         let recorder = Arc::new(RunToolCallRecorder {

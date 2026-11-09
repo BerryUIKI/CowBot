@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 pub struct ModelRuntime {
     pub llm: Arc<dyn LlmProvider>,
     pub model: String,
+    pub remote: bool,
 }
 
 /// Shared state for Tauri commands.
@@ -44,13 +45,20 @@ impl AppState {
         (runtime.llm.clone(), runtime.model.clone())
     }
 
+    /// Whether the active model is a real remote provider.
+    pub fn uses_remote_model(&self) -> bool {
+        self.model.read().remote
+    }
+
     /// Rebuild the LLM client after the provider configuration changed.
     pub fn apply_config(&self, config: &config::AppConfig) {
         let resolved = config::resolve_active(config);
         let llm = config::build_provider(&resolved);
+        let remote = matches!(resolved.kind, config::ProviderKind::Remote(_));
         let mut runtime = self.model.write();
         runtime.model = resolved.model;
         runtime.llm = llm;
+        runtime.remote = remote;
     }
 
     fn build_tools(workspace_dir: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
@@ -171,6 +179,7 @@ pub fn run() {
                 model: RwLock::new(ModelRuntime {
                     llm: config::build_provider(&resolved),
                     model: resolved.model,
+                    remote: matches!(resolved.kind, config::ProviderKind::Remote(_)),
                 }),
                 config_path,
                 data_dir,

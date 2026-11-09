@@ -11,6 +11,7 @@ mod channel_agents;
 mod channels;
 mod conversations;
 mod crew_runner;
+mod permissions;
 mod scheduler;
 mod task_service;
 mod templates;
@@ -25,6 +26,10 @@ pub use channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnRep
 pub use channels::ChannelService;
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
+pub use permissions::{
+    ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
+    PermissionRequest,
+};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use task_service::TaskService;
 pub use templates::{builtin_templates, TemplateService};

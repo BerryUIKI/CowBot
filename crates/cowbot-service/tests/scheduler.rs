@@ -34,6 +34,7 @@ fn options(max_concurrency: usize) -> CrewRunOptions {
         approval_level: ApprovalLevel::Ask,
         channel_id: None,
         max_concurrency,
+        use_model_permissions: false,
     }
 }
 

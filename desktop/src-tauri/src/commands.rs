@@ -232,6 +232,7 @@ pub async fn post_message(
     let posted = message.clone();
     let reply_id = message.id.clone();
     let running = state.replies.clone();
+    let use_model_permissions = state.uses_remote_model();
     if !running.lock().insert(reply_id.clone()) {
         return Ok(message);
     }
@@ -247,6 +248,7 @@ pub async fn post_message(
                 ChannelTurnOptions {
                     approval_level,
                     max_concurrency: 4,
+                    use_model_permissions,
                 },
             )
             .await;
@@ -373,11 +375,21 @@ pub async fn run_task(
     let (llm, model) = state.runtime_model();
     let tools = state.tools.clone();
     let run_id = task_id.clone();
+    let use_model_permissions = state.uses_remote_model();
 
     tauri::async_runtime::spawn(async move {
         let outcome = async {
             let mut crew = build_standard_crew(&task.description, &llm, &tools, &model);
-            client.run_crew(&mut crew, approval_level).await
+            client
+                .run_crew_with_options(
+                    &mut crew,
+                    cowbot_service::CrewRunOptions {
+                        approval_level,
+                        use_model_permissions,
+                        ..cowbot_service::CrewRunOptions::default()
+                    },
+                )
+                .await
         }
         .await;
 
