@@ -66,8 +66,8 @@ CowBot fills exactly this gap: **a self-hosted, channel-native multi-agent team 
 
 CowBot's core differentiation is not "a stronger single agent", but **putting multiple agents and humans in the same collaboration space**:
 
-- Channels and threads are the primary interface; humans and agents are both channel members.
-- Agents are addressed via @mention in a channel and answer in that channel; proactive task claiming by role is not implemented in 0.1.x.
+- Channels and threads are the primary interface; humans and agents are both channel members. Every agent also has a direct conversation where messages reach it without a mention; group channels keep mention-based addressing (ADR-0024).
+- Agents are addressed via @mention in a group channel and answer in that channel; in an agent's direct conversation every message is addressed to that agent. Proactive task claiming by role is not implemented in 0.1.x.
 - Tasks, reasoning, tool calls, approvals, and deliverables all live in the channel timeline, traceable and auditable.
 - Humans can step in at any time to correct, approve, or take over.
 - Collaboration context is shared within the channel instead of being scattered across separate sessions.
