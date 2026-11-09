@@ -14,11 +14,11 @@ use crate::store::Store;
 #[derive(sqlx::FromRow)]
 struct TaskRow {
     id: String,
+    channel_id: Option<String>,
     title: String,
     description: String,
     expected_output: String,
     assigned_agent: Option<String>,
-    channel_id: Option<String>,
     context_tasks: String,
     status: String,
     archived_at: Option<String>,
@@ -175,7 +175,11 @@ impl Store {
         )
         .bind(&task.id.0)
         .bind(&workspace_id.0)
-        .bind(channel_id.map(|channel| channel.0.clone()))
+        .bind(
+            channel_id
+                .or(task.channel_id.as_ref())
+                .map(|channel| channel.0.clone()),
+        )
         .bind(&task.title)
         .bind(&task.description)
         .bind(&task.expected_output)
@@ -192,8 +196,8 @@ impl Store {
 
     pub async fn get_task(&self, id: &TaskId) -> CowResult<Option<Task>> {
         let row = sqlx::query_as::<_, TaskRow>(
-            "SELECT id, title, description, expected_output, assigned_agent,
-                    channel_id, context_tasks, status, archived_at FROM tasks WHERE id = ?",
+            "SELECT id, channel_id, title, description, expected_output, assigned_agent,
+                    context_tasks, status, archived_at FROM tasks WHERE id = ?",
         )
         .bind(&id.0)
         .fetch_optional(self.pool())
@@ -215,8 +219,8 @@ impl Store {
 
     pub async fn list_tasks(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
-            "SELECT id, title, description, expected_output, assigned_agent,
-                    channel_id, context_tasks, status, archived_at
+            "SELECT id, channel_id, title, description, expected_output, assigned_agent,
+                    context_tasks, status, archived_at
              FROM tasks WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(&workspace_id.0)
