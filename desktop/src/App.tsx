@@ -6,6 +6,7 @@ import type {
 } from "react";
 
 import ApprovalCards from "./ApprovalCards";
+import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -69,7 +70,7 @@ import type {
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
+import { taskStatusKind, taskStatusLabel } from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "approvals" | "settings";
@@ -95,8 +96,6 @@ type DialogState =
   | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
   | { kind: "edit-agent"; agent: AgentProfile }
   | null;
-
-const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
 
 const broadcastNames = ["team", "all", "everyone", "here"];
 
@@ -1591,23 +1590,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {agents.length > 0 ? (
-                    <label className="channel-approval">
-                      <span>Approval</span>
-                      <select
-                        value={channelApproval}
-                        onChange={(event) =>
-                          setChannelApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
                   {selectedAgent ? <span className="chat-kind">Direct</span> : null}
                 </div>
               </header>
@@ -1714,42 +1696,53 @@ export default function App() {
                   void sendMessage();
                 }}
               >
-                <button
-                  type="button"
-                  className="composer-add"
-                  title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
-                  aria-label="New task"
-                  onClick={startTaskForCurrentChannel}
-                >
-                  +
-                </button>
-                <textarea
-                  ref={composerRef}
-                  className="composer-input"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={handleComposerKeyDown}
-                  placeholder={`Message ${composerTarget}`}
-                  aria-label={`Message ${composerTarget}`}
-                  rows={1}
-                />
-                <button
-                  type="submit"
-                  className="composer-send"
-                  disabled={!draft.trim() || sending}
-                  aria-label="Send message"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    aria-hidden="true"
+                <div className="composer-main">
+                  <button
+                    type="button"
+                    className="composer-add"
+                    title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
+                    aria-label="New task"
+                    onClick={startTaskForCurrentChannel}
                   >
-                    <path d="M12 19V5" />
-                    <path d="m6 11 6-6 6 6" />
-                  </svg>
-                </button>
+                    +
+                  </button>
+                  <textarea
+                    ref={composerRef}
+                    className="composer-input"
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={handleComposerKeyDown}
+                    placeholder={`Message ${composerTarget}`}
+                    aria-label={`Message ${composerTarget}`}
+                    rows={1}
+                  />
+                  <button
+                    type="submit"
+                    className="composer-send"
+                    disabled={!draft.trim() || sending}
+                    aria-label="Send message"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 19V5" />
+                      <path d="m6 11 6-6 6 6" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="composer-footer">
+                  <span className="composer-footer-spacer" />
+                  {agents.length > 0 ? (
+                    <ApprovalModeMenu
+                      value={channelApproval}
+                      onChange={setChannelApproval}
+                    />
+                  ) : null}
+                </div>
               </form>
             </>
           ) : (
@@ -1849,21 +1842,13 @@ export default function App() {
                         ))}
                       </select>
                     </label>
-                    <label className="field">
+                    <div className="field">
                       <span>Approval</span>
-                      <select
+                      <ApprovalModeMenu
                         value={taskApproval}
-                        onChange={(event) =>
-                          setTaskApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={setTaskApproval}
+                      />
+                    </div>
                   </div>
                   <div className="form-actions">
                     <button
