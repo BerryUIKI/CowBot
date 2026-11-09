@@ -214,13 +214,15 @@ impl ConversationService {
             self.workspace_id.clone(),
             options.max_concurrency,
         )
-        .with_scope();
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions);
         scheduler.register_agent(agent.clone(), llm, tools, settings.model.clone());
 
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
             max_concurrency: options.max_concurrency,
+            use_model_permissions: options.use_model_permissions,
         };
         scheduler
             .enqueue_conversation_turn(

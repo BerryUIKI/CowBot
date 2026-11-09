@@ -110,6 +110,7 @@ fn options() -> ChannelTurnOptions {
     ChannelTurnOptions {
         approval_level: ApprovalLevel::Trusted,
         max_concurrency: 2,
+        use_model_permissions: false,
     }
 }
 
