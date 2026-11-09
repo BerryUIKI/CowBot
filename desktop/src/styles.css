@@ -1387,8 +1387,9 @@ button {
 
 .composer-bar {
   display: flex;
-  align-items: flex-end;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   width: calc(100% - 60px);
   max-width: 760px;
   margin: 0 auto 20px;
@@ -1397,6 +1398,42 @@ button {
   border-radius: 24px;
   background: var(--ink-raised);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.composer-main {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 6px 2px;
+}
+
+.composer-footer-spacer {
+  flex: 1;
+}
+
+.composer-model {
+  max-width: 220px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--paper-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
 }
 
 .composer-input {
@@ -2123,6 +2160,11 @@ button {
   margin-bottom: 32px;
 }
 
+.settings-profile-form {
+  max-width: 620px;
+  margin-top: 18px;
+}
+
 .settings-section-head h3 {
   margin: 0;
   font-family: var(--serif);
@@ -2396,6 +2438,121 @@ button {
 
 .model-status.is-error {
   color: var(--danger);
+}
+
+.provider-model-list {
+  margin-top: 8px;
+}
+
+.provider-model-list summary {
+  cursor: pointer;
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.provider-model-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-model-list button {
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 12px;
+  text-align: left;
+}
+
+.provider-model-list button:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.provider-model-list button.is-active {
+  background: var(--brass-soft);
+  color: var(--paper);
+}
+
+.known-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.known-model-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--paper-dim);
+  font-size: 12px;
+}
+
+.known-model-list li.is-active {
+  background: var(--brass-soft);
+  color: var(--paper);
+}
+
+.model-catalogue-toggle {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 12px;
+}
+
+.model-catalogue-toggle:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.model-catalogue-panel {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+.model-catalogue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.model-catalogue-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--paper-dim);
+  font-size: 12px;
+}
+
+.model-catalogue-list label:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
 }
 
 .settings-checkbox {

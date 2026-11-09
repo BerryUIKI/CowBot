@@ -40,6 +40,7 @@ import {
   listTasks,
   listTemplates,
   listToolCalls,
+  getModelSettings,
   onCowbotEvent,
   onChannelReply,
   onRunFinished,
@@ -47,6 +48,7 @@ import {
   postMessage,
   renameChannel,
   runTask,
+  setActiveModel,
   setChannelPinned,
   unarchiveTask,
   updateAgent,
@@ -62,6 +64,7 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  ModelSettings,
   OnboardingState,
   Task,
   TemplateDocument,
@@ -258,6 +261,8 @@ export default function App() {
   const [availableTools, setAvailableTools] = useState<ToolDefinition[]>([]);
   const [toolCallDetails, setToolCallDetails] = useState<Record<string, ToolCallDetail>>({});
   const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
+  const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
+  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -452,6 +457,21 @@ export default function App() {
       )
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  useEffect(() => {
+    if (view !== "chat") return;
+    let cancelled = false;
+    getModelSettings()
+      .then((settings) => {
+        if (!cancelled) setModelSettings(settings);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   useEffect(() => {
     let cancelled = false;
@@ -786,6 +806,28 @@ export default function App() {
       setError(errorMessage(err));
     } finally {
       setBusy(null);
+    }
+  }
+
+  function openModelMenu(event: ReactMouseEvent<HTMLButtonElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const modelCount =
+      modelSettings?.providers.find((provider) => provider.active)?.models
+        .length ?? 1;
+    setModelMenu({
+      x: rect.left,
+      y: Math.max(8, rect.top - 12 - (modelCount + 1) * 34),
+    });
+  }
+
+  async function handleComposerModel(model: string) {
+    const provider = modelSettings?.providers.find((candidate) => candidate.active);
+    if (!provider) return;
+    setError(null);
+    try {
+      setModelSettings(await setActiveModel(provider.id, model));
+    } catch (err) {
+      setError(errorMessage(err));
     }
   }
 
@@ -1143,6 +1185,33 @@ export default function App() {
           },
         ];
   })();
+
+  const activeModelProvider =
+    modelSettings?.providers.find((provider) => provider.active) ?? null;
+  const activeModelLabel = activeModelProvider?.model ?? "Mock model";
+  const modelMenuItems: ContextMenuItem[] = modelMenu
+    ? [
+        ...(activeModelProvider
+          ? activeModelProvider.models.map((model) => ({
+              label: `${model === activeModelProvider.model ? "✓ " : ""}${model}`,
+              onSelect: () => void handleComposerModel(model),
+            }))
+          : [
+              {
+                label: "Mock model (offline)",
+                onSelect: () => undefined,
+              },
+            ]),
+        {
+          label: "Manage models…",
+          onSelect: () => {
+            setModelMenu(null);
+            setSettingsSection("model");
+            setView("settings");
+          },
+        },
+      ]
+    : [];
 
   return (
     <div className="app">
@@ -1714,42 +1783,61 @@ export default function App() {
                   void sendMessage();
                 }}
               >
-                <button
-                  type="button"
-                  className="composer-add"
-                  title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
-                  aria-label="New task"
-                  onClick={startTaskForCurrentChannel}
-                >
-                  +
-                </button>
-                <textarea
-                  ref={composerRef}
-                  className="composer-input"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={handleComposerKeyDown}
-                  placeholder={`Message ${composerTarget}`}
-                  aria-label={`Message ${composerTarget}`}
-                  rows={1}
-                />
-                <button
-                  type="submit"
-                  className="composer-send"
-                  disabled={!draft.trim() || sending}
-                  aria-label="Send message"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    aria-hidden="true"
+                <div className="composer-main">
+                  <button
+                    type="button"
+                    className="composer-add"
+                    title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
+                    aria-label="New task"
+                    onClick={startTaskForCurrentChannel}
                   >
-                    <path d="M12 19V5" />
-                    <path d="m6 11 6-6 6 6" />
-                  </svg>
-                </button>
+                    +
+                  </button>
+                  <textarea
+                    ref={composerRef}
+                    className="composer-input"
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={handleComposerKeyDown}
+                    placeholder={`Message ${composerTarget}`}
+                    aria-label={`Message ${composerTarget}`}
+                    rows={1}
+                  />
+                  <button
+                    type="submit"
+                    className="composer-send"
+                    disabled={!draft.trim() || sending}
+                    aria-label="Send message"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 19V5" />
+                      <path d="m6 11 6-6 6 6" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="composer-footer">
+                  <span className="composer-footer-spacer" />
+                  <button
+                    type="button"
+                    className="composer-model"
+                    aria-haspopup="menu"
+                    aria-expanded={modelMenu !== null}
+                    title={
+                      activeModelProvider
+                        ? `${activeModelProvider.name} · ${activeModelProvider.model}`
+                        : "Offline mock model"
+                    }
+                    onClick={openModelMenu}
+                  >
+                    {activeModelLabel}
+                  </button>
+                </div>
               </form>
             </>
           ) : (
@@ -1932,6 +2020,7 @@ export default function App() {
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
             onEditAgent={handleEditAgent}
+            onSessionChange={setSession}
           />
         )}
       </main>
@@ -1951,6 +2040,15 @@ export default function App() {
           y={menu.y}
           items={menuItems}
           onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {modelMenu ? (
+        <ContextMenu
+          x={modelMenu.x}
+          y={modelMenu.y}
+          items={modelMenuItems}
+          onClose={() => setModelMenu(null)}
         />
       ) : null}
 
