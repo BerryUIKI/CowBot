@@ -305,14 +305,16 @@ async fn compaction_summarizes_old_entries_and_keeps_recent_ones() {
 async fn clearing_context_excludes_entries_without_deleting_messages() {
     let (store, agent, service, channels, channel) = setup().await;
     let llm = Arc::new(RecordingLlm::new());
-    service
-        .reply(
+    let message = channels
+        .post_message(
             &channel.id,
-            &user_message(&channel, "remember this"),
-            llm,
-            ToolRegistry::new(),
-            &options(),
+            Sender::User("user-1".to_string()),
+            "remember this",
         )
+        .await
+        .unwrap();
+    service
+        .reply(&channel.id, &message, llm, ToolRegistry::new(), &options())
         .await
         .unwrap();
 
