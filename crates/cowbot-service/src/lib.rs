@@ -10,6 +10,7 @@ mod bootstrap;
 mod channel_agents;
 mod channels;
 mod crew_runner;
+mod permissions;
 mod scheduler;
 mod task_service;
 mod templates;
@@ -17,6 +18,10 @@ mod templates;
 pub use agents::{AgentService, AgentUpdate};
 pub use approvals::{
     decision_for, decision_for_call, ApprovalDecision, ApprovalService, ScopedApprovalGate,
+};
+pub use permissions::{
+    ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
+    PermissionRequest,
 };
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};

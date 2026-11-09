@@ -27,6 +27,8 @@ pub struct ChannelTurnOptions {
     pub approval_level: ApprovalLevel,
     /// Maximum number of agents that may run at the same time.
     pub max_concurrency: usize,
+    /// Let Auto mode ask the active model for permission decisions.
+    pub use_model_permissions: bool,
 }
 
 impl Default for ChannelTurnOptions {
@@ -34,6 +36,7 @@ impl Default for ChannelTurnOptions {
         Self {
             approval_level: ApprovalLevel::Ask,
             max_concurrency: 4,
+            use_model_permissions: false,
         }
     }
 }
@@ -182,11 +185,13 @@ impl ChannelAgentService {
             self.workspace_id.clone(),
             options.max_concurrency,
         )
-        .with_scope();
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions);
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
             max_concurrency: options.max_concurrency,
+            use_model_permissions: options.use_model_permissions,
         };
 
         // History excludes this turn's own notices, so an "@Nobody" notice

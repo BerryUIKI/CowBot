@@ -65,7 +65,8 @@ impl CrewRunner {
             self.assignments.bus().clone(),
             workspace_id.clone(),
             options.max_concurrency,
-        );
+        )
+        .with_model_permissions(options.use_model_permissions);
         for agent in crew.agents.values() {
             scheduler.register_instance(agent);
         }
