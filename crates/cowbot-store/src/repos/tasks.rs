@@ -18,6 +18,7 @@ struct TaskRow {
     description: String,
     expected_output: String,
     assigned_agent: Option<String>,
+    channel_id: Option<String>,
     context_tasks: String,
     status: String,
     archived_at: Option<String>,
@@ -31,6 +32,7 @@ impl TaskRow {
             description: self.description,
             expected_output: self.expected_output,
             assigned_agent: self.assigned_agent.map(AgentId),
+            channel_id: self.channel_id.map(ChannelId::new),
             context_tasks: parse_json(&self.context_tasks, "tasks.context_tasks")?,
             status: parse_json(&self.status, "tasks.status")?,
             archived: self.archived_at.is_some(),
@@ -191,7 +193,7 @@ impl Store {
     pub async fn get_task(&self, id: &TaskId) -> CowResult<Option<Task>> {
         let row = sqlx::query_as::<_, TaskRow>(
             "SELECT id, title, description, expected_output, assigned_agent,
-                    context_tasks, status, archived_at FROM tasks WHERE id = ?",
+                    channel_id, context_tasks, status, archived_at FROM tasks WHERE id = ?",
         )
         .bind(&id.0)
         .fetch_optional(self.pool())
@@ -214,7 +216,7 @@ impl Store {
     pub async fn list_tasks(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
             "SELECT id, title, description, expected_output, assigned_agent,
-                    context_tasks, status, archived_at
+                    channel_id, context_tasks, status, archived_at
              FROM tasks WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(&workspace_id.0)
@@ -406,6 +408,18 @@ impl Store {
         let rows = sqlx::query_as::<_, ApprovalRow>(
             "SELECT id, task_id, tool_call_id, status, decided_by, decided_at, created_at
              FROM approvals WHERE task_id = ? AND status = 'pending' ORDER BY created_at",
+        )
+        .bind(&task_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(ApprovalRow::into_domain).collect()
+    }
+
+    pub async fn list_approvals_for_task(&self, task_id: &TaskId) -> CowResult<Vec<Approval>> {
+        let rows = sqlx::query_as::<_, ApprovalRow>(
+            "SELECT id, task_id, tool_call_id, status, decided_by, decided_at, created_at
+             FROM approvals WHERE task_id = ? ORDER BY created_at",
         )
         .bind(&task_id.0)
         .fetch_all(self.pool())
