@@ -47,6 +47,19 @@ pub async fn get_session(
 }
 
 #[tauri::command]
+pub async fn update_user_profile(
+    state: State<'_, AppState>,
+    name: String,
+    email: String,
+) -> Result<cowbot_client::ClientSession, String> {
+    state
+        .client
+        .update_user_profile(&name, &email)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
     state
         .client
@@ -648,6 +661,32 @@ pub fn save_model_provider(
 ) -> Result<ModelSettings, String> {
     let mut config = load_config(&state)?;
     upsert_provider(&mut config, &draft)?;
+
+    let config = persist_config(&state, config)?;
+    Ok(model_settings(&state, &config))
+}
+
+/// Select one of a provider's known models without resaving the provider.
+#[tauri::command]
+pub fn set_active_model(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> Result<ModelSettings, String> {
+    let mut config = load_config(&state)?;
+    let index = config
+        .providers
+        .iter()
+        .position(|provider| provider.id == provider_id)
+        .ok_or_else(|| format!("provider '{provider_id}' was not found"))?;
+    let provider = &config.providers[index];
+    if !provider.models.iter().any(|known| known == &model) {
+        return Err(format!(
+            "model '{model}' is not known for provider '{}'",
+            provider.name
+        ));
+    }
+    config.providers[index].model = model;
 
     let config = persist_config(&state, config)?;
     Ok(model_settings(&state, &config))

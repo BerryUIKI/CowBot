@@ -183,6 +183,17 @@ impl Store {
         row.map(UserRow::into_domain).transpose()
     }
 
+    pub async fn update_user(&self, id: &UserId, name: &str, email: &str) -> CowResult<()> {
+        sqlx::query("UPDATE users SET name = ?, email = ? WHERE id = ?")
+            .bind(name)
+            .bind(email)
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
     pub async fn list_users(&self) -> CowResult<Vec<User>> {
         let rows = sqlx::query_as::<_, UserRow>(
             "SELECT id, name, email, password_hash, created_at

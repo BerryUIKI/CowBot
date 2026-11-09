@@ -7,6 +7,7 @@ import {
   fetchProviderModels,
   getModelSettings,
   saveModelProvider,
+  setActiveModel,
   testModelProvider,
 } from "./api";
 import { errorMessage } from "./errors";
@@ -374,6 +375,10 @@ export default function ModelProviderSettings({
   const [modelError, setModelError] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
   const [fetchStatus, setFetchStatus] = useState<ModelFetchStatus | null>(null);
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const [modelFilter, setModelFilter] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -406,6 +411,9 @@ export default function ModelProviderSettings({
       patch.apiKey !== undefined
     ) {
       setFetchStatus(null);
+      setFetchedModels([]);
+      setSelectedModels([]);
+      setModelsOpen(false);
     }
   }
 
@@ -434,6 +442,10 @@ export default function ModelProviderSettings({
     setModelError(null);
     setModelNotice(null);
     setFetchStatus(null);
+    setFetchedModels([]);
+    setSelectedModels([]);
+    setModelsOpen(false);
+    setModelFilter("");
   }
 
   function openCatalogue() {
@@ -509,19 +521,64 @@ export default function ModelProviderSettings({
       });
       setDraft((current) => {
         if (!current) return current;
-        const merged = mergeModels(current.models, models);
+        const active = current.model.trim() ? current.model : (models[0] ?? "");
         return {
           ...current,
-          models: merged,
-          model: current.model.trim() ? current.model : (merged[0] ?? ""),
+          model: active,
+          models: mergeModels(current.models, active ? [active] : []),
         };
       });
+      setFetchedModels(models);
+      setSelectedModels(models);
+      setModelsOpen(true);
       setFetchStatus({
         ok: true,
-        message: `Fetched ${modelCountLabel(models.length)} from the endpoint.`,
+        message: `Fetched ${modelCountLabel(models.length)} from the endpoint. Select models to add.`,
       });
     } catch (error) {
       setFetchStatus({ ok: false, message: errorMessage(error) });
+    } finally {
+      setModelBusy(null);
+    }
+  }
+
+  function toggleFetchedModel(model: string) {
+    setSelectedModels((current) =>
+      current.includes(model)
+        ? current.filter((candidate) => candidate !== model)
+        : [...current, model],
+    );
+  }
+
+  function addSelectedModels() {
+    if (!draft) return;
+    updateDraft({
+      models: mergeModels(draft.models, selectedModels),
+      model: draft.model.trim() ? draft.model : (selectedModels[0] ?? ""),
+    });
+    setFetchStatus({
+      ok: true,
+      message: `Added ${modelCountLabel(selectedModels.length)} to this provider.`,
+    });
+  }
+
+  function removeKnownModel(model: string) {
+    if (!draft || model === draft.model) return;
+    updateDraft({
+      models: draft.models.filter((candidate) => candidate !== model),
+    });
+  }
+
+  async function handleSelectModel(provider: ModelProvider, model: string) {
+    setModelBusy(`model-${provider.id}`);
+    setModelError(null);
+    setModelNotice(null);
+    try {
+      const next = await setActiveModel(provider.id, model);
+      setModelSettings(next);
+      setModelNotice(`Active model set to ${model}.`);
+    } catch (error) {
+      setModelError(errorMessage(error));
     } finally {
       setModelBusy(null);
     }
@@ -638,6 +695,9 @@ export default function ModelProviderSettings({
   const modelOptions = draft
     ? mergeModels(draft.models, [draft.model])
     : [];
+  const filteredFetched = fetchedModels.filter((model) =>
+    model.toLowerCase().includes(modelFilter.trim().toLowerCase()),
+  );
 
   return (
     <>
@@ -684,6 +744,33 @@ export default function ModelProviderSettings({
                 {provider.model} · {modelCountLabel(provider.models.length)} ·{" "}
                 {provider.base_url}
               </p>
+              {provider.models.length > 1 ? (
+                <details className="provider-model-list">
+                  <summary>Show models</summary>
+                  <ul>
+                    {provider.models.map((model) => (
+                      <li key={model}>
+                        <button
+                          type="button"
+                          className={
+                            model === provider.model ? "is-active" : undefined
+                          }
+                          aria-current={
+                            model === provider.model ? "true" : undefined
+                          }
+                          onClick={() => void handleSelectModel(provider, model)}
+                          disabled={
+                            modelBusy !== null || model === provider.model
+                          }
+                        >
+                          {model === provider.model ? "✓ " : ""}
+                          {model}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
               <div className="settings-card-foot">
                 <span className="settings-meta-inline">
                   {provider.has_api_key ? "API key saved" : "No API key"}
@@ -840,6 +927,103 @@ export default function ModelProviderSettings({
                 : "Fetch the endpoint's model list, or add a model name by hand."}
             </span>
           </div>
+
+          {draft.models.length > 0 ? (
+            <div className="field">
+              <span>Known models ({draft.models.length})</span>
+              <ul className="known-model-list">
+                {draft.models.map((model) => (
+                  <li
+                    key={model}
+                    className={model === draft.model ? "is-active" : undefined}
+                  >
+                    <span>
+                      {model === draft.model ? "✓ " : ""}
+                      {model}
+                    </span>
+                    {model === draft.model ? (
+                      <span className="settings-meta-inline">Active</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => removeKnownModel(model)}
+                        disabled={modelBusy !== null}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {fetchedModels.length > 0 ? (
+            <div className="field">
+              <button
+                type="button"
+                className="model-catalogue-toggle"
+                aria-expanded={modelsOpen}
+                onClick={() => setModelsOpen((current) => !current)}
+              >
+                <span>Fetched models ({fetchedModels.length})</span>
+                <span>{modelsOpen ? "Hide" : "Show"}</span>
+              </button>
+              {modelsOpen ? (
+                <div className="model-catalogue-panel">
+                  <input
+                    aria-label="Filter fetched models"
+                    value={modelFilter}
+                    onChange={(event) => setModelFilter(event.target.value)}
+                    placeholder="Filter models"
+                    autoComplete="off"
+                  />
+                  <div className="model-toolbar">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => setSelectedModels(fetchedModels)}
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => setSelectedModels([])}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={addSelectedModels}
+                      disabled={selectedModels.length === 0}
+                    >
+                      Add selected ({selectedModels.length})
+                    </button>
+                  </div>
+                  <ul className="model-catalogue-list">
+                    {filteredFetched.map((model) => (
+                      <li key={model}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={selectedModels.includes(model)}
+                            onChange={() => toggleFetchedModel(model)}
+                          />
+                          <span>{model}</span>
+                          {draft.models.includes(model) ? (
+                            <span className="settings-meta-inline">Known</span>
+                          ) : null}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="field">
             <span>Context window</span>

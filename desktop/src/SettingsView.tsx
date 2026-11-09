@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -12,6 +13,7 @@ import {
   importWorkspace,
   listWorkspaces,
   switchWorkspace,
+  updateUserProfile,
 } from "./api";
 import type {
   AgentProfile,
@@ -33,6 +35,7 @@ interface SettingsViewProps {
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
+  onSessionChange: (session: ClientSession) => void;
 }
 
 export type SettingsSection = "model" | "team" | "workspace" | "about";
@@ -87,6 +90,7 @@ export default function SettingsView({
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
+  onSessionChange,
 }: SettingsViewProps) {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
@@ -94,6 +98,11 @@ export default function SettingsView({
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +202,28 @@ export default function SettingsView({
     } catch (error) {
       setWorkspaceError(errorMessage(error));
       setWorkspaceBusy(null);
+    }
+  }
+
+  function startEditProfile() {
+    setProfileName(session?.user.name ?? "");
+    setProfileEmail(session?.user.email ?? "");
+    setProfileError(null);
+    setEditingProfile(true);
+  }
+
+  async function handleProfileSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProfileBusy(true);
+    setProfileError(null);
+    try {
+      const updated = await updateUserProfile(profileName, profileEmail);
+      onSessionChange(updated);
+      setEditingProfile(false);
+    } catch (error) {
+      setProfileError(errorMessage(error));
+    } finally {
+      setProfileBusy(false);
     }
   }
 
@@ -341,6 +372,68 @@ export default function SettingsView({
                     <dd>{session?.user.email ?? "—"}</dd>
                   </div>
                 </dl>
+
+                {editingProfile ? (
+                  <form className="settings-profile-form" onSubmit={handleProfileSave}>
+                    <div className="settings-form-row">
+                      <label className="field">
+                        <span>Display name</span>
+                        <input
+                          value={profileName}
+                          onChange={(event) => setProfileName(event.target.value)}
+                          autoComplete="name"
+                          disabled={profileBusy}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Email</span>
+                        <input
+                          type="email"
+                          value={profileEmail}
+                          onChange={(event) => setProfileEmail(event.target.value)}
+                          autoComplete="email"
+                          disabled={profileBusy}
+                        />
+                      </label>
+                    </div>
+                    {profileError ? (
+                      <p className="settings-status is-error" role="alert">
+                        {profileError}
+                      </p>
+                    ) : null}
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={
+                          profileBusy ||
+                          !profileName.trim() ||
+                          !profileEmail.trim()
+                        }
+                      >
+                        {profileBusy ? "Saving…" : "Save profile"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setEditingProfile(false)}
+                        disabled={profileBusy}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={startEditProfile}
+                    >
+                      Edit profile
+                    </button>
+                  </div>
+                )}
               </section>
 
               <section

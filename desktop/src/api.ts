@@ -28,6 +28,13 @@ export function getSession(): Promise<ClientSession> {
   return invoke<ClientSession>("get_session");
 }
 
+export function updateUserProfile(
+  name: string,
+  email: string,
+): Promise<ClientSession> {
+  return invoke<ClientSession>("update_user_profile", { name, email });
+}
+
 export function listChannels(): Promise<Channel[]> {
   return invoke<Channel[]>("list_channels");
 }
@@ -219,6 +226,13 @@ export function deleteModelProvider(providerId: string): Promise<ModelSettings> 
 
 export function activateModelProvider(providerId: string | null): Promise<ModelSettings> {
   return invoke<ModelSettings>("activate_model_provider", { providerId });
+}
+
+export function setActiveModel(
+  providerId: string,
+  model: string,
+): Promise<ModelSettings> {
+  return invoke<ModelSettings>("set_active_model", { providerId, model });
 }
 
 export function testModelProvider(input: {
