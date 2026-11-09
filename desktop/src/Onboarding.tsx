@@ -103,7 +103,7 @@ export default function Onboarding({
                 device, to the endpoint you configure.
               </p>
               <ul className="onboarding-points">
-                <li>Channels keep people and agents in one timeline.</li>
+                <li>Every agent has a conversation; channels keep the team together.</li>
                 <li>Tool calls that touch your machine wait for approval.</li>
                 <li>Switch models or go offline at any time in Settings.</li>
               </ul>
