@@ -12,17 +12,51 @@ mod tests {
     use async_trait::async_trait;
     use cowbot_bus::EventBus;
     use cowbot_core::agent::AgentId;
-    use cowbot_core::error::CowError;
+    use cowbot_core::error::{CowError, CowResult};
     use cowbot_core::task::Task;
     use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
+    use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder, TokenUsage};
     use cowbot_llm::{ChatCompletionResponse, LlmToolCall, MockLlmProvider};
     use cowbot_tools::{CodeExecutionTool, SubprocessSandbox, ToolRegistry};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     struct DenyGate {
         calls: Arc<AtomicUsize>,
+    }
+
+    struct CollectingUsage {
+        calls: Mutex<Vec<LlmCallUsage>>,
+    }
+
+    impl CollectingUsage {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<LlmCallUsage> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmUsageRecorder for CollectingUsage {
+        async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()> {
+            self.calls.lock().unwrap().push(call.clone());
+            Ok(())
+        }
+    }
+
+    struct FailingUsage;
+
+    #[async_trait]
+    impl LlmUsageRecorder for FailingUsage {
+        async fn record_llm_call(&self, _call: &LlmCallUsage) -> CowResult<()> {
+            Err(CowError::Storage("usage store unavailable".to_string()))
+        }
     }
 
     #[async_trait]
@@ -94,11 +128,15 @@ mod tests {
                     arguments: json!({ "command": "echo hi" }),
                 }],
                 finish_reason: Some("tool_calls".to_string()),
+                usage: None,
+                raw_usage: None,
             },
             ChatCompletionResponse {
                 content: Some("finished".to_string()),
                 tool_calls: Vec::new(),
                 finish_reason: Some("stop".to_string()),
+                usage: None,
+                raw_usage: None,
             },
         ];
         let llm = Arc::new(MockLlmProvider::new(responses));
@@ -118,5 +156,110 @@ mod tests {
         let output = agent.execute_task(&task, &[], &bus).await.unwrap();
         assert_eq!(output, "finished");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn records_usage_for_every_completion() {
+        let responses = vec![
+            ChatCompletionResponse {
+                content: Some("calling".to_string()),
+                tool_calls: vec![LlmToolCall {
+                    id: "call-1".to_string(),
+                    name: "missing_tool".to_string(),
+                    arguments: json!({}),
+                }],
+                finish_reason: Some("tool_calls".to_string()),
+                usage: Some(TokenUsage {
+                    uncached_input_tokens: 100,
+                    output_tokens: 10,
+                    ..TokenUsage::default()
+                }),
+                raw_usage: Some(json!({"prompt_tokens": 100})),
+            },
+            ChatCompletionResponse {
+                content: Some("done".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: Some("stop".to_string()),
+                usage: Some(TokenUsage {
+                    uncached_input_tokens: 150,
+                    output_tokens: 5,
+                    ..TokenUsage::default()
+                }),
+                raw_usage: None,
+            },
+        ];
+        let llm = Arc::new(MockLlmProvider::new(responses));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let recorder = Arc::new(CollectingUsage::new());
+        agent.set_usage_recorder(Some(recorder.clone()));
+
+        let task = Task::new("Do the work", "An answer");
+        let output = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        assert_eq!(output, "done");
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].call_kind, LlmCallKind::Agent);
+        assert_eq!(calls[0].model, "mock-model");
+        assert_eq!(calls[0].usage.as_ref().unwrap().uncached_input_tokens, 100);
+        assert_eq!(calls[1].usage.as_ref().unwrap().uncached_input_tokens, 150);
+    }
+
+    #[tokio::test]
+    async fn records_missing_usage_as_none() {
+        let llm = Arc::new(MockLlmProvider::new(vec![ChatCompletionResponse {
+            content: Some("done".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
+        }]));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let recorder = Arc::new(CollectingUsage::new());
+        agent.set_usage_recorder(Some(recorder.clone()));
+
+        let task = Task::new("Do the work", "An answer");
+        agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].usage.is_none());
+        assert!(calls[0].raw_usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn usage_recorder_failure_does_not_fail_the_task() {
+        let llm = Arc::new(MockLlmProvider::echo());
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        agent.set_usage_recorder(Some(Arc::new(FailingUsage)));
+
+        let task = Task::new("Do the work", "An answer");
+        let output = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        assert!(output.starts_with("Mock response to:"));
     }
 }

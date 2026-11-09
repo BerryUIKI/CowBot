@@ -4,10 +4,11 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::task::Task;
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolCallRecorder, ToolGate};
+use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_tools::ToolRegistry;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// An active agent runtime instance backed by an LLM provider and tool registry.
 pub struct AgentInstance {
@@ -17,6 +18,7 @@ pub struct AgentInstance {
     pub model: String,
     tool_gate: Option<Arc<dyn ToolGate>>,
     tool_recorder: Option<Arc<dyn ToolCallRecorder>>,
+    usage_recorder: Option<Arc<dyn LlmUsageRecorder>>,
 }
 
 impl AgentInstance {
@@ -33,6 +35,7 @@ impl AgentInstance {
             model: model.into(),
             tool_gate: None,
             tool_recorder: None,
+            usage_recorder: None,
         }
     }
 
@@ -50,6 +53,14 @@ impl AgentInstance {
 
     pub fn clear_tool_recorder(&mut self) {
         self.tool_recorder = None;
+    }
+
+    pub fn set_usage_recorder(&mut self, recorder: Option<Arc<dyn LlmUsageRecorder>>) {
+        self.usage_recorder = recorder;
+    }
+
+    pub fn clear_usage_recorder(&mut self) {
+        self.usage_recorder = None;
     }
 
     pub fn id(&self) -> &AgentId {
@@ -112,6 +123,22 @@ impl AgentInstance {
             };
 
             let response = self.llm.chat_complete(&req).await?;
+
+            if let Some(recorder) = &self.usage_recorder {
+                let call = LlmCallUsage {
+                    model: self.model.clone(),
+                    call_kind: LlmCallKind::Agent,
+                    usage: response.usage.clone(),
+                    raw_usage: response.raw_usage.clone(),
+                };
+                if let Err(error) = recorder.record_llm_call(&call).await {
+                    warn!(
+                        agent = %self.profile.name,
+                        error = %error,
+                        "Failed to record LLM usage"
+                    );
+                }
+            }
 
             // If the model produced thought/text, publish to event bus
             if let Some(content) = &response.content {
