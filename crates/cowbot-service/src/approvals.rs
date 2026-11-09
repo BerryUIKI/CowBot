@@ -60,6 +60,13 @@ pub fn decision_for_call(
     tool_name: &str,
     rule_id: &str,
 ) -> ApprovalDecision {
+    if tool_name == "delete_channel" {
+        return if level == ApprovalLevel::PlanOnly {
+            ApprovalDecision::Deny
+        } else {
+            ApprovalDecision::RequireApproval
+        };
+    }
     if level == ApprovalLevel::AcceptEdits
         && tool_name == "write_file"
         && rule_id == "write_file.workspace"

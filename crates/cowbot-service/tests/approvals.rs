@@ -109,6 +109,24 @@ fn policy_decisions_are_distinct_per_mode() {
         ApprovalDecision::Deny
     );
     assert_eq!(
+        decision_for_call(
+            ApprovalLevel::Trusted,
+            RiskLevel::High,
+            "delete_channel",
+            "workspace.delete_channel"
+        ),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::PlanOnly,
+            RiskLevel::High,
+            "delete_channel",
+            "workspace.delete_channel"
+        ),
+        ApprovalDecision::Deny
+    );
+    assert_eq!(
         decision_for(ApprovalLevel::SafeAuto, RiskLevel::Low),
         ApprovalDecision::AutoApprove
     );

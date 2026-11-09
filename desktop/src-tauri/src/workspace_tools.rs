@@ -39,7 +39,6 @@ fn agent_names(agents: &[cowbot_core::agent::AgentProfile]) -> String {
 pub struct ListAgentsTool {
     client: Arc<LocalClient>,
 }
-
 impl ListAgentsTool {
     pub fn new(client: Arc<LocalClient>) -> Self {
         Self { client }
@@ -77,6 +76,134 @@ impl Tool for ListAgentsTool {
             &call.id,
             serde_json::to_string(&value)?,
         ))
+    }
+}
+
+/// List the channels in the workspace.
+#[derive(Clone)]
+pub struct ListChannelsTool {
+    client: Arc<LocalClient>,
+}
+
+impl ListChannelsTool {
+    pub fn new(client: Arc<LocalClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl Tool for ListChannelsTool {
+    fn name(&self) -> &str {
+        "list_channels"
+    }
+
+    fn description(&self) -> &str {
+        "List the channels in this CowBot workspace with their ids, names, topics, and whether each is an agent direct conversation."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object", "properties": {}, "additionalProperties": false})
+    }
+
+    async fn execute(&self, call: &ToolCall) -> Result<ToolResult, CowError> {
+        let channels = self.client.list_channels().await?;
+        let value = channels
+            .iter()
+            .map(|channel| {
+                json!({
+                    "id": channel.id.0,
+                    "name": channel.name,
+                    "topic": channel.topic,
+                    "direct_conversation": channel.agent_id.is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(ToolResult::success(
+            &call.id,
+            serde_json::to_string(&value)?,
+        ))
+    }
+}
+
+/// Delete a group channel. Direct conversations cannot be deleted.
+#[derive(Clone)]
+pub struct DeleteChannelTool {
+    client: Arc<LocalClient>,
+}
+
+impl DeleteChannelTool {
+    pub fn new(client: Arc<LocalClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl Tool for DeleteChannelTool {
+    fn name(&self) -> &str {
+        "delete_channel"
+    }
+
+    fn description(&self) -> &str {
+        "Delete a group channel by name or id. Agent direct conversations cannot be deleted; clear their history instead. Every call requires human approval."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Channel name or id"}
+            },
+            "required": ["channel"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(&self, call: &ToolCall) -> Result<ToolResult, CowError> {
+        let requested = match required(call, "channel") {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        };
+
+        let channels = self.client.list_channels().await?;
+        let Some(channel) = channels.iter().find(|channel| {
+            channel.name.eq_ignore_ascii_case(&requested)
+                || channel.id.0.eq_ignore_ascii_case(&requested)
+        }) else {
+            return Ok(ToolResult::failure(
+                &call.id,
+                format!(
+                    "No channel matches '{requested}'. Available channels: {}",
+                    channels
+                        .iter()
+                        .map(|channel| channel.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        };
+
+        if channel.agent_id.is_some() {
+            return Ok(ToolResult::failure(
+                &call.id,
+                format!(
+                    "'{}' is an agent direct conversation and cannot be deleted; clear its history instead.",
+                    channel.name
+                ),
+            ));
+        }
+
+        match self.client.delete_channel(&channel.id).await {
+            Ok(deleted) => Ok(ToolResult::success(
+                &call.id,
+                serde_json::to_string(&json!({
+                    "id": deleted.id.0,
+                    "name": deleted.name,
+                    "topic": deleted.topic,
+                    "deleted": true,
+                }))?,
+            )),
+            Err(error) => Ok(ToolResult::failure(&call.id, error.to_string())),
+        }
     }
 }
 
@@ -474,6 +601,49 @@ mod tests {
             .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("No agent matches"));
+    }
+
+    #[tokio::test]
+    async fn workspace_tools_list_and_delete_group_channels() {
+        let client = Arc::new(LocalClient::open_in_memory().await.unwrap());
+        client.create_channel("ops", "Operations").await.unwrap();
+        client
+            .instantiate_agents("builtin-software-team")
+            .await
+            .unwrap();
+        let channels = client.ensure_agent_channels().await.unwrap();
+
+        let list = ListChannelsTool::new(client.clone())
+            .execute(&call("list_channels", json!({})))
+            .await
+            .unwrap();
+        let listed = output(&list);
+        assert!(listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|channel| channel["name"] == "ops" && channel["direct_conversation"] == false));
+
+        let delete = DeleteChannelTool::new(client.clone());
+        let result = delete
+            .execute(&call("delete_channel", json!({ "channel": "ops" })))
+            .await
+            .unwrap();
+        assert_eq!(output(&result)["deleted"], true);
+
+        let direct = channels
+            .iter()
+            .find(|channel| channel.agent_id.is_some())
+            .expect("a direct conversation should exist");
+        let result = delete
+            .execute(&call(
+                "delete_channel",
+                json!({ "channel": direct.name.clone() }),
+            ))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("direct conversation"));
     }
 
     #[tokio::test]
