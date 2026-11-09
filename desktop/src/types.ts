@@ -15,6 +15,8 @@ export interface ClientSession {
   workspace: Workspace;
 }
 
+export type ChannelKind = "channel" | "direct" | "conversation";
+
 export interface Channel {
   id: string;
   name: string;
@@ -22,6 +24,58 @@ export interface Channel {
   created_at: string;
   agent_id: string | null;
   pinned: boolean;
+  kind: ChannelKind;
+}
+
+export interface ConversationSettings {
+  channel_id: string;
+  mode: "single" | "group";
+  provider_id: string | null;
+  model: string;
+  router_enabled: boolean;
+  auto_compact: boolean;
+  compact_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CacheUsageSummary {
+  calls: number;
+  cached_input_tokens: number;
+  total_input_tokens: number;
+}
+
+export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
+
+export interface ConversationContext {
+  channel_id: string;
+  agent_id: string;
+  model: string;
+  provider_id: string | null;
+  system_tokens: number;
+  tool_tokens: number;
+  history_tokens: number;
+  latest_tokens: number;
+  total_tokens: number;
+  active_entries: number;
+  excluded_entries: number;
+  context_window: number | null;
+  max_output_tokens: number | null;
+  usable_tokens: number | null;
+  percent_used: number | null;
+  state: ContextUsageState;
+  auto_compact: boolean;
+  compact_threshold: number;
+  cache_last_turn: CacheUsageSummary;
+  cache_conversation: CacheUsageSummary;
+}
+
+export interface CompactionOutcome {
+  compacted: boolean;
+  summarized_entries: number;
+  tokens_before: number;
+  tokens_after: number;
+  summary: string | null;
 }
 
 export type Sender =

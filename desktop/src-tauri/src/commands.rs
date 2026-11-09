@@ -1,19 +1,25 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{AgentUpdate, Client, NewTask};
+use cowbot_client::{AgentUpdate, Client, LocalClient, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::conversation::{
+    context_usage_state, usable_window, CacheUsageSummary, CompactionOutcome, ContextProjection,
+    ContextUsageState, ConversationContext, ConversationSettingsUpdate,
+};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
-use cowbot_llm::{ChatCompletionRequest, ChatMessage};
+use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
+use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
@@ -152,6 +158,53 @@ pub async fn post_message(
     approval_level: Option<ApprovalLevel>,
 ) -> Result<ChannelMessage, String> {
     let channel_id = ChannelId::new(channel_id);
+    let channel = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
+    let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
+
+    // A conversation has a fixed provider/model and a bounded context. Check
+    // capacity before persisting the message so a blocked send leaves no
+    // orphaned user turn behind.
+    let (llm, model) = if channel.is_conversation() {
+        let settings = state
+            .client
+            .conversation_settings(&channel_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let runtime = conversation_runtime(&state, &settings);
+        let pending = estimate_tokens(content.trim());
+        let mut view = conversation_context_view(&state, &channel_id).await?;
+
+        if let Some(usable) = view.usable_tokens {
+            let projected = view.total_tokens.saturating_add(pending);
+            let threshold_reached = settings.auto_compact
+                && u64::from(projected) * 100
+                    >= u64::from(usable) * u64::from(settings.compact_threshold);
+            if threshold_reached {
+                state
+                    .client
+                    .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                view = conversation_context_view(&state, &channel_id).await?;
+            }
+            if view.total_tokens.saturating_add(pending) >= usable {
+                return Err(
+                    "This conversation's context is full. Compact the context, clear it, or \
+                     start a new conversation before sending."
+                        .to_string(),
+                );
+            }
+        }
+        runtime
+    } else {
+        state.runtime_model()
+    };
+
     let message = state
         .client
         .post_message(&channel_id, &content)
@@ -161,13 +214,11 @@ pub async fn post_message(
     // Agents answer in the background so the composer stays responsive; the
     // timeline refreshes from MessagePosted events and the turn-finished event.
     let client = state.client.clone();
-    let (llm, model) = state.runtime_model();
     let tools = state.tools.clone();
     let channel = channel_id.clone();
     let posted = message.clone();
     let reply_id = message.id.clone();
     let running = state.replies.clone();
-    let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
     if !running.lock().insert(reply_id.clone()) {
         return Ok(message);
     }
@@ -549,6 +600,231 @@ fn model_settings(state: &AppState, config: &config::AppConfig) -> ModelSettings
 pub fn get_model_settings(state: State<'_, AppState>) -> Result<ModelSettings, String> {
     let config = load_config(&state)?;
     Ok(model_settings(&state, &config))
+}
+
+/// Context meter values for one conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationContextView {
+    pub channel_id: String,
+    pub agent_id: String,
+    pub model: String,
+    pub provider_id: Option<String>,
+    pub system_tokens: u32,
+    pub tool_tokens: u32,
+    pub history_tokens: u32,
+    pub latest_tokens: u32,
+    pub total_tokens: u32,
+    pub active_entries: u32,
+    pub excluded_entries: u32,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub usable_tokens: Option<u32>,
+    pub percent_used: Option<f32>,
+    pub state: ContextUsageState,
+    pub auto_compact: bool,
+    pub compact_threshold: u32,
+    pub cache_last_turn: CacheUsageSummary,
+    pub cache_conversation: CacheUsageSummary,
+}
+
+/// Fixed provider/model of a conversation, falling back to the active runtime
+/// when the recorded provider was removed from the desktop configuration.
+fn conversation_runtime(
+    state: &AppState,
+    settings: &cowbot_core::conversation::ConversationSettings,
+) -> (Arc<dyn LlmProvider>, String) {
+    if let Some(provider_id) = settings.provider_id.as_deref() {
+        if let Ok(config) = load_config(state) {
+            if let Some(provider) = config.provider(provider_id) {
+                return (
+                    config::build_remote_provider(
+                        provider.protocol,
+                        &provider.base_url,
+                        provider.api_key.clone(),
+                    ),
+                    settings.model.clone(),
+                );
+            }
+        }
+    }
+    let (llm, _) = state.runtime_model();
+    (llm, settings.model.clone())
+}
+
+/// Context window and output limit metadata recorded for the conversation model.
+fn conversation_window(
+    state: &AppState,
+    settings: &cowbot_core::conversation::ConversationSettings,
+) -> (Option<u32>, Option<u32>) {
+    let Ok(config) = load_config(state) else {
+        return (None, None);
+    };
+    let provider = settings
+        .provider_id
+        .as_deref()
+        .and_then(|id| config.provider(id))
+        .or_else(|| config.active_provider());
+    provider
+        .and_then(|provider| provider.model_metadata.get(&settings.model))
+        .map(|metadata| (metadata.context_window, metadata.max_output_tokens))
+        .unwrap_or((None, None))
+}
+
+async fn conversation_context_view(
+    state: &AppState,
+    channel_id: &ChannelId,
+) -> Result<ConversationContextView, String> {
+    let context: ConversationContext = state
+        .client
+        .conversation_context(channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let settings = state
+        .client
+        .conversation_settings(channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    let tool_tokens = agents
+        .iter()
+        .find(|agent| agent.id == context.agent_id)
+        .map(|agent| {
+            serde_json::to_value(state.tools.definitions_for(&agent.tools))
+                .map(|value| estimate_json_tokens(&value))
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+
+    let (context_window, max_output_tokens) = conversation_window(state, &settings);
+    Ok(context_view_from_parts(
+        context,
+        &settings,
+        tool_tokens,
+        context_window,
+        max_output_tokens,
+    ))
+}
+
+fn context_view_from_parts(
+    context: ConversationContext,
+    settings: &cowbot_core::conversation::ConversationSettings,
+    tool_tokens: u32,
+    context_window: Option<u32>,
+    max_output_tokens: Option<u32>,
+) -> ConversationContextView {
+    let projection = &context.projection;
+    let total_tokens = projection.total_tokens().saturating_add(tool_tokens);
+    let usable_tokens = usable_window(context_window, max_output_tokens);
+    let (percent_used, usage_state) = context_usage_state(total_tokens, usable_tokens);
+
+    ConversationContextView {
+        channel_id: context.channel_id.0,
+        agent_id: context.agent_id.0,
+        model: context.model,
+        provider_id: context.provider_id,
+        system_tokens: projection.system_tokens,
+        tool_tokens,
+        history_tokens: projection.history_tokens,
+        latest_tokens: projection.latest_tokens,
+        total_tokens,
+        active_entries: projection.active_entries,
+        excluded_entries: projection.excluded_entries,
+        context_window,
+        max_output_tokens,
+        usable_tokens,
+        percent_used,
+        state: usage_state,
+        auto_compact: settings.auto_compact,
+        compact_threshold: settings.compact_threshold,
+        cache_last_turn: context.cache_last_turn,
+        cache_conversation: context.cache_conversation,
+    }
+}
+
+#[tauri::command]
+pub async fn create_conversation(
+    state: State<'_, AppState>,
+    title: Option<String>,
+    agent_id: String,
+) -> Result<Channel, String> {
+    let config = load_config(&state)?;
+    let (_, model) = state.runtime_model();
+    let provider_id = config.active_provider().map(|provider| provider.id.clone());
+    state
+        .client
+        .create_conversation(
+            title.as_deref(),
+            &AgentId::new(agent_id),
+            provider_id,
+            &model,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_conversation_context(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<ConversationContextView, String> {
+    conversation_context_view(&state, &ChannelId::new(channel_id)).await
+}
+
+#[tauri::command]
+pub async fn update_conversation_settings(
+    state: State<'_, AppState>,
+    channel_id: String,
+    auto_compact: Option<bool>,
+    compact_threshold: Option<u32>,
+) -> Result<ConversationContextView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    state
+        .client
+        .update_conversation_settings(
+            &channel_id,
+            &ConversationSettingsUpdate {
+                auto_compact,
+                compact_threshold,
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    conversation_context_view(&state, &channel_id).await
+}
+
+#[tauri::command]
+pub async fn compact_conversation(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<CompactionOutcome, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let settings = state
+        .client
+        .conversation_settings(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (llm, model) = conversation_runtime(&state, &settings);
+    state
+        .client
+        .compact_conversation(&channel_id, llm, &model)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_conversation_context(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<u64, String> {
+    state
+        .client
+        .clear_conversation_context(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Values submitted by the provider editor.
@@ -1309,5 +1585,95 @@ mod tests {
             PathBuf::from("backup.cowpkg")
         );
         assert!(package_output_path("   ").is_err());
+    }
+
+    fn context_with_tokens(total: u32) -> ConversationContext {
+        ConversationContext {
+            channel_id: ChannelId::new("channel-1"),
+            agent_id: AgentId::new("agent-1"),
+            model: "test-model".to_string(),
+            provider_id: Some("provider-1".to_string()),
+            projection: ContextProjection {
+                system_tokens: total,
+                ..ContextProjection::default()
+            },
+            cache_last_turn: CacheUsageSummary::default(),
+            cache_conversation: CacheUsageSummary::default(),
+        }
+    }
+
+    #[test]
+    fn context_view_maps_usage_states_and_unknown_windows() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            Some("provider-1".to_string()),
+            "test-model",
+        );
+
+        let neutral = context_view_from_parts(
+            context_with_tokens(5_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(neutral.usable_tokens, Some(7_976));
+        assert_eq!(neutral.total_tokens, 5_000);
+        assert!(neutral.percent_used.unwrap() > 62.0);
+        assert!(neutral.percent_used.unwrap() < 63.0);
+        assert_eq!(neutral.state, ContextUsageState::Neutral);
+        assert_eq!(neutral.compact_threshold, 80);
+        assert!(!neutral.auto_compact);
+
+        let warning = context_view_from_parts(
+            context_with_tokens(6_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(warning.state, ContextUsageState::Warning);
+
+        let danger = context_view_from_parts(
+            context_with_tokens(7_500),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(danger.state, ContextUsageState::Danger);
+
+        let full = context_view_from_parts(
+            context_with_tokens(8_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(full.state, ContextUsageState::Full);
+
+        let unknown = context_view_from_parts(context_with_tokens(5_000), &settings, 0, None, None);
+        assert_eq!(unknown.state, ContextUsageState::Unknown);
+        assert_eq!(unknown.percent_used, None);
+        assert_eq!(unknown.usable_tokens, None);
+        assert_eq!(unknown.total_tokens, 5_000);
+    }
+
+    #[test]
+    fn context_view_adds_tool_schema_tokens_to_the_total() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            None,
+            "test-model",
+        );
+        let view = context_view_from_parts(
+            context_with_tokens(1_000),
+            &settings,
+            250,
+            Some(10_000),
+            None,
+        );
+        assert_eq!(view.tool_tokens, 250);
+        assert_eq!(view.total_tokens, 1_250);
     }
 }
