@@ -3,6 +3,7 @@ pub mod crew;
 pub mod roles;
 
 pub use agent::AgentInstance;
+pub use agent::ConversationRecorder;
 pub use crew::Crew;
 pub use roles::StandardRoles;
 
@@ -16,7 +17,9 @@ mod tests {
     use cowbot_core::task::Task;
     use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
     use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder, TokenUsage};
-    use cowbot_llm::{ChatCompletionResponse, LlmToolCall, MockLlmProvider};
+    use cowbot_llm::{
+        ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall, MockLlmProvider,
+    };
     use cowbot_tools::{CodeExecutionTool, SubprocessSandbox, ToolRegistry};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -261,5 +264,84 @@ mod tests {
             .unwrap();
 
         assert!(output.starts_with("Mock response to:"));
+    }
+
+    struct CollectingConversation {
+        messages: Mutex<Vec<ChatMessage>>,
+    }
+
+    impl CollectingConversation {
+        fn new() -> Self {
+            Self {
+                messages: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn messages(&self) -> Vec<ChatMessage> {
+            self.messages.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ConversationRecorder for CollectingConversation {
+        async fn record_message(&self, message: &ChatMessage) -> CowResult<()> {
+            self.messages.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_messages_uses_the_caller_history_and_records_the_loop() {
+        let responses = vec![
+            ChatCompletionResponse {
+                content: Some("reading".to_string()),
+                tool_calls: vec![LlmToolCall {
+                    id: "call-1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({ "path": "missing.txt" }),
+                }],
+                finish_reason: Some("tool_calls".to_string()),
+                usage: None,
+                raw_usage: None,
+            },
+            ChatCompletionResponse {
+                content: Some("final answer".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: Some("stop".to_string()),
+                usage: None,
+                raw_usage: None,
+            },
+        ];
+        let llm = Arc::new(MockLlmProvider::new(responses));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let recorder = Arc::new(CollectingConversation::new());
+        agent.set_conversation_recorder(Some(recorder.clone()));
+
+        let task = Task::new("Reply in the conversation", "An answer");
+        let messages = vec![
+            ChatMessage::system("system prompt"),
+            ChatMessage::user("earlier question"),
+            ChatMessage::assistant("earlier answer"),
+            ChatMessage::user("latest question"),
+        ];
+        let output = agent
+            .execute_messages(&task, messages, &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        assert_eq!(output, "final answer");
+        let recorded = recorder.messages();
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded[0].role, ChatRole::Assistant);
+        assert!(recorded[0].tool_calls.is_some());
+        assert_eq!(recorded[1].role, ChatRole::Tool);
+        assert_eq!(recorded[1].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(recorded[2].role, ChatRole::Assistant);
+        assert_eq!(recorded[2].content, "final answer");
     }
 }
