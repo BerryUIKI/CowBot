@@ -14,6 +14,10 @@ agents.json
 templates.json
 channels.jsonl
 messages.jsonl
+channel_participants.jsonl
+conversation_settings.jsonl
+context_entries.jsonl
+context_events.jsonl
 tasks.json
 runs.jsonl
 audit.jsonl
@@ -41,10 +45,22 @@ serialize.
 - `agents.json`: array of agent profiles.
 - `templates.json`: array of template documents.
 - `channels.jsonl`: one channel per line; an optional `agent_id` marks the
-  agent's direct conversation (ADR-0024), and `pinned` records whether the user
-  pinned it (ADR-0026).
+  agent's direct conversation (ADR-0024), `pinned` records whether the user
+  pinned it (ADR-0026), and `kind` distinguishes group channels, direct
+  conversations, and user-created conversations (ADR-0030).
 - `messages.jsonl`: one channel message per line, sorted by `created_at`.
-- `tasks.json`: array of tasks.
+- `channel_participants.jsonl`: one participant per line, keyed by channel and
+  agent; used by user-created conversations (ADR-0030).
+- `conversation_settings.jsonl`: one settings row per conversation: mode,
+  fixed provider and model, router flag, automatic-compaction flag, and
+  threshold.
+- `context_entries.jsonl`: one append-only context entry per line, with its
+  branch sequence, role, kind, content, optional tool calls, exclusion flag,
+  estimated tokens, and timestamp.
+- `context_events.jsonl`: one compaction or clear event per line with token
+  counts before and after.
+- `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
+  attribution).
 - `runs.jsonl`: one run per line.
 - `audit.jsonl`: one audit event per line, newest first.
 
@@ -62,6 +78,11 @@ and any environment variables. Credentials are reconfigured after import.
 - Package files written before agent direct conversations existed have no
   `agent_id` on their channels; they import as group channels, and the desktop
   provisions the missing conversations on first launch.
+- The four conversation files are optional on import. Packages written before
+  ADR-0030 do not contain them; their channels import without conversation
+  settings or context.
+- Conversation participants, settings, context entries, and events keep their
+  ids, sequence numbers, and timestamps on import.
 - The importing user is created as the owner of the new workspace, with an
   address of the form `<user id>@imported.local` and no password.
 - Existing local workspaces are never modified or merged.

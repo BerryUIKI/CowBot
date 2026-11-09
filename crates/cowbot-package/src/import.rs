@@ -3,6 +3,9 @@ use std::io::Read;
 use cowbot_core::agent::AgentProfile;
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage};
+use cowbot_core::conversation::{
+    ChannelParticipant, ContextEntry, ContextEvent, ConversationSettings,
+};
 use cowbot_core::identity::{Role, User, UserId, Workspace, WorkspaceId};
 use cowbot_core::run::Run;
 use cowbot_core::task::Task;
@@ -13,7 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::export::MAX_PACKAGE_BYTES;
 use crate::manifest::{
     Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH, CHANNELS_PATH,
-    MANIFEST_PATH, MESSAGES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH, WORKSPACE_PATH,
+    CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH, MANIFEST_PATH,
+    MESSAGES_PATH, PARTICIPANTS_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH, WORKSPACE_PATH,
 };
 
 /// Result of importing a package into a fresh local workspace.
@@ -27,6 +31,8 @@ pub struct ImportSummary {
     pub tasks: usize,
     pub runs: usize,
     pub audit_events: usize,
+    pub conversations: usize,
+    pub context_entries: usize,
 }
 
 /// Read and verify a package without importing it.
@@ -49,6 +55,14 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     let templates: Vec<TemplateDocument> = parse(required(&entries, TEMPLATES_PATH)?)?;
     let channels: Vec<Channel> = parse_jsonl(required(&entries, CHANNELS_PATH)?)?;
     let mut messages: Vec<ChannelMessage> = parse_jsonl(required(&entries, MESSAGES_PATH)?)?;
+    let participants: Vec<ChannelParticipant> =
+        optional_jsonl(&entries, PARTICIPANTS_PATH)?.unwrap_or_default();
+    let conversation_settings: Vec<ConversationSettings> =
+        optional_jsonl(&entries, CONVERSATION_SETTINGS_PATH)?.unwrap_or_default();
+    let context_entries: Vec<ContextEntry> =
+        optional_jsonl(&entries, CONTEXT_ENTRIES_PATH)?.unwrap_or_default();
+    let context_events: Vec<ContextEvent> =
+        optional_jsonl(&entries, CONTEXT_EVENTS_PATH)?.unwrap_or_default();
     let tasks: Vec<Task> = parse(required(&entries, TASKS_PATH)?)?;
     let runs: Vec<Run> = parse_jsonl(required(&entries, RUNS_PATH)?)?;
     let audit: Vec<AuditEvent> = parse_jsonl(required(&entries, AUDIT_PATH)?)?;
@@ -105,14 +119,40 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     for channel in &channels {
         store.create_channel(&workspace_id, channel).await?;
     }
+    for participant in participants
+        .iter()
+        .filter(|participant| channel_ids.contains(&participant.channel_id))
+    {
+        store.insert_channel_participant(participant).await?;
+    }
+    for settings in conversation_settings
+        .iter()
+        .filter(|settings| channel_ids.contains(&settings.channel_id))
+    {
+        store.insert_conversation_settings(settings).await?;
+    }
     messages.retain(|message| channel_ids.contains(&message.channel_id));
     messages.sort_by_key(|message| message.created_at);
     for message in &messages {
         store.append_message(message).await?;
     }
+    for entry in context_entries
+        .iter()
+        .filter(|entry| channel_ids.contains(&entry.channel_id))
+    {
+        store.insert_context_entry(entry).await?;
+    }
+    for event in context_events
+        .iter()
+        .filter(|event| channel_ids.contains(&event.channel_id))
+    {
+        store.insert_context_event(event).await?;
+    }
 
     for task in &tasks {
-        store.create_task(&workspace_id, None, task).await?;
+        store
+            .create_task(&workspace_id, task.channel_id.as_ref(), task)
+            .await?;
     }
     for run in &runs {
         store.create_run(run).await?;
@@ -130,6 +170,8 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         tasks: tasks.len(),
         runs: runs.len(),
         audit_events: audit.len(),
+        conversations: conversation_settings.len(),
+        context_entries: context_entries.len(),
     })
 }
 
@@ -146,6 +188,18 @@ fn parse_jsonl<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<Vec<T>, P
         values.push(serde_json::from_slice(line)?);
     }
     Ok(values)
+}
+
+/// Parse a file introduced after the first package format version. Packages
+/// written before conversation sessions existed simply omit it.
+fn optional_jsonl<T: serde::de::DeserializeOwned>(
+    entries: &std::collections::BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> Result<Option<Vec<T>>, PackageError> {
+    entries
+        .get(path)
+        .map(|bytes| parse_jsonl(bytes))
+        .transpose()
 }
 
 fn required<'a>(
@@ -169,6 +223,10 @@ fn known_paths() -> &'static [&'static str] {
         TEMPLATES_PATH,
         CHANNELS_PATH,
         MESSAGES_PATH,
+        PARTICIPANTS_PATH,
+        CONVERSATION_SETTINGS_PATH,
+        CONTEXT_ENTRIES_PATH,
+        CONTEXT_EVENTS_PATH,
         TASKS_PATH,
         RUNS_PATH,
         AUDIT_PATH,

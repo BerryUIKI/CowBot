@@ -1,5 +1,8 @@
 use cowbot_core::agent::AgentProfile;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
+use cowbot_core::conversation::{
+    ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationSettings,
+};
 use cowbot_core::identity::{Membership, Role, User, Workspace};
 use cowbot_core::task::{Task, TaskStatus};
 use cowbot_package::{
@@ -126,6 +129,97 @@ async fn non_zip_input_is_rejected() {
 }
 
 #[tokio::test]
+async fn conversation_context_round_trips() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let agent = source
+        .list_agents(&workspace.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let channel = Channel::conversation("Design review", "Conversation with Cow-Coder");
+    let settings = ConversationSettings::new(
+        channel.id.clone(),
+        Some("provider-1".to_string()),
+        "mock-model",
+    );
+    source
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent.id),
+        )
+        .await
+        .unwrap();
+
+    let mut user = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::User,
+        "hello there",
+    );
+    user.recount();
+    source.append_context_entry(&user).await.unwrap();
+    let mut assistant = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::Assistant,
+        "hello back",
+    );
+    assistant.recount();
+    source.append_context_entry(&assistant).await.unwrap();
+    let event = ContextEvent::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextEventKind::Clear,
+        10,
+        0,
+    );
+    source.record_context_event(&event).await.unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let target = test_store().await;
+    let summary = import_workspace(&target, &bytes).await.unwrap();
+    assert_eq!(summary.conversations, 1);
+    assert_eq!(summary.context_entries, 2);
+
+    let imported = target
+        .get_channel(&channel.id)
+        .await
+        .unwrap()
+        .expect("conversation channel should be imported");
+    assert!(imported.is_conversation());
+    let imported_settings = target
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported_settings.model, "mock-model");
+    assert_eq!(imported_settings.provider_id.as_deref(), Some("provider-1"));
+
+    let participants = target.list_channel_participants(&channel.id).await.unwrap();
+    assert_eq!(participants.len(), 1);
+    assert_eq!(participants[0].agent_id, agent.id);
+
+    let entries = target
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].content, "hello there");
+    assert_eq!(entries[1].content, "hello back");
+    let events = target
+        .list_context_events(&channel.id, &agent.id, 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+}
+
+#[tokio::test]
 async fn manifest_checksums_cover_every_content_file() {
     let source = test_store().await;
     let workspace = seed(&source).await;
@@ -138,6 +232,10 @@ async fn manifest_checksums_cover_every_content_file() {
         "templates.json",
         "channels.jsonl",
         "messages.jsonl",
+        "channel_participants.jsonl",
+        "conversation_settings.jsonl",
+        "context_entries.jsonl",
+        "context_events.jsonl",
         "tasks.json",
         "runs.jsonl",
         "audit.jsonl",

@@ -223,8 +223,15 @@ async fn import_package(input: PathBuf, settings: &Settings) -> anyhow::Result<(
     );
     println!("  exported by:  {}", manifest.exported_by.workspace_name);
     println!(
-        "  contents:     {} channels, {} messages, {} agents, {} tasks, {} runs",
-        summary.channels, summary.messages, summary.agents, summary.tasks, summary.runs
+        "  contents:     {} channels, {} messages, {} agents, {} tasks, {} runs, \
+         {} conversations, {} context entries",
+        summary.channels,
+        summary.messages,
+        summary.agents,
+        summary.tasks,
+        summary.runs,
+        summary.conversations,
+        summary.context_entries
     );
     Ok(())
 }
