@@ -134,6 +134,7 @@ impl ApprovalService {
         let model_decision = if base == ApprovalDecision::RequireApproval
             && assignment.approval_level == ApprovalLevel::SafeAuto
             && assessment.level != RiskLevel::Critical
+            && call.name != "delete_channel"
         {
             if let Some(evaluator) = &self.evaluator {
                 let profile = self.store.get_agent(agent_id).await?;

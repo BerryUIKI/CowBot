@@ -259,6 +259,29 @@ async fn evaluator_failure_falls_back_to_human_approval() {
         .any(|event| event.action == "tool.model_fallback"));
 }
 
+#[tokio::test]
+async fn delete_channel_never_uses_the_model() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_millis(20)).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service.with_evaluator(Some(Arc::new(ScriptedEvaluator {
+        decision: PermissionDecisionKind::Allow,
+        calls: calls.clone(),
+    })));
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call("delete_channel", json!({"channel": "ops"})),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
 struct ScriptedEvaluator {
     decision: PermissionDecisionKind,
     calls: Arc<AtomicUsize>,
