@@ -58,15 +58,12 @@ pub struct Task {
     pub expected_output: String,
     /// Agent assigned to execute this task
     pub assigned_agent: Option<AgentId>,
-    /// Channel the task was created in, when it has one
-    #[serde(default)]
+    /// Channel the task was created in, when it has one. Used to attribute LLM
+    /// usage to the conversation that caused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<ChannelId>,
     /// Prerequisite task IDs whose outputs will be injected as context
     pub context_tasks: Vec<TaskId>,
-    /// Channel the task was created in, when any. Used to attribute LLM usage
-    /// to the conversation that caused it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<ChannelId>,
     /// Current execution status
     pub status: TaskStatus,
     /// Whether the task was archived by the user
@@ -85,7 +82,6 @@ impl Task {
             assigned_agent: None,
             channel_id: None,
             context_tasks: Vec::new(),
-            channel_id: None,
             status: TaskStatus::Pending,
             archived: false,
         }
