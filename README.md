@@ -46,7 +46,7 @@ The Rust runtime and CLI work today. Phase 1 (the local/offline MVP) is complete
 | Desktop shell | First-run onboarding with a Main Assistant (`main`) that can create channels, start teams, and queue tasks through desktop workspace tools; a conversation-first React shell with searchable agent contacts, direct conversations that need no mention, group channels with mention-driven replies and a per-channel approval policy, right-click channel and conversation management (pin, rename, delete, clear history), agent editing (name, role, tools), Markdown and sandboxed HTML artifact rendering, task creation and history, run history and tool calls, cancellation, approval decisions with tool arguments and risk, crew execution from a task, vendor-first model providers with model discovery, agents/templates, workspace creation/export/import/switching, and automatic update checks with in-app installation via Tauri |
 | Desktop installers | Unsigned NSIS/MSI, universal DMG, and deb/AppImage builds from the release workflow, plus signed updater artifacts and a `latest.json` manifest |
 | Tools | Subprocess execution and file operations with execution timeouts and output limits |
-| Approvals | Static risk classification, Ask/SafeAuto/PlanOnly/Trusted modes, pending approvals, and audit records |
+| Approvals | Static risk classification, five approval modes (Auto / Manual / Accept edits / Plan / Bypass permissions), pending approvals, and audit records |
 | Workspace packages | `.cowpkg` export and verified import with SHA-256 checksums, via the CLI and desktop |
 | Model providers | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints, including DeepSeek, Ollama, OpenRouter, and Claude Code-compatible relays; model listing, several models per provider, and mock providers for offline testing |
 
@@ -97,7 +97,7 @@ The CLI reads an optional `cowbot.toml` from the working directory. Pass
 db = "cowbot.db"
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
-approval = "ask"       # ask | safe-auto | plan-only | trusted
+approval = "ask"       # ask | accept-edits | safe-auto | plan-only | trusted
 concurrency = 4        # cross-root concurrency limit
 ```
 
@@ -166,7 +166,7 @@ workspaces are never modified or merged. See [the package format](docs/PACKAGE_F
 
 ### Approval policies and execution boundaries
 
-`run --approval <ask|safe-auto|plan-only|trusted>` defaults to `ask`. Approval requests prompt `y/N` and decisions are persisted with the session user. Non-interactive callers should choose a policy deliberately; `ask` can wait for input, EOF rejects, and requests can time out. See [ADR 0003](docs/ADR/0003-risk-classification-and-approval.md) and [ADR 0008](docs/ADR/0008-cli-and-local-execution.md) for policy and execution semantics.
+`run --approval <ask|accept-edits|safe-auto|plan-only|trusted>` defaults to `ask`. Approval requests prompt `y/N` and decisions are persisted with the session user. Non-interactive callers should choose a policy deliberately; `ask` can wait for input, EOF rejects, and requests can time out. See [ADR 0003](docs/ADR/0003-risk-classification-and-approval.md) and [ADR 0008](docs/ADR/0008-cli-and-local-execution.md) for policy and execution semantics.
 
 The subprocess backend runs host commands with the current user's permissions. Approval policies, timeouts, and output limits do not provide OS isolation or filesystem containment. Treat model-generated commands as untrusted; see [Security](SECURITY.md).
 
