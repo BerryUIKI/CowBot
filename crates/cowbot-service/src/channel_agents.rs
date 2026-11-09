@@ -14,6 +14,7 @@ use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
 use crate::channels::ChannelService;
+use crate::conversations::ConversationService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 
 /// How many channel messages are used as conversation context for one turn.
@@ -66,11 +67,17 @@ pub struct ChannelAgentService {
     store: Store,
     workspace_id: WorkspaceId,
     channels: ChannelService,
+    conversations: ConversationService,
 }
 
 impl ChannelAgentService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
         Self {
+            conversations: ConversationService::new(
+                store.clone(),
+                bus.clone(),
+                workspace_id.clone(),
+            ),
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
@@ -97,6 +104,16 @@ impl ChannelAgentService {
                 "channel '{channel_id}' was not found"
             )));
         };
+
+        // User-created conversations have their own participant set, fixed
+        // model, and append-only context branch.
+        if channel.is_conversation() {
+            return self
+                .conversations
+                .reply(channel_id, message, llm, tools, options)
+                .await;
+        }
+
         let agents = self.store.list_agents(&self.workspace_id).await?;
         let direct = channel.agent_id.is_some();
 
@@ -225,7 +242,7 @@ impl ChannelAgentService {
     }
 
     /// Environment shared by every channel turn.
-    fn platform_context(agents: &[AgentProfile]) -> String {
+    pub(crate) fn platform_context(agents: &[AgentProfile]) -> String {
         let mut roster = agents
             .iter()
             .take(20)

@@ -18,7 +18,7 @@ use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::tool::{ToolCall, ToolCallRecorder, ToolGate, ToolResult};
 use cowbot_core::usage::{LlmCallRecord, LlmCallUsage, LlmUsageRecorder};
-use cowbot_llm::LlmProvider;
+use cowbot_llm::{ChatMessage, LlmProvider};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 use tokio::sync::Semaphore;
@@ -26,6 +26,16 @@ use tokio::task::JoinSet;
 
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
+
+/// A conversation turn whose model request is assembled before the assignment
+/// is enqueued. The per-agent context branch receives the assistant and tool
+/// messages the agent produces.
+#[derive(Clone)]
+struct PreparedConversationTurn {
+    messages: Vec<ChatMessage>,
+    channel_id: ChannelId,
+    agent_id: AgentId,
+}
 
 /// Options for one scheduled crew run.
 #[derive(Debug, Clone)]
@@ -62,6 +72,7 @@ impl AgentExecution {
     ///
     /// A new instance per call keeps assignment execution independent, which
     /// lets independent roots run concurrently.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         task: &Task,
@@ -70,7 +81,8 @@ impl AgentExecution {
         gate: Arc<dyn ToolGate>,
         recorder: Arc<dyn ToolCallRecorder>,
         usage_recorder: Arc<dyn LlmUsageRecorder>,
-    ) -> CowResult<String> {
+        conversation: Option<Vec<ChatMessage>>,
+    ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
             self.llm.clone(),
@@ -80,7 +92,53 @@ impl AgentExecution {
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
         agent.set_usage_recorder(Some(usage_recorder));
-        agent.execute_task(task, context, bus).await
+
+        match conversation {
+            Some(messages) => {
+                let collector = Arc::new(CollectingConversation::new());
+                agent.set_conversation_recorder(Some(collector.clone()));
+                let output = agent.execute_messages(task, messages, bus).await?;
+                Ok((output, Some(collector.messages())))
+            }
+            None => {
+                let output = agent.execute_task(task, context, bus).await?;
+                Ok((output, None))
+            }
+        }
+    }
+}
+
+/// Collects the messages an agent appends during a conversation turn.
+///
+/// The scheduler writes them to the context branch only after the turn
+/// succeeds, so a failed turn never leaves an assistant tool call without its
+/// tool results in the branch.
+struct CollectingConversation {
+    messages: StdMutex<Vec<ChatMessage>>,
+}
+
+impl CollectingConversation {
+    fn new() -> Self {
+        Self {
+            messages: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn messages(&self) -> Vec<ChatMessage> {
+        self.messages
+            .lock()
+            .map(|messages| messages.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl cowbot_agent::ConversationRecorder for CollectingConversation {
+    async fn record_message(&self, message: &ChatMessage) -> CowResult<()> {
+        if let Ok(mut messages) = self.messages.lock() {
+            messages.push(message.clone());
+        }
+        Ok(())
     }
 }
 
@@ -98,6 +156,8 @@ pub struct AssignmentScheduler {
     max_concurrency: usize,
     /// When set, only assignments rooted in a task enqueued here are claimed.
     scope: Option<Arc<StdMutex<HashSet<AssignmentId>>>>,
+    /// Model requests prepared for conversation turns, keyed by task id.
+    prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
 }
 
 enum Claim {
@@ -127,6 +187,7 @@ impl AssignmentScheduler {
             executions: HashMap::new(),
             max_concurrency,
             scope: None,
+            prepared: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -197,6 +258,43 @@ impl AssignmentScheduler {
             }
         }
         Ok(assignment)
+    }
+
+    /// Enqueue a conversation turn that runs against a caller-assembled request.
+    ///
+    /// The assistant and tool messages produced by the turn are appended to the
+    /// conversation's context branch when the assignment completes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_conversation_turn(
+        &self,
+        task: &Task,
+        requester: AssignmentRequester,
+        origin: AssignmentOrigin,
+        options: &CrewRunOptions,
+        messages: Vec<ChatMessage>,
+        channel_id: ChannelId,
+        agent_id: AgentId,
+    ) -> CowResult<Assignment> {
+        if let Ok(mut prepared) = self.prepared.lock() {
+            prepared.insert(
+                task.id.clone(),
+                PreparedConversationTurn {
+                    messages,
+                    channel_id,
+                    agent_id,
+                },
+            );
+        }
+
+        match self.enqueue(task, requester, origin, options).await {
+            Ok(assignment) => Ok(assignment),
+            Err(error) => {
+                if let Ok(mut prepared) = self.prepared.lock() {
+                    prepared.remove(&task.id);
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn enqueue_untracked(
@@ -441,6 +539,11 @@ impl AssignmentScheduler {
             return Err(CowError::Agent(reason));
         };
         let context = self.context_for(&assignment, &task).await?;
+        let prepared = self
+            .prepared
+            .lock()
+            .ok()
+            .and_then(|mut prepared| prepared.remove(&task.id));
 
         self.assignments.start(&assignment.id).await?;
 
@@ -460,8 +563,10 @@ impl AssignmentScheduler {
             run_id: run.id.clone(),
             task_id: task.id.clone(),
             agent_id: assignment.assignee.clone(),
+            channel_id: task.channel_id.clone(),
         });
 
+        let messages = prepared.as_ref().map(|turn| turn.messages.clone());
         match executor
             .execute(
                 &task,
@@ -470,10 +575,30 @@ impl AssignmentScheduler {
                 gate,
                 recorder,
                 usage_recorder,
+                messages,
             )
             .await
         {
-            Ok(output) => {
+            Ok((output, recorded)) => {
+                if let (Some(turn), Some(messages)) = (&prepared, recorded) {
+                    let entries =
+                        context_entries_from_messages(&turn.channel_id, &turn.agent_id, &messages);
+                    if let Err(error) = self
+                        .assignments
+                        .store()
+                        .append_context_entries(&entries)
+                        .await
+                    {
+                        self.assignments
+                            .store()
+                            .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
+                            .await?;
+                        self.assignments
+                            .fail(&assignment.id, error.to_string())
+                            .await?;
+                        return Err(error);
+                    }
+                }
                 self.assignments
                     .store()
                     .update_run_status(&run.id, RunStatus::Completed, Some(Utc::now()))
@@ -564,6 +689,7 @@ struct RunUsageRecorder {
     run_id: RunId,
     task_id: TaskId,
     agent_id: AgentId,
+    channel_id: Option<ChannelId>,
 }
 
 #[async_trait]
@@ -572,9 +698,50 @@ impl LlmUsageRecorder for RunUsageRecorder {
         let mut record = LlmCallRecord::new(call.call_kind, call.model.clone());
         record.run_id = Some(self.run_id.clone());
         record.task_id = Some(self.task_id.clone());
+        record.channel_id = self.channel_id.clone();
         record.agent_id = Some(self.agent_id.clone());
         record.usage = call.usage.clone();
         record.raw_usage = call.raw_usage.clone();
         self.store.record_llm_call(&record).await
     }
+}
+
+/// Convert the messages an agent appended into context branch entries.
+fn context_entries_from_messages(
+    channel_id: &ChannelId,
+    agent_id: &AgentId,
+    messages: &[ChatMessage],
+) -> Vec<cowbot_core::conversation::ContextEntry> {
+    messages
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                cowbot_llm::ChatRole::System => cowbot_core::conversation::ContextRole::System,
+                cowbot_llm::ChatRole::User => cowbot_core::conversation::ContextRole::User,
+                cowbot_llm::ChatRole::Assistant => {
+                    cowbot_core::conversation::ContextRole::Assistant
+                }
+                cowbot_llm::ChatRole::Tool => cowbot_core::conversation::ContextRole::Tool,
+            };
+            let mut entry = cowbot_core::conversation::ContextEntry::new(
+                channel_id.clone(),
+                agent_id.clone(),
+                role,
+                message.content.clone(),
+            );
+            entry.tool_calls = message.tool_calls.as_ref().map(|calls| {
+                calls
+                    .iter()
+                    .map(|call| cowbot_core::conversation::ContextToolCall {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                    .collect()
+            });
+            entry.tool_call_id = message.tool_call_id.clone();
+            entry.recount();
+            entry
+        })
+        .collect()
 }
