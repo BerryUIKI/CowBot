@@ -440,7 +440,10 @@ impl ApprovalService {
                 self.workspace_id.clone(),
                 actor,
                 "tool.model_fallback",
-                format!("{} ({}) fell back to human approval: {error}", call.name, call.id),
+                format!(
+                    "{} ({}) fell back to human approval: {error}",
+                    call.name, call.id
+                ),
             ))
             .await
     }

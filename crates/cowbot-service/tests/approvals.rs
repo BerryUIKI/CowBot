@@ -175,7 +175,10 @@ async fn model_allow_auto_approves_a_mutating_call() {
         .await
         .unwrap();
 
-    assert_eq!(authorization, ToolAuthorization::Approved { approved_by: None });
+    assert_eq!(
+        authorization,
+        ToolAuthorization::Approved { approved_by: None }
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let events = store.list_audit_events(&workspace_id, 20).await.unwrap();
     assert!(events

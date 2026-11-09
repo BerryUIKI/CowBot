@@ -96,16 +96,12 @@ impl PermissionEvaluator for ModelPermissionEvaluator {
             temperature: Some(0.0),
         };
 
-        let response = match tokio::time::timeout(
-            self.timeout,
-            self.llm.chat_complete(&completion),
-        )
-        .await
-        {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => return Ok(fallback(format!("evaluator failed: {error}"))),
-            Err(_) => return Ok(fallback("evaluator timed out".to_string())),
-        };
+        let response =
+            match tokio::time::timeout(self.timeout, self.llm.chat_complete(&completion)).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => return Ok(fallback(format!("evaluator failed: {error}"))),
+                Err(_) => return Ok(fallback("evaluator timed out".to_string())),
+            };
 
         let Some(content) = response.content else {
             return Ok(fallback("evaluator returned no decision".to_string()));
@@ -113,8 +109,7 @@ impl PermissionEvaluator for ModelPermissionEvaluator {
         let Some(mut decision) = parse_decision(&content, &self.model) else {
             return Ok(fallback("evaluator returned invalid JSON".to_string()));
         };
-        if decision.decision != PermissionDecisionKind::Ask
-            && decision.confidence < MIN_CONFIDENCE
+        if decision.decision != PermissionDecisionKind::Ask && decision.confidence < MIN_CONFIDENCE
         {
             return Ok(fallback(format!(
                 "evaluator confidence {:.2} is below {:.2}",
