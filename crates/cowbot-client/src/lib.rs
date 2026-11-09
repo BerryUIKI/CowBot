@@ -11,6 +11,9 @@ use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::conversation::{
+    ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+};
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
@@ -122,6 +125,7 @@ pub trait Client: Send + Sync {
     fn subscribe(&self) -> EventStream;
 
     async fn list_channels(&self) -> CowResult<Vec<Channel>>;
+    async fn get_channel(&self, channel_id: &ChannelId) -> CowResult<Option<Channel>>;
     async fn create_channel(&self, name: &str, topic: &str) -> CowResult<Channel>;
     async fn rename_channel(
         &self,
@@ -148,6 +152,34 @@ pub trait Client: Send + Sync {
         channel_id: &ChannelId,
         limit: u32,
     ) -> CowResult<Vec<ChannelMessage>>;
+
+    /// Create a user-created single-agent conversation.
+    ///
+    /// `provider_id` is the configured provider that supplies `model`; the pair
+    /// stays fixed for the conversation.
+    async fn create_conversation(
+        &self,
+        title: Option<&str>,
+        agent_id: &AgentId,
+        provider_id: Option<String>,
+        model: &str,
+    ) -> CowResult<Channel>;
+    async fn conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<ConversationSettings>;
+    async fn update_conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+        update: &ConversationSettingsUpdate,
+    ) -> CowResult<ConversationSettings>;
+    /// Token breakdown and cache summaries of a conversation context.
+    async fn conversation_context(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<ConversationContext>;
+    /// Exclude every active context entry; display messages are kept.
+    async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;
