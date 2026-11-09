@@ -8,6 +8,7 @@ import type {
   ToolCallRecord,
 } from "./types";
 import { formatDateTime, formatTime } from "./format";
+import RichText from "./RichText";
 
 export interface AssignmentWithEvents {
   assignment: Assignment;
@@ -124,7 +125,7 @@ export default function TaskDetail({
       {typeof task.status === "object" && "completed" in task.status ? (
         <section className="task-result">
           <h3>Deliverable</h3>
-          <pre>{task.status.completed.output}</pre>
+          <RichText content={task.status.completed.output} />
         </section>
       ) : null}
       {typeof task.status === "object" && "failed" in task.status ? (

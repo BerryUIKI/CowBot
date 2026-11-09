@@ -154,6 +154,13 @@ agent editor is not part of this release.
   conversations cannot be deleted from the channel list.
 - **Search** — the field above the sidebar list filters agents, channels, and
   tasks by name.
+- **Rich answers** — agent and user messages render Markdown: headings, lists,
+  tables, code blocks, and links. Links open in your system browser. A fenced
+  `html` code block appears as an **HTML preview** card with **Preview**,
+  **Code**, and **Expand**; the preview runs in a sandbox that permits inline
+  CSS and JavaScript but blocks network access, external images, form
+  submission, and access to the app. Use it for interactive results such as
+  forms, calculators, or small dashboards.
 - **Approval** — the dropdown in the conversation header sets the approval
   policy for answers in that conversation. It uses the same policies as tasks,
   so a risky tool call raised while an agent answers appears in **Approvals**.
@@ -312,6 +319,9 @@ reporting, see [SECURITY.md](../SECURITY.md).
 - Channel answers are one turn per addressed agent: no threads as conversation
   scope, no proactive agent replies to unmentioned messages in group channels,
   and no streaming.
+- HTML previews cannot reach the network, external images, or the app, and a
+  button inside one cannot send a message back to the agent yet. Reply in the
+  composer after using the preview.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
 - No streaming responses, retries, rate limiting, or token accounting.

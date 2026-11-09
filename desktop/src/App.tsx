@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -10,6 +10,7 @@ import Avatar from "./Avatar";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
+import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView from "./SettingsView";
 import TaskDetail from "./TaskDetail";
@@ -48,7 +49,7 @@ import {
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
-import { formatListTime, formatTime } from "./format";
+import { dayKey, formatDayLabel, formatListTime, formatTime } from "./format";
 import type {
   AgentProfile,
   Approval,
@@ -113,6 +114,19 @@ function senderLabel(
 function agentName(agents: AgentProfile[], id: string | null): string {
   if (!id) return "Unassigned";
   return agents.find((agent) => agent.id === id)?.name ?? `Agent ${id.slice(0, 8)}`;
+}
+
+/** Compact plain text for sidebar previews; strips Markdown and HTML. */
+function plainTextPreview(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, " [code] ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_~#>]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function mentionedNames(content: string): string[] {
@@ -905,6 +919,27 @@ export default function App() {
       ? `#${selectedChannel.name}`
       : "your team";
 
+  function previewSnippet(message: ChannelMessage, channel: Channel): string {
+    const text = plainTextPreview(message.content);
+    const fromOwnAgent =
+      channel.agent_id !== null &&
+      message.sender.type === "Agent" &&
+      message.sender.id === channel.agent_id;
+    return fromOwnAgent
+      ? text
+      : `${senderLabel(message, session, agents)}: ${text}`;
+  }
+
+  const renderedMessages = useMemo(() => {
+    let lastDay = "";
+    return messages.map((message) => {
+      const day = dayKey(message.created_at);
+      const separator = day !== lastDay ? day : null;
+      lastDay = day;
+      return { message, separator };
+    });
+  }, [messages]);
+
   const menuAgent = menu?.agent ?? null;
   const menuItems: ContextMenuItem[] = menu
     ? menu.kind === "agent"
@@ -1022,9 +1057,7 @@ export default function App() {
                                 </time>
                               </span>
                               <span className="contact-snippet">
-                                {preview
-                                  ? `${senderLabel(preview, session, agents)}: ${preview.content}`
-                                  : agent.role}
+                                {preview ? previewSnippet(preview, channel) : agent.role}
                               </span>
                             </span>
                           </button>
@@ -1083,7 +1116,7 @@ export default function App() {
                                 </span>
                                 <span className="contact-snippet">
                                   {preview
-                                    ? `${senderLabel(preview, session, agents)}: ${preview.content}`
+                                    ? previewSnippet(preview, channel)
                                     : channel.topic || "No messages yet"}
                                 </span>
                               </span>
@@ -1370,42 +1403,56 @@ export default function App() {
                   </div>
                 ) : (
                   <ol className="chat-messages">
-                    {messages.map((message) => {
-                      if (message.sender.type === "System") {
-                        return (
-                          <li className="chat-system" key={message.id}>
-                            {message.content}
+                    {renderedMessages.map(({ message, separator }) => (
+                      <Fragment key={message.id}>
+                        {separator ? (
+                          <li className="chat-day">
+                            {formatDayLabel(message.created_at)}
                           </li>
-                        );
-                      }
-
-                      const fromUser = message.sender.type === "User";
-                      const name = senderLabel(message, session, agents);
-                      return (
-                        <li
-                          className={`chat-row ${fromUser ? "chat-row-user" : "chat-row-agent"}`}
-                          key={message.id}
-                        >
-                          {fromUser ? null : <Avatar name={name} kind="agent" size="small" />}
-                          <div className="chat-bubble-wrap">
-                            {fromUser ? null : <span className="chat-sender">{name}</span>}
-                            <div
-                              className={`chat-bubble ${
-                                fromUser ? "chat-bubble-user" : "chat-bubble-agent"
-                              }`}
-                            >
-                              {message.content}
+                        ) : null}
+                        {message.sender.type === "System" ? (
+                          <li className="chat-system">{message.content}</li>
+                        ) : (
+                          <li
+                            className={`chat-row ${
+                              message.sender.type === "User"
+                                ? "chat-row-user"
+                                : "chat-row-agent"
+                            }`}
+                          >
+                            {message.sender.type === "User" ? null : (
+                              <Avatar
+                                name={senderLabel(message, session, agents)}
+                                kind="agent"
+                                size="small"
+                              />
+                            )}
+                            <div className="chat-bubble-wrap">
+                              {message.sender.type === "User" ? null : (
+                                <span className="chat-sender">
+                                  {senderLabel(message, session, agents)}
+                                </span>
+                              )}
+                              <div
+                                className={`chat-bubble ${
+                                  message.sender.type === "User"
+                                    ? "chat-bubble-user"
+                                    : "chat-bubble-agent"
+                                }`}
+                              >
+                                <RichText content={message.content} />
+                              </div>
+                              <span className="chat-meta">
+                                <time dateTime={message.created_at}>
+                                  {formatTime(message.created_at)}
+                                </time>
+                                {message.thread_id ? " · In a thread" : null}
+                              </span>
                             </div>
-                            <span className="chat-meta">
-                              <time dateTime={message.created_at}>
-                                {formatTime(message.created_at)}
-                              </time>
-                              {message.thread_id ? " · In a thread" : null}
-                            </span>
-                          </div>
-                        </li>
-                      );
-                    })}
+                          </li>
+                        )}
+                      </Fragment>
+                    ))}
                     {replyingHere
                       ? pendingReply.agents.map((agent) => (
                           <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>

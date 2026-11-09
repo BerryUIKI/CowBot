@@ -27,6 +27,10 @@ running agents), and **Settings** (with **Model**, **Team**, **Workspace**, and
 and transfer, and version and update controls) are reached from the sidebar
 footer. A message in an agent's conversation reaches it without an `@mention`;
 group channels keep mention-driven replies (ADR-0022, ADR-0024, ADR-0026).
+Messages and task deliverables render Markdown and sanitized inline HTML;
+fenced `html` blocks open as sandboxed HTML artifacts with a Preview/Code
+toggle, where inline scripts run but network access, external images, forms,
+and the app itself stay out of reach (ADR-0027).
 
 Model providers are OpenAI Chat Completions, Anthropic Messages, or OpenAI
 Responses endpoints kept in `config.json` under the same app-data directory as
