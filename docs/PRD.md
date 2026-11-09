@@ -142,7 +142,7 @@ CowBot follows a "single core, two forms" model:
 | Agent management | Create/edit agents (role, goal, backstory, model, tools, iteration limit) |
 | Tasks and orchestration | Task creation, assignment runtime (lifecycle, event log, budgets, restart reconciliation), sequential crew execution, deliverables, run and tool-call history, and status transitions |
 | Tools and sandbox | Code execution, file read/write; timeouts, output truncation, working-directory limits |
-| Approval policy | Modes (Ask / SafeAuto / PlanOnly / Trusted); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; tool/command/path allowlists |
+| Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; tool/command/path allowlists |
 | Model configuration | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints (cloud APIs and local models), protocol selection, connection test |
 | Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, and approval records |
 | CLI | `cowbot` retained for initialization, diagnostics, headless runs, and debugging |
@@ -187,7 +187,7 @@ CowBot follows a "single core, two forms" model:
 2. Desktop console form factor: desktop shell (Tauri).
 3. Deployment: desktop app (optionally serverless) plus self-hosted server (Docker/single binary).
 4. General work has no fixed scenarios; only configurable primitives and templates are provided, preserving freedom.
-5. Approvals offer multiple modes (Ask by default, auto-approve safe operations, plan-only, trusted) with fine-grained rules.
+5. Approvals offer five modes (Manual by default, auto, accept edits, plan, bypass) with fine-grained rules.
 6. Built-in agent and team template library.
 7. v1 orchestration scope: single agent + sequential crew; hierarchical manager and DAG are P1.
 8. v1 memory scope: session plus channel/task history; project-level long-term memory is P1.

@@ -16,7 +16,9 @@ mod task_service;
 mod templates;
 
 pub use agents::{AgentService, AgentUpdate};
-pub use approvals::{decision_for, ApprovalDecision, ApprovalService, ScopedApprovalGate};
+pub use approvals::{
+    decision_for, decision_for_call, ApprovalDecision, ApprovalService, ScopedApprovalGate,
+};
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
 pub use channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};

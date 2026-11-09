@@ -18,7 +18,7 @@ The CLI reads an optional TOML file:
 db = "cowbot.db"
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
-approval = "ask"       # ask | safe-auto | plan-only | trusted
+approval = "ask"       # ask | accept-edits | safe-auto | plan-only | trusted
 concurrency = 4        # cross-root concurrency limit
 ```
 
