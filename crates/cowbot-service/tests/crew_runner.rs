@@ -12,6 +12,7 @@ use cowbot_core::error::CowError;
 use cowbot_core::run::RunStatus;
 use cowbot_core::task::Task;
 use cowbot_core::tool::{Tool, ToolCall, ToolResult};
+use cowbot_core::usage::{LlmCallKind, TokenUsage};
 use cowbot_llm::{ChatCompletionResponse, LlmToolCall, MockLlmProvider};
 use cowbot_service::{bootstrap_local, ApprovalService, CrewRunner};
 use cowbot_store::Store;
@@ -141,6 +142,12 @@ async fn failed_task_leaves_a_failed_run() {
             arguments: json!({ "command": "echo hi" }),
         }],
         finish_reason: Some("tool_calls".to_string()),
+        usage: Some(TokenUsage {
+            uncached_input_tokens: 321,
+            output_tokens: 12,
+            ..TokenUsage::default()
+        }),
+        raw_usage: None,
     }]));
 
     let mut crew = Crew::new();
@@ -170,9 +177,62 @@ async fn failed_task_leaves_a_failed_run() {
     assert_eq!(runs[0].status, RunStatus::Failed);
     assert!(runs[0].finished_at.is_some());
 
+    let calls = store.list_llm_calls_for_run(&runs[0].id).await.unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_kind, LlmCallKind::Agent);
+    assert_eq!(calls[0].usage.as_ref().unwrap().uncached_input_tokens, 321);
+
     let assignments = store.list_assignments_for_task(&task_id).await.unwrap();
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].status, AssignmentStatus::Failed);
+}
+
+#[tokio::test]
+async fn crew_runner_records_usage_for_a_completed_task() {
+    let store = Store::connect_in_memory().await.unwrap();
+    store.migrate().await.unwrap();
+    let context = bootstrap_local(&store).await.unwrap();
+    let bus = EventBus::default_bus();
+    let runner = CrewRunner::new(store.clone(), bus);
+
+    let profile = StandardRoles::coder();
+    let agent_id = profile.id.clone();
+    let llm = Arc::new(MockLlmProvider::echo());
+
+    let mut crew = Crew::new();
+    crew.add_agent(AgentInstance::new(
+        profile,
+        llm,
+        ToolRegistry::new(),
+        "mock-model",
+    ));
+    let task = Task::new("Write a summary", "Summary").assign_to(agent_id.clone());
+    let task_id = task.id.clone();
+    crew.add_task(task);
+
+    runner
+        .run(
+            &mut crew,
+            &context.workspace.id,
+            AssignmentRequester::User(context.user.id.0.clone()),
+            AssignmentOrigin::User,
+            ApprovalLevel::Trusted,
+        )
+        .await
+        .unwrap();
+
+    let runs = store.list_runs(&task_id).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    let calls = store.list_llm_calls_for_run(&runs[0].id).await.unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].agent_id, Some(agent_id));
+    assert_eq!(calls[0].model, "mock-model");
+    assert!(calls[0].usage.is_some());
+
+    let totals = store.sum_llm_usage_for_task(&task_id).await.unwrap();
+    assert_eq!(totals.calls, 1);
+    assert!(totals.total_input_tokens() > 0);
+    assert!(totals.output_tokens > 0);
 }
 
 #[tokio::test]
@@ -192,11 +252,15 @@ async fn crew_runner_records_tool_calls() {
                 arguments: json!({ "value": "hi" }),
             }],
             finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            raw_usage: None,
         },
         ChatCompletionResponse {
             content: Some("finished".to_string()),
             tool_calls: Vec::new(),
             finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
         },
     ];
     let llm = Arc::new(MockLlmProvider::new(responses));
@@ -255,11 +319,15 @@ async fn crew_runner_records_the_human_approver() {
                 arguments: json!({ "value": "hi" }),
             }],
             finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            raw_usage: None,
         },
         ChatCompletionResponse {
             content: Some("finished".to_string()),
             tool_calls: Vec::new(),
             finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
         },
     ];
     let llm = Arc::new(MockLlmProvider::new(responses));

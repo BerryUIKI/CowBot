@@ -12,6 +12,7 @@ pub mod run;
 pub mod task;
 pub mod template;
 pub mod tool;
+pub mod usage;
 
 pub use agent::{AgentId, AgentProfile};
 pub use approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
@@ -35,3 +36,7 @@ pub use template::{
     AgentTemplate, TaskTemplate, Template, TemplateDocument, TemplateKind, TEMPLATE_SCHEMA_VERSION,
 };
 pub use tool::{Tool, ToolAuthorization, ToolCall, ToolDefinition, ToolGate, ToolResult};
+pub use usage::{
+    estimate_json_tokens, estimate_tokens, LlmCallKind, LlmCallRecord, LlmCallUsage,
+    LlmUsageRecorder, TokenUsage, UsageTotals,
+};

@@ -12,6 +12,7 @@ import type {
   ChannelMessage,
   ClientSession,
   CowEvent,
+  ModelMetadata,
   ModelSettings,
   OnboardingState,
   ProviderProtocol,
@@ -185,6 +186,7 @@ export function saveModelProvider(input: {
   baseUrl: string;
   models: string[];
   model: string;
+  modelMetadata: Record<string, ModelMetadata>;
   apiKey: string;
   clearApiKey: boolean;
 }): Promise<ModelSettings> {
@@ -196,6 +198,7 @@ export function saveModelProvider(input: {
       baseUrl: input.baseUrl,
       models: input.models,
       model: input.model,
+      modelMetadata: input.modelMetadata,
       apiKey: input.apiKey,
       clearApiKey: input.clearApiKey,
     },

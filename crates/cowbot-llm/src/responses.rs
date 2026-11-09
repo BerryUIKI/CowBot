@@ -11,6 +11,7 @@ use crate::types::{
 };
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::usage::TokenUsage;
 use serde_json::{json, Value};
 use tracing::{debug, error};
 
@@ -115,6 +116,7 @@ fn request_body(request: &ChatCompletionRequest) -> Value {
 }
 
 fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
+    let raw_usage = value.get("usage").cloned();
     let output = value
         .get("output")
         .and_then(Value::as_array)
@@ -184,6 +186,45 @@ fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
         content,
         tool_calls,
         finish_reason,
+        usage: raw_usage.as_ref().and_then(parse_usage),
+        raw_usage,
+    })
+}
+
+fn token_field(value: &Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
+}
+
+/// Responses input tokens include cached tokens, so the uncached share is the
+/// difference.
+fn parse_usage(raw: &Value) -> Option<TokenUsage> {
+    let input = token_field(raw, "input_tokens");
+    let output = token_field(raw, "output_tokens");
+    let cached = raw
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32);
+    let reasoning = raw
+        .pointer("/output_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32);
+
+    if input.is_none() && output.is_none() && cached.is_none() && reasoning.is_none() {
+        return None;
+    }
+
+    let cached = cached.unwrap_or(0);
+    let uncached = input.unwrap_or(0).saturating_sub(cached);
+
+    Some(TokenUsage {
+        uncached_input_tokens: uncached,
+        cached_input_tokens: cached,
+        cache_write_input_tokens: 0,
+        output_tokens: output.unwrap_or(0),
+        reasoning_tokens: reasoning.unwrap_or(0),
     })
 }
 
@@ -375,6 +416,34 @@ mod tests {
         assert_eq!(response.tool_calls[0].name, "run");
         assert_eq!(response.tool_calls[0].arguments, json!({"cmd": "ls"}));
         assert_eq!(response.finish_reason.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn parses_usage_with_cached_and_reasoning_tokens() {
+        let usage_json = json!({
+            "input_tokens": 1000,
+            "output_tokens": 50,
+            "input_tokens_details": {"cached_tokens": 400},
+            "output_tokens_details": {"reasoning_tokens": 10}
+        });
+        let payload = json!({
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Hello."}]
+            }],
+            "usage": usage_json
+        });
+
+        let response = parse_response(payload).unwrap();
+        let usage = response.usage.expect("usage should parse");
+
+        assert_eq!(usage.uncached_input_tokens, 600);
+        assert_eq!(usage.cached_input_tokens, 400);
+        assert_eq!(usage.cache_write_input_tokens, 0);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.reasoning_tokens, 10);
+        assert_eq!(response.raw_usage, Some(usage_json));
     }
 
     #[test]

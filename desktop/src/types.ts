@@ -197,6 +197,11 @@ export interface TemplateDocument {
 
 export type ProviderProtocol = "openai" | "anthropic" | "openai-responses";
 
+export interface ModelMetadata {
+  context_window?: number;
+  max_output_tokens?: number;
+}
+
 export interface ModelProvider {
   id: string;
   name: string;
@@ -204,6 +209,7 @@ export interface ModelProvider {
   base_url: string;
   models: string[];
   model: string;
+  model_metadata: Record<string, ModelMetadata>;
   has_api_key: boolean;
   active: boolean;
 }

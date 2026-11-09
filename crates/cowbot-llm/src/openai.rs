@@ -3,6 +3,7 @@ use crate::provider::LlmProvider;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, LlmToolCall};
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::usage::TokenUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{debug, error};
@@ -55,6 +56,8 @@ struct OpenAiChatRequest<'a> {
 #[derive(Deserialize)]
 struct OpenAiChatResponse {
     choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +82,62 @@ struct OpenAiRawToolCall {
 struct OpenAiRawFunction {
     name: String,
     arguments: String,
+}
+
+fn token_field(value: &Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
+}
+
+/// Normalize an OpenAI-compatible usage object.
+///
+/// `prompt_tokens` includes cached tokens, so the uncached share is the
+/// difference. DeepSeek additionally reports hit and miss tokens; those win
+/// when present.
+fn parse_usage(raw: &Value) -> Option<TokenUsage> {
+    let prompt = token_field(raw, "prompt_tokens");
+    let hit = token_field(raw, "prompt_cache_hit_tokens");
+    let miss = token_field(raw, "prompt_cache_miss_tokens");
+    let detail_cached = raw
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32);
+    let output = token_field(raw, "completion_tokens");
+    let reasoning = raw
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32);
+
+    if prompt.is_none()
+        && hit.is_none()
+        && miss.is_none()
+        && detail_cached.is_none()
+        && output.is_none()
+    {
+        return None;
+    }
+
+    let mut cached = hit.or(detail_cached).unwrap_or(0);
+    let mut uncached = match miss {
+        Some(miss) => miss,
+        None => prompt.unwrap_or(0).saturating_sub(cached),
+    };
+    if let Some(prompt) = prompt {
+        if cached > prompt {
+            cached = prompt;
+            uncached = 0;
+        }
+    }
+
+    Some(TokenUsage {
+        uncached_input_tokens: uncached,
+        cached_input_tokens: cached,
+        cache_write_input_tokens: 0,
+        output_tokens: output.unwrap_or(0),
+        reasoning_tokens: reasoning.unwrap_or(0),
+    })
 }
 
 #[async_trait]
@@ -146,8 +205,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .await
             .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
 
-        let choice = resp_json
-            .choices
+        let OpenAiChatResponse {
+            choices,
+            usage: raw_usage,
+        } = resp_json;
+        let choice = choices
             .into_iter()
             .next()
             .ok_or_else(|| CowError::Llm("No choices in chat response".to_string()))?;
@@ -169,6 +231,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
             content: choice.message.content,
             tool_calls,
             finish_reason: choice.finish_reason,
+            usage: raw_usage.as_ref().and_then(parse_usage),
+            raw_usage,
         })
     }
 
@@ -222,5 +286,56 @@ mod tests {
             OpenAiCompatibleProvider::new("https://api.deepseek.com/", None).models_url(),
             "https://api.deepseek.com/models"
         );
+    }
+
+    #[test]
+    fn parses_openai_usage_with_cached_tokens() {
+        let usage = parse_usage(&json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 5}
+        }))
+        .expect("usage should parse");
+
+        assert_eq!(usage.uncached_input_tokens, 60);
+        assert_eq!(usage.cached_input_tokens, 40);
+        assert_eq!(usage.cache_write_input_tokens, 0);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 5);
+    }
+
+    #[test]
+    fn parses_deepseek_cache_hit_and_miss_tokens() {
+        let usage = parse_usage(&json!({
+            "prompt_tokens": 120,
+            "completion_tokens": 10,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 40
+        }))
+        .expect("usage should parse");
+
+        assert_eq!(usage.uncached_input_tokens, 40);
+        assert_eq!(usage.cached_input_tokens, 80);
+        assert_eq!(usage.output_tokens, 10);
+    }
+
+    #[test]
+    fn missing_or_malformed_usage_is_none() {
+        assert!(parse_usage(&json!({})).is_none());
+        assert!(parse_usage(&json!({"prompt_tokens": "many"})).is_none());
+    }
+
+    #[test]
+    fn cached_tokens_larger_than_the_prompt_are_clamped() {
+        let usage = parse_usage(&json!({
+            "prompt_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 70}
+        }))
+        .expect("usage should parse");
+
+        assert_eq!(usage.uncached_input_tokens, 0);
+        assert_eq!(usage.cached_input_tokens, 50);
     }
 }

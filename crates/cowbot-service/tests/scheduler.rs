@@ -62,6 +62,8 @@ impl LlmProvider for SlowCountingLlm {
             content: Some("completed".to_string()),
             tool_calls: Vec::new(),
             finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
         })
     }
 }

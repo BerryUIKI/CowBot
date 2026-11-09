@@ -13,6 +13,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 | Community | [Code of Conduct](../CODE_OF_CONDUCT.md) and [security reporting](../SECURITY.md) |
 | Product contributors | [PRD](PRD.md) and [roadmap](ROADMAP.md) |
 | Architecture contributors | [Target architecture](ARCHITECTURE.md) and [decision records](ADR/README.md) |
+| Planned context management | [M1 usage accounting plan](plans/M1-usage-accounting.md) and [ADR-0029](ADR/0029-token-usage-accounting.md) |
 
 ## Reading design documents
 
