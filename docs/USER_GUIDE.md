@@ -276,6 +276,12 @@ cowbot import --input my-workspace.cowpkg --db other.db
 - **A workspace cannot be switched** — finish or cancel running tasks first.
 - **A workspace shows Missing** — its database file was moved or deleted; remove
   it from the registry by restarting, or restore the file.
+- **A migration checksum error appears** — earlier builds on Windows could
+  record migration checksums for CRLF line endings. Current builds repair that
+  case automatically after validating the schema and keep all workspace data.
+  If the message persists, back up the workspace database file with its
+  `-wal`/`-shm` sidecars and report the message; do not delete rows from
+  `_sqlx_migrations` by hand.
 - **Package import fails** — the package may be corrupt, from an unsupported
   schema version, or larger than 512 MB.
 - **An update check fails** — CowBot needs to reach `github.com`. Check the

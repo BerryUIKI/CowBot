@@ -6,6 +6,7 @@
 //! [`Store::migrate`].
 
 mod error;
+mod migrate;
 mod repos;
 mod store;
 

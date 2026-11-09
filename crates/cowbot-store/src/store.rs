@@ -46,11 +46,12 @@ impl Store {
     }
 
     /// Apply all embedded migrations.
+    ///
+    /// A database whose recorded migration checksums differ only by line
+    /// endings (LF versus CRLF) is repaired after its schema is validated;
+    /// see [`crate::migrate`].
     pub async fn migrate(&self) -> CowResult<()> {
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
-            .await
-            .map_err(|err| CowError::Storage(err.to_string()))
+        crate::migrate::run(&self.pool).await
     }
 
     pub fn pool(&self) -> &SqlitePool {
