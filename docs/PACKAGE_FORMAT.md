@@ -40,7 +40,8 @@ serialize.
 - `workspace.json`: `id`, `name`, `created_at`.
 - `agents.json`: array of agent profiles.
 - `templates.json`: array of template documents.
-- `channels.jsonl`: one channel per line.
+- `channels.jsonl`: one channel per line; an optional `agent_id` marks the
+  agent's direct conversation (ADR-0024).
 - `messages.jsonl`: one channel message per line, sorted by `created_at`.
 - `tasks.json`: array of tasks.
 - `runs.jsonl`: one run per line.
@@ -57,6 +58,9 @@ and any environment variables. Credentials are reconfigured after import.
   and every checksum is verified before anything is written.
 - A new workspace is created with a fresh id and the name suffixed
   `(imported)`. Messages and templates keep their original ids.
+- Package files written before agent direct conversations existed have no
+  `agent_id` on their channels; they import as group channels, and the desktop
+  provisions the missing conversations on first launch.
 - The importing user is created as the owner of the new workspace, with an
   address of the form `<user id>@imported.local` and no password.
 - Existing local workspaces are never modified or merged.

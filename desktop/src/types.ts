@@ -20,6 +20,7 @@ export interface Channel {
   name: string;
   topic: string;
   created_at: string;
+  agent_id: string | null;
 }
 
 export type Sender =

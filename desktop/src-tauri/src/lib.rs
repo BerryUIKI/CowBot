@@ -161,6 +161,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_session,
             commands::list_channels,
+            commands::ensure_agent_channels,
             commands::create_channel,
             commands::list_messages,
             commands::post_message,

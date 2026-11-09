@@ -12,7 +12,11 @@ use cowbot_store::Store;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-const MIGRATION_FILES: [&str; 2] = ["0001_init.sql", "0002_assignments.sql"];
+const MIGRATION_FILES: [&str; 3] = [
+    "0001_init.sql",
+    "0002_assignments.sql",
+    "0003_agent_channels.sql",
+];
 
 fn migrations_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations")

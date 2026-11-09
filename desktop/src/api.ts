@@ -30,6 +30,10 @@ export function listChannels(): Promise<Channel[]> {
   return invoke<Channel[]>("list_channels");
 }
 
+export function ensureAgentChannels(): Promise<Channel[]> {
+  return invoke<Channel[]>("ensure_agent_channels");
+}
+
 export function createChannel(name: string, topic: string): Promise<Channel> {
   return invoke<Channel>("create_channel", { name, topic });
 }

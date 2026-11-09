@@ -1,5 +1,5 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use cowbot_core::agent::AgentId;
+use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::Approval;
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
@@ -151,6 +151,31 @@ async fn collaboration_roundtrip() {
     let channels = store.list_channels(&workspace.id).await.unwrap();
     assert_eq!(channels.len(), 1);
     assert_eq!(channels[0].name, "general");
+}
+
+#[tokio::test]
+async fn direct_channels_are_unique_per_agent() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+    let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    store.upsert_agent(&workspace.id, &agent).await.unwrap();
+
+    let channel = Channel::direct(&agent, "Architect");
+    store.create_channel(&workspace.id, &channel).await.unwrap();
+
+    let loaded = store
+        .get_channel_for_agent(&workspace.id, &agent.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.id, channel.id);
+    assert_eq!(loaded.agent_id.as_ref(), Some(&agent.id));
+
+    let duplicate = Channel::direct(&agent, "Architect");
+    assert!(store
+        .create_channel(&workspace.id, &duplicate)
+        .await
+        .is_err());
 }
 
 #[tokio::test]

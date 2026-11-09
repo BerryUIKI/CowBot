@@ -53,6 +53,17 @@ pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, S
         .map_err(|error| error.to_string())
 }
 
+/// Return every channel, provisioning a direct conversation for each agent
+/// that does not have one yet.
+#[tauri::command]
+pub async fn ensure_agent_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
+    state
+        .client
+        .ensure_agent_channels()
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn create_channel(
     state: State<'_, AppState>,
