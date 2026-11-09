@@ -713,6 +713,7 @@ dependencies = [
  "cowbot-tools",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
