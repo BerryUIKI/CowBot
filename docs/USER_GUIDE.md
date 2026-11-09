@@ -143,7 +143,7 @@ from templates; a standalone agent editor is not part of this release.
   `list_agents`, `list_templates`). Adding the Main Assistant template is the
   alternative.
 - Agent actions that change the workspace ask for approval under the
-  **Ask** and **Safe auto** policies. The approval card shows the tool name,
+  **Manual** and **Auto** policies. The approval card shows the tool name,
   arguments, risk, and reason.
 
 ## Agents, channels, and tasks
@@ -176,9 +176,10 @@ from templates; a standalone agent editor is not part of this release.
   CSS and JavaScript but blocks network access, external images, form
   submission, and access to the app. Use it for interactive results such as
   forms, calculators, or small dashboards.
-- **Approval** — the dropdown in the conversation header sets the approval
-  policy for answers in that conversation. It uses the same policies as tasks,
-  so a risky tool call raised while an agent answers appears in **Approvals**.
+- **Approval** — the mode control in the composer footer opens the five-mode
+  menu: Auto, Manual, Accept edits, Plan, and Bypass permissions. It applies
+  to answers in that conversation and uses the same policies as tasks, so a
+  risky tool call raised while an agent answers appears in **Approvals**.
 - A direct message or a mention becomes a task for that agent: it is listed in
   **Tasks** with its assignment, run, and tool calls, and it can be cancelled
   there. The answer is also posted back to the conversation as a message from
@@ -198,11 +199,14 @@ Progress refreshes from live events; all history persists across restarts.
 
 ### Approval policies
 
-- **Ask** — prompt for risky tool calls (default for interactive use).
-- **Safe auto** — automatically approve low-risk reads while asking for
-  higher-risk actions.
-- **Plan only** — deny actions that would modify the machine.
-- **Trusted** — approve everything except critical actions.
+- **Auto** — approve read-only and low-risk tools automatically; ask for
+  medium and high risk.
+- **Manual** — approve read-only tools automatically; ask before anything that
+  changes state (default for interactive use).
+- **Accept edits** — run workspace file edits automatically; other tools
+  follow Manual.
+- **Plan** — run only read-only tools and deny everything else.
+- **Bypass permissions** — run every tool call except critical actions.
 
 Approvals appear in **Approvals**. Each decision is recorded in the audit log.
 Approval is a guardrail, not OS isolation: the subprocess sandbox runs commands
@@ -255,7 +259,7 @@ takes flags and environment variables.
 db = "cowbot.db"
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
-approval = "ask"       # ask | safe-auto | plan-only | trusted
+approval = "ask"       # ask | accept-edits | safe-auto | plan-only | trusted
 concurrency = 4        # cross-root concurrency limit
 ```
 
@@ -282,7 +286,7 @@ cowbot import --input my-workspace.cowpkg --db other.db
 - `--dry-run` forces the offline mock model.
 - `--model`, `--base-url` (`OPENAI_BASE_URL`), and `--api-key`
   (`OPENAI_API_KEY`) configure the OpenAI Chat Completions endpoint.
-- `--approval` accepts `ask`, `safe-auto`, `plan-only`, and `trusted`.
+- `--approval` accepts `ask`, `accept-edits`, `safe-auto`, `plan-only`, and `trusted`.
 - `--concurrency` bounds how many root assignments run at the same time.
 - `run --channel <id>` stores the crew's tasks in that channel.
 - `message post --wait` lets the agents mentioned in the message answer before

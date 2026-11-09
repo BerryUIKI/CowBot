@@ -11,7 +11,9 @@ use cowbot_core::risk::RiskLevel;
 use cowbot_core::task::Task;
 use cowbot_core::tool::ToolAuthorization;
 use cowbot_core::tool::ToolCall;
-use cowbot_service::{bootstrap_local, decision_for, ApprovalDecision, ApprovalService};
+use cowbot_service::{
+    bootstrap_local, decision_for, decision_for_call, ApprovalDecision, ApprovalService,
+};
 use cowbot_store::Store;
 use serde_json::json;
 
@@ -70,6 +72,59 @@ fn policy_decisions_are_distinct_per_mode() {
     assert_eq!(
         decision_for(ApprovalLevel::Ask, RiskLevel::Low),
         ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for(ApprovalLevel::AcceptEdits, RiskLevel::Low),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::AcceptEdits,
+            RiskLevel::Medium,
+            "write_file",
+            "write_file.workspace"
+        ),
+        ApprovalDecision::AutoApprove
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::AcceptEdits,
+            RiskLevel::High,
+            "write_file",
+            "write_file.outside_workspace"
+        ),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::AcceptEdits,
+            RiskLevel::Low,
+            "execute_code",
+            "execute_code.low_risk"
+        ),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for(ApprovalLevel::AcceptEdits, RiskLevel::Critical),
+        ApprovalDecision::Deny
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::Trusted,
+            RiskLevel::High,
+            "delete_channel",
+            "workspace.delete_channel"
+        ),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for_call(
+            ApprovalLevel::PlanOnly,
+            RiskLevel::High,
+            "delete_channel",
+            "workspace.delete_channel"
+        ),
+        ApprovalDecision::Deny
     );
     assert_eq!(
         decision_for(ApprovalLevel::SafeAuto, RiskLevel::Low),
