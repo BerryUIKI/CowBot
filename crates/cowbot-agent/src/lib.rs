@@ -17,9 +17,7 @@ mod tests {
     use cowbot_core::task::Task;
     use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
     use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder, TokenUsage};
-    use cowbot_llm::{
-        ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall, MockLlmProvider,
-    };
+    use cowbot_llm::{ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall, MockLlmProvider};
     use cowbot_tools::{CodeExecutionTool, SubprocessSandbox, ToolRegistry};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};

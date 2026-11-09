@@ -580,11 +580,8 @@ impl AssignmentScheduler {
         {
             Ok((output, recorded)) => {
                 if let (Some(turn), Some(messages)) = (&prepared, recorded) {
-                    let entries = context_entries_from_messages(
-                        &turn.channel_id,
-                        &turn.agent_id,
-                        &messages,
-                    );
+                    let entries =
+                        context_entries_from_messages(&turn.channel_id, &turn.agent_id, &messages);
                     if let Err(error) = self
                         .assignments
                         .store()

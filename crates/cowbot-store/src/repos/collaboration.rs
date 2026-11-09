@@ -20,9 +20,10 @@ struct ChannelRow {
 
 impl ChannelRow {
     fn into_domain(self) -> CowResult<Channel> {
-        let kind = self.kind.parse::<ChannelKind>().map_err(|_| {
-            CowError::Storage(format!("unknown channel kind '{}'", self.kind))
-        })?;
+        let kind = self
+            .kind
+            .parse::<ChannelKind>()
+            .map_err(|_| CowError::Storage(format!("unknown channel kind '{}'", self.kind)))?;
         Ok(Channel {
             id: ChannelId(self.id),
             name: self.name,

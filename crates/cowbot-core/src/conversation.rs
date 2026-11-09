@@ -121,7 +121,11 @@ pub struct ConversationSettings {
 }
 
 impl ConversationSettings {
-    pub fn new(channel_id: ChannelId, provider_id: Option<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        channel_id: ChannelId,
+        provider_id: Option<String>,
+        model: impl Into<String>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             channel_id,
@@ -383,7 +387,10 @@ pub fn project_context(
     tool_tokens: u32,
     entries: &[ContextEntry],
 ) -> ContextProjection {
-    let active = entries.iter().filter(|entry| !entry.excluded).collect::<Vec<_>>();
+    let active = entries
+        .iter()
+        .filter(|entry| !entry.excluded)
+        .collect::<Vec<_>>();
     let latest_index = active
         .iter()
         .rposition(|entry| entry.role == ContextRole::User);
@@ -392,7 +399,9 @@ pub fn project_context(
         .iter()
         .enumerate()
         .filter(|(index, _)| Some(*index) != latest_index)
-        .fold(0_u32, |total, (_, entry)| total.saturating_add(entry.tokens));
+        .fold(0_u32, |total, (_, entry)| {
+            total.saturating_add(entry.tokens)
+        });
 
     ContextProjection {
         system_tokens,
@@ -456,7 +465,10 @@ pub enum ContextUsageState {
 }
 
 /// Percent used and its state, or `None` when the window is unknown.
-pub fn context_usage_state(used_tokens: u32, window: Option<u32>) -> (Option<f32>, ContextUsageState) {
+pub fn context_usage_state(
+    used_tokens: u32,
+    window: Option<u32>,
+) -> (Option<f32>, ContextUsageState) {
     let Some(window) = window else {
         return (None, ContextUsageState::Unknown);
     };
@@ -531,12 +543,8 @@ mod tests {
     use super::*;
 
     fn entry(role: ContextRole, tokens: u32) -> ContextEntry {
-        let mut entry = ContextEntry::new(
-            ChannelId::new("channel"),
-            AgentId::new("agent"),
-            role,
-            "x",
-        );
+        let mut entry =
+            ContextEntry::new(ChannelId::new("channel"), AgentId::new("agent"), role, "x");
         entry.tokens = tokens;
         entry
     }
@@ -626,7 +634,10 @@ mod tests {
             context_usage_state(100, Some(100)),
             (Some(100.0), ContextUsageState::Full)
         );
-        assert_eq!(context_usage_state(10, None), (None, ContextUsageState::Unknown));
+        assert_eq!(
+            context_usage_state(10, None),
+            (None, ContextUsageState::Unknown)
+        );
     }
 
     #[test]
@@ -662,7 +673,10 @@ mod tests {
 
     #[test]
     fn projection_without_a_user_message_counts_all_entries_as_history() {
-        let entries = vec![entry(ContextRole::System, 5), entry(ContextRole::Assistant, 7)];
+        let entries = vec![
+            entry(ContextRole::System, 5),
+            entry(ContextRole::Assistant, 7),
+        ];
         let projection = project_context(0, 0, &entries);
         assert_eq!(projection.latest_tokens, 0);
         assert_eq!(projection.history_tokens, 12);

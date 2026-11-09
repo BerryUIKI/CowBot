@@ -83,7 +83,10 @@ pub async fn export_workspace(
     entries.insert(CHANNELS_PATH, to_jsonl(&channels)?);
     entries.insert(MESSAGES_PATH, to_jsonl(&messages)?);
     entries.insert(PARTICIPANTS_PATH, to_jsonl(&participants)?);
-    entries.insert(CONVERSATION_SETTINGS_PATH, to_jsonl(&conversation_settings)?);
+    entries.insert(
+        CONVERSATION_SETTINGS_PATH,
+        to_jsonl(&conversation_settings)?,
+    );
     entries.insert(CONTEXT_ENTRIES_PATH, to_jsonl(&context_entries)?);
     entries.insert(CONTEXT_EVENTS_PATH, to_jsonl(&context_events)?);
     entries.insert(TASKS_PATH, to_bytes(&tasks)?);

@@ -174,10 +174,7 @@ pub trait Client: Send + Sync {
         update: &ConversationSettingsUpdate,
     ) -> CowResult<ConversationSettings>;
     /// Token breakdown and cache summaries of a conversation context.
-    async fn conversation_context(
-        &self,
-        channel_id: &ChannelId,
-    ) -> CowResult<ConversationContext>;
+    async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
     /// Exclude every active context entry; display messages are kept.
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
 

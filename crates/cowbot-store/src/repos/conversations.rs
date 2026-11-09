@@ -1,12 +1,12 @@
 use cowbot_core::agent::AgentId;
 use cowbot_core::channel::Channel;
+use cowbot_core::channel::ChannelId;
 use cowbot_core::conversation::{
-    ChannelParticipant, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
-    ContextToolCall, ConversationMode, ConversationSettings,
+    ChannelParticipant, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
+    ContextRole, ContextToolCall, ConversationMode, ConversationSettings,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
-use cowbot_core::channel::ChannelId;
 
 use crate::error::{db, parse_datetime, parse_json};
 use crate::store::Store;
@@ -43,9 +43,10 @@ struct SettingsRow {
 
 impl SettingsRow {
     fn into_domain(self) -> CowResult<ConversationSettings> {
-        let mode = self.mode.parse::<ConversationMode>().map_err(|_| {
-            CowError::Storage(format!("unknown conversation mode '{}'", self.mode))
-        })?;
+        let mode = self
+            .mode
+            .parse::<ConversationMode>()
+            .map_err(|_| CowError::Storage(format!("unknown conversation mode '{}'", self.mode)))?;
         Ok(ConversationSettings {
             channel_id: ChannelId(self.channel_id),
             mode,
@@ -78,9 +79,10 @@ struct ContextEntryRow {
 
 impl ContextEntryRow {
     fn into_domain(self) -> CowResult<ContextEntry> {
-        let role = self.role.parse::<ContextRole>().map_err(|_| {
-            CowError::Storage(format!("unknown context role '{}'", self.role))
-        })?;
+        let role = self
+            .role
+            .parse::<ContextRole>()
+            .map_err(|_| CowError::Storage(format!("unknown context role '{}'", self.role)))?;
         let kind = self.kind.parse::<ContextEntryKind>().map_err(|_| {
             CowError::Storage(format!("unknown context entry kind '{}'", self.kind))
         })?;
@@ -95,7 +97,9 @@ impl ContextEntryRow {
             tool_calls: self
                 .tool_calls
                 .as_deref()
-                .map(|value| parse_json::<Vec<ContextToolCall>>(value, "context_entries.tool_calls"))
+                .map(|value| {
+                    parse_json::<Vec<ContextToolCall>>(value, "context_entries.tool_calls")
+                })
                 .transpose()?,
             tool_call_id: self.tool_call_id,
             excluded: self.excluded != 0,

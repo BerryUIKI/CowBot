@@ -68,19 +68,17 @@ impl ConversationService {
             ));
         }
 
+        let fallback_title = format!("Conversation with {}", agent.name);
         let base = title
             .map(str::trim)
             .filter(|title| !title.is_empty())
-            .unwrap_or(&agent.name);
+            .unwrap_or(&fallback_title);
         let base = truncate_title(&normalize_channel_name(base)?);
         let name = self.unique_name(&base).await?;
 
         let channel = Channel::conversation(name, format!("Conversation with {}", agent.name));
-        let settings = ConversationSettings::new(
-            channel.id.clone(),
-            provider_id,
-            model.to_string(),
-        );
+        let settings =
+            ConversationSettings::new(channel.id.clone(), provider_id, model.to_string());
         self.store
             .create_conversation(
                 &self.workspace_id,
@@ -100,10 +98,7 @@ impl ConversationService {
             .get_conversation_settings(channel_id)
             .await?
             .ok_or_else(|| {
-                CowError::Config(format!(
-                    "conversation '{}' has no settings",
-                    channel_id.0
-                ))
+                CowError::Config(format!("conversation '{}' has no settings", channel_id.0))
             })
     }
 
@@ -141,15 +136,10 @@ impl ConversationService {
             .await?;
         let system_tokens = estimate_tokens(&conversation_system_prompt(&agent, &agents));
         let projection = project_context(system_tokens, 0, &entries);
-        let cache_last_turn = cache_summary(
-            &self
-                .store
-                .latest_run_usage_for_channel(channel_id)
-                .await?,
-        );
-        let cache_conversation = cache_summary(
-            &self.store.sum_llm_usage_for_channel(channel_id).await?,
-        );
+        let cache_last_turn =
+            cache_summary(&self.store.latest_run_usage_for_channel(channel_id).await?);
+        let cache_conversation =
+            cache_summary(&self.store.sum_llm_usage_for_channel(channel_id).await?);
 
         Ok(ConversationContext {
             channel_id: channel.id,
@@ -496,7 +486,11 @@ fn truncate_title(title: &str) -> String {
     if chars.len() <= MAX_TITLE_CHARS {
         return title.to_string();
     }
-    chars[..MAX_TITLE_CHARS].iter().collect::<String>().trim_end().to_string()
+    chars[..MAX_TITLE_CHARS]
+        .iter()
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
@@ -508,10 +502,7 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 }
 
 /// System prompt for a conversation turn.
-pub(crate) fn conversation_system_prompt(
-    agent: &AgentProfile,
-    agents: &[AgentProfile],
-) -> String {
+pub(crate) fn conversation_system_prompt(agent: &AgentProfile, agents: &[AgentProfile]) -> String {
     format!(
         "{}\n\n{}\n\n\
          You are in a private, continuous conversation with the user. The messages that \
@@ -673,7 +664,10 @@ mod tests {
         tool.recount();
 
         let messages = assemble_conversation_messages(&agent, &[agent.clone()], &[assistant, tool]);
-        assert_eq!(messages[1].tool_calls.as_ref().unwrap()[0].name, "read_file");
+        assert_eq!(
+            messages[1].tool_calls.as_ref().unwrap()[0].name,
+            "read_file"
+        );
         assert_eq!(messages[2].role, ChatRole::Tool);
         assert_eq!(messages[2].tool_call_id.as_deref(), Some("call-1"));
     }
