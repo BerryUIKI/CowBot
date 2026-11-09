@@ -188,6 +188,7 @@ fn status_from_str(value: &str) -> CowResult<AssignmentStatus> {
 fn approval_level_to_str(level: ApprovalLevel) -> &'static str {
     match level {
         ApprovalLevel::Ask => "ask",
+        ApprovalLevel::AcceptEdits => "accept_edits",
         ApprovalLevel::SafeAuto => "safe_auto",
         ApprovalLevel::PlanOnly => "plan_only",
         ApprovalLevel::Trusted => "trusted",
@@ -197,6 +198,7 @@ fn approval_level_to_str(level: ApprovalLevel) -> &'static str {
 fn approval_level_from_str(value: &str) -> CowResult<ApprovalLevel> {
     match value {
         "ask" => Ok(ApprovalLevel::Ask),
+        "accept_edits" => Ok(ApprovalLevel::AcceptEdits),
         "safe_auto" => Ok(ApprovalLevel::SafeAuto),
         "plan_only" => Ok(ApprovalLevel::PlanOnly),
         "trusted" => Ok(ApprovalLevel::Trusted),

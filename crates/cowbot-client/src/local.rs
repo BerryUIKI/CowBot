@@ -444,8 +444,11 @@ impl Client for LocalClient {
     }
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
-        let model = Task::new(task.description.clone(), task.expected_output.clone())
+        let mut model = Task::new(task.description.clone(), task.expected_output.clone())
             .assign_to(task.assignee.clone());
+        if let Some(channel_id) = &task.channel_id {
+            model = model.with_channel(channel_id.clone());
+        }
         self.tasks
             .create(
                 &self.session.workspace.id,

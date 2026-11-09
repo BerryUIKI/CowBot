@@ -40,6 +40,7 @@ pub enum ApprovalStatus {
 pub enum ApprovalLevel {
     #[default]
     Ask,
+    AcceptEdits,
     SafeAuto,
     PlanOnly,
     Trusted,
