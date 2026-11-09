@@ -1,6 +1,7 @@
 use cowbot_core::agent::AgentId;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
-use cowbot_core::error::CowResult;
+use cowbot_core::conversation::ChannelKind;
+use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 
 use crate::error::{db, parse_datetime, parse_json};
@@ -14,10 +15,15 @@ struct ChannelRow {
     created_at: String,
     agent_id: Option<String>,
     pinned: i64,
+    kind: String,
 }
 
 impl ChannelRow {
     fn into_domain(self) -> CowResult<Channel> {
+        let kind = self
+            .kind
+            .parse::<ChannelKind>()
+            .map_err(|_| CowError::Storage(format!("unknown channel kind '{}'", self.kind)))?;
         Ok(Channel {
             id: ChannelId(self.id),
             name: self.name,
@@ -25,6 +31,7 @@ impl ChannelRow {
             created_at: parse_datetime(&self.created_at)?,
             agent_id: self.agent_id.map(AgentId),
             pinned: self.pinned != 0,
+            kind,
         })
     }
 }
@@ -59,8 +66,8 @@ impl Store {
         channel: &Channel,
     ) -> CowResult<()> {
         sqlx::query(
-            "INSERT INTO channels (id, workspace_id, name, topic, created_at, agent_id, pinned)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO channels (id, workspace_id, name, topic, created_at, agent_id, pinned, kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&channel.id.0)
         .bind(&workspace_id.0)
@@ -69,6 +76,7 @@ impl Store {
         .bind(channel.created_at.to_rfc3339())
         .bind(channel.agent_id.as_ref().map(|agent| agent.0.clone()))
         .bind(if channel.pinned { 1i64 } else { 0i64 })
+        .bind(channel.kind.as_str())
         .execute(self.pool())
         .await
         .map_err(db)?;
@@ -77,7 +85,7 @@ impl Store {
 
     pub async fn get_channel(&self, id: &ChannelId) -> CowResult<Option<Channel>> {
         let row = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, name, topic, created_at, agent_id, pinned
+            "SELECT id, name, topic, created_at, agent_id, pinned, kind
              FROM channels WHERE id = ?",
         )
         .bind(&id.0)
@@ -93,7 +101,7 @@ impl Store {
         agent_id: &AgentId,
     ) -> CowResult<Option<Channel>> {
         let row = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, name, topic, created_at, agent_id, pinned FROM channels
+            "SELECT id, name, topic, created_at, agent_id, pinned, kind FROM channels
              WHERE workspace_id = ? AND agent_id = ?",
         )
         .bind(&workspace_id.0)
@@ -106,7 +114,7 @@ impl Store {
 
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         let rows = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, name, topic, created_at, agent_id, pinned FROM channels
+            "SELECT id, name, topic, created_at, agent_id, pinned, kind FROM channels
              WHERE workspace_id = ? ORDER BY name",
         )
         .bind(&workspace_id.0)
