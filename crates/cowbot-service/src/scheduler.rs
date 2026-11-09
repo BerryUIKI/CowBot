@@ -72,6 +72,7 @@ impl AgentExecution {
     ///
     /// A new instance per call keeps assignment execution independent, which
     /// lets independent roots run concurrently.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         task: &Task,
