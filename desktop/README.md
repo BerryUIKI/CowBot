@@ -14,12 +14,17 @@ template. It can be skipped at any point; completion is recorded in the same
 `config.json`, and a configuration written before onboarding existed is treated
 as completed so upgrades do not show the guide again.
 
-The current UI has four views: **Channels** (channels and live messages),
-**Tasks** (create tasks, inspect assignment/run history, cancel, and run a crew
-on a submitted task), **Approvals** (approve or reject tool calls requested by
-running agents), and **Settings** (in the sidebar footer, with **Model**,
+The current UI is conversation-first: the sidebar lists every agent as a contact
+with its latest message and a search field, group channels sit below the agents,
+and the main pane is a chat timeline with bubbles, a typing indicator, and a
+floating composer. **Tasks** (create tasks, inspect assignment/run history,
+cancel, and run a crew on a submitted task), **Approvals** (approve or reject
+tool calls requested by running agents), and **Settings** (with **Model**,
 **Team**, **Workspace**, and **About** sections for model providers, agents and
-templates, workspace creation and transfer, and version and update controls).
+templates, workspace creation and transfer, and version and update controls) are
+reached from the sidebar footer. A message in an agent's conversation reaches it
+without an `@mention`; group channels keep mention-driven replies (ADR-0022,
+ADR-0024).
 
 Model providers are OpenAI Chat Completions, Anthropic Messages, or OpenAI
 Responses endpoints kept in `config.json` under the same app-data directory as
@@ -106,7 +111,7 @@ The [release workflow](../.github/workflows/release.yml) builds installers on ma
 - **macOS:** universal `.dmg` for Apple Silicon and Intel
 - **Linux:** `.deb` and `.AppImage`
 
-Manual runs upload the bundles as workflow artifacts. Tag runs create or update a draft GitHub Release; a maintainer publishes it after review. Tag runs also sign updater artifacts with the repository secrets and a final `updater-json` job publishes `latest.json` for every platform. The tag must match the version in `src-tauri/tauri.conf.json` (`v0.1.4` for `0.1.4`). GitHub offers manual dispatch only once the workflow exists on the default branch; tag builds run from the tagged commit.
+Manual runs upload the bundles as workflow artifacts. Tag runs create or update a draft GitHub Release; a maintainer publishes it after review. Tag runs also sign updater artifacts with the repository secrets and a final `updater-json` job publishes `latest.json` for every platform. The tag must match the version in `src-tauri/tauri.conf.json` (`v0.1.5` for `0.1.5`). GitHub offers manual dispatch only once the workflow exists on the default branch; tag builds run from the tagged commit.
 
 Builds are unsigned: macOS may require allowing the app in System Settings, and Windows may show a SmartScreen prompt. OS code signing and notarization remain follow-up work (ADR-0014); the updater's own minisign signature is implemented in ADR-0018.
 

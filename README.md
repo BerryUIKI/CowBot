@@ -40,17 +40,17 @@ The Rust runtime and CLI work today. Phase 1 (the local/offline MVP) is complete
 | Agent crews | Roles, goals, backstories, tool-calling loops, and sequential workflows with context chaining |
 | Assignment runtime | Task trees, lifecycle event logs, budgets, stall guards, restart reconciliation, and a scheduler with wake/re-entry and cross-root concurrency |
 | Local persistence | Embedded SQLite migrations and repositories for workspaces, channels, agents, tasks, and audit events |
-| Collaboration services | Idempotent local owner/workspace bootstrap; channel and message persistence connected to the event bus; `@Agent` mentions that turn a message into an assignment-backed answer in the channel |
+| Collaboration services | Idempotent local owner/workspace bootstrap; channel and message persistence connected to the event bus; agent direct conversations provisioned per agent; `@Agent` mentions that turn a message into an assignment-backed answer in the channel |
 | CLI | `init`, `run`, `tools`, `export`, `import`, `channel`, and `message`, with optional `cowbot.toml` configuration, `--channel`/`--concurrency` for runs, and `message post --wait` to let mentioned agents answer |
 | Agent and team templates | Built-in JSON templates, validation, template management, and `.cowtemplate` import/export |
-| Desktop shell | First-run onboarding; React channels with mention-driven agent replies and a per-channel approval policy, task creation and history, run history and tool calls, cancellation, pending approval decisions, crew execution from a task, vendor-first model providers with model discovery, agents/templates, workspace creation/export/import/switching, and automatic update checks with in-app installation via Tauri |
+| Desktop shell | First-run onboarding; a conversation-first React shell with searchable agent contacts, direct conversations that need no mention, group channels with mention-driven replies and a per-channel approval policy, task creation and history, run history and tool calls, cancellation, pending approval decisions, crew execution from a task, vendor-first model providers with model discovery, agents/templates, workspace creation/export/import/switching, and automatic update checks with in-app installation via Tauri |
 | Desktop installers | Unsigned NSIS/MSI, universal DMG, and deb/AppImage builds from the release workflow, plus signed updater artifacts and a `latest.json` manifest |
 | Tools | Subprocess execution and file operations with execution timeouts and output limits |
 | Approvals | Static risk classification, Ask/SafeAuto/PlanOnly/Trusted modes, pending approvals, and audit records |
 | Workspace packages | `.cowpkg` export and verified import with SHA-256 checksums, via the CLI and desktop |
 | Model providers | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints, including DeepSeek, Ollama, OpenRouter, and Claude Code-compatible relays; model listing, several models per provider, and mock providers for offline testing |
 
-**Phase 1 complete:** milestones 1.1–1.7 are implemented. The local client and Tauri desktop shell cover Channels, Tasks, Approvals, and Settings, the assignment scheduler with cross-root concurrency, CLI configuration with `cowbot.toml` and channel/message commands, vendor-first model providers with endpoint model discovery across three API protocols, desktop-initiated crew execution, first-run onboarding, workspace creation and switching, `.cowpkg` export/import through both the CLI and desktop, and signed in-app updates delivered through GitHub Releases. The release workflow produces unsigned Windows, macOS, and Linux installers. The [user guide](docs/USER_GUIDE.md) covers installation, model setup, workspaces, tasks, approvals, updates, and troubleshooting. Operating-system code signing and remote mode (Phase 2) remain follow-up work. See the [roadmap](docs/ROADMAP.md) for scope and acceptance criteria.
+**Phase 1 complete:** milestones 1.1–1.7 are implemented. The local client and Tauri desktop shell cover agent conversations, group channels, tasks, approvals, and settings, the assignment scheduler with cross-root concurrency, CLI configuration with `cowbot.toml` and channel/message commands, vendor-first model providers with endpoint model discovery across three API protocols, desktop-initiated crew execution, first-run onboarding, workspace creation and switching, `.cowpkg` export/import through both the CLI and desktop, and signed in-app updates delivered through GitHub Releases. The release workflow produces unsigned Windows, macOS, and Linux installers. The [user guide](docs/USER_GUIDE.md) covers installation, model setup, workspaces, tasks, approvals, updates, and troubleshooting. Operating-system code signing and remote mode (Phase 2) remain follow-up work. See the [roadmap](docs/ROADMAP.md) for scope and acceptance criteria.
 
 ## Naming and compatibility
 
@@ -178,7 +178,7 @@ pnpm install
 pnpm run tauri dev
 ```
 
-Install Node.js 22.13+, pnpm, and the platform's Tauri native prerequisites first; see [Desktop setup](desktop/README.md). Desktop data is stored in the app-data directory, separate from the CLI's default database. The shell supports channels, task creation, crew execution, approvals, model providers, workspace export/import with local workspace switching, and update checks with in-app installation; installers come from the release workflow.
+Install Node.js 22.13+, pnpm, and the platform's Tauri native prerequisites first; see [Desktop setup](desktop/README.md). Desktop data is stored in the app-data directory, separate from the CLI's default database. The shell supports agent conversations, group channels, task creation, crew execution, approvals, model providers, workspace export/import with local workspace switching, and update checks with in-app installation; installers come from the release workflow.
 
 ## Architecture
 
@@ -217,7 +217,7 @@ Read the [functional and system architecture](docs/ARCHITECTURE.md) for the plan
   </picture>
 </p>
 
-**Illustrative SVG, not an application screenshot.** It visualizes the channel-first direction. The current shell already has Channels, Tasks, Approvals, and Settings views, and can start crew execution from a task; this exact layout is not implemented.
+**Illustrative SVG, not an application screenshot.** It visualizes the collaboration-first direction. The current shell already shows agent conversations, group channels, tasks, approvals, and settings, and can start crew execution from a task; this exact layout is not implemented.
 
 ## Documentation
 

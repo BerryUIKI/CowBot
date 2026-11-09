@@ -1,3 +1,4 @@
+use cowbot_core::agent::AgentId;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::error::CowResult;
 use cowbot_core::identity::WorkspaceId;
@@ -11,6 +12,7 @@ struct ChannelRow {
     name: String,
     topic: String,
     created_at: String,
+    agent_id: Option<String>,
 }
 
 impl ChannelRow {
@@ -20,6 +22,7 @@ impl ChannelRow {
             name: self.name,
             topic: self.topic,
             created_at: parse_datetime(&self.created_at)?,
+            agent_id: self.agent_id.map(AgentId),
         })
     }
 }
@@ -54,14 +57,15 @@ impl Store {
         channel: &Channel,
     ) -> CowResult<()> {
         sqlx::query(
-            "INSERT INTO channels (id, workspace_id, name, topic, created_at)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO channels (id, workspace_id, name, topic, created_at, agent_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&channel.id.0)
         .bind(&workspace_id.0)
         .bind(&channel.name)
         .bind(&channel.topic)
         .bind(channel.created_at.to_rfc3339())
+        .bind(channel.agent_id.as_ref().map(|agent| agent.0.clone()))
         .execute(self.pool())
         .await
         .map_err(db)?;
@@ -70,7 +74,7 @@ impl Store {
 
     pub async fn get_channel(&self, id: &ChannelId) -> CowResult<Option<Channel>> {
         let row = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, name, topic, created_at FROM channels WHERE id = ?",
+            "SELECT id, name, topic, created_at, agent_id FROM channels WHERE id = ?",
         )
         .bind(&id.0)
         .fetch_optional(self.pool())
@@ -79,9 +83,26 @@ impl Store {
         row.map(ChannelRow::into_domain).transpose()
     }
 
+    pub async fn get_channel_for_agent(
+        &self,
+        workspace_id: &WorkspaceId,
+        agent_id: &AgentId,
+    ) -> CowResult<Option<Channel>> {
+        let row = sqlx::query_as::<_, ChannelRow>(
+            "SELECT id, name, topic, created_at, agent_id FROM channels
+             WHERE workspace_id = ? AND agent_id = ?",
+        )
+        .bind(&workspace_id.0)
+        .bind(&agent_id.0)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        row.map(ChannelRow::into_domain).transpose()
+    }
+
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         let rows = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, name, topic, created_at FROM channels
+            "SELECT id, name, topic, created_at, agent_id FROM channels
              WHERE workspace_id = ? ORDER BY name",
         )
         .bind(&workspace_id.0)

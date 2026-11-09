@@ -131,20 +131,29 @@ workspace. **Add agents** instantiates every agent in a template with its role,
 goal, and tool access. The 0.1.x app creates agents from templates; a standalone
 agent editor is not part of this release.
 
-## Channels and tasks
+## Agents, channels, and tasks
 
-- **Channels** — create a channel, post messages, and follow the timeline.
+- **Agents** — the sidebar lists every agent as a contact with its latest
+  message and time. Select one and write in the composer: the message goes to
+  that agent directly and no mention is needed. The header shows the agent's
+  role and the approval policy for this conversation; messages appear as a
+  chat timeline, and a typing bubble marks a turn in progress.
+- **Channels** — group rooms sit below the agents. Create one with **New
+  channel** or the **+** button, post messages, and follow the timeline.
   Mention an agent by name to get an answer in the channel: `@Planner, which
   module owns the parser?` The agents in the workspace are listed in the
   channel header, and `@team` (also `@all`, `@everyone`, `@here`) addresses all
   of them. Matching is case-insensitive; an unknown name produces a system
   notice listing the agents that exist.
-- **Approval** — the dropdown in the channel header sets the approval policy
-  for answers in that channel. It uses the same policies as tasks, so a risky
-  tool call raised while an agent answers appears in **Approvals**.
-- A mention becomes a task for the mentioned agent: it is listed in **Tasks**
-  with its assignment, run, and tool calls, and it can be cancelled there. The
-  answer is also posted back to the channel as a message from that agent.
+- **Search** — the field above the sidebar list filters agents, channels, and
+  tasks by name.
+- **Approval** — the dropdown in the conversation header sets the approval
+  policy for answers in that conversation. It uses the same policies as tasks,
+  so a risky tool call raised while an agent answers appears in **Approvals**.
+- A direct message or a mention becomes a task for that agent: it is listed in
+  **Tasks** with its assignment, run, and tool calls, and it can be cancelled
+  there. The answer is also posted back to the conversation as a message from
+  that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
   optional channel, and an approval policy. Select the task and choose **Run**
   to execute the Planner → Coder → Reviewer crew. The task detail shows
@@ -256,14 +265,23 @@ cowbot import --input my-workspace.cowpkg --db other.db
   models, agents, and workspaces.
 - **A task fails immediately** — check the active provider and connection test;
   with no provider, tasks run against the offline mock model.
-- **A channel message gets no answer** — agents answer when they are mentioned
-  by name (`@Planner`). Add agents from a template in **Settings → Team** first;
-  an unknown name posts a notice listing the agents that exist.
-- **An agent answer stops with an error** — the channel shows a system notice
-  with the model error; check the active provider in **Settings → Model**.
+- **A direct message gets no answer** — select the agent in the sidebar and send
+  from the composer; the message should reach that agent without a mention. If
+  the agent list is empty, add agents from a template in **Settings → Team**.
+- **A group channel message gets no answer** — agents answer there only when
+  they are mentioned by name (`@Planner`); an unknown name posts a notice
+  listing the agents that exist.
+- **An agent answer stops with an error** — the conversation shows a system
+  notice with the model error; check the active provider in **Settings → Model**.
 - **A workspace cannot be switched** — finish or cancel running tasks first.
 - **A workspace shows Missing** — its database file was moved or deleted; remove
   it from the registry by restarting, or restore the file.
+- **A migration checksum error appears** — earlier builds on Windows could
+  record migration checksums for CRLF line endings. Current builds repair that
+  case automatically after validating the schema and keep all workspace data.
+  If the message persists, back up the workspace database file with its
+  `-wal`/`-shm` sidecars and report the message; do not delete rows from
+  `_sqlx_migrations` by hand.
 - **Package import fails** — the package may be corrupt, from an unsupported
   schema version, or larger than 512 MB.
 - **An update check fails** — CowBot needs to reach `github.com`. Check the
@@ -284,8 +302,9 @@ reporting, see [SECURITY.md](../SECURITY.md).
 
 - Local/offline single-user mode only: no server, remote sessions, or
   multi-user workspaces.
-- Channel answers are one turn per mentioned agent: no threads as conversation
-  scope, no proactive agent replies to unmentioned messages, and no streaming.
+- Channel answers are one turn per addressed agent: no threads as conversation
+  scope, no proactive agent replies to unmentioned messages in group channels,
+  and no streaming.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
 - No streaming responses, retries, rate limiting, or token accounting.
