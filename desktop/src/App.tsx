@@ -9,6 +9,7 @@ import ApprovalCards from "./ApprovalCards";
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
@@ -23,12 +24,16 @@ import {
   archiveTask,
   cancelTask,
   clearChannelMessages,
+  clearConversationContext,
+  compactConversation,
   completeOnboarding,
   createChannel,
+  createConversation,
   createTask,
   decideApproval,
   deleteChannel,
   ensureAgentChannels,
+  getConversationContext,
   getOnboardingState,
   getSession,
   instantiateAgents,
@@ -54,6 +59,7 @@ import {
   setChannelPinned,
   unarchiveTask,
   updateAgent,
+  updateConversationSettings,
 } from "./api";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
@@ -66,6 +72,7 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  ConversationContext,
   ModelSettings,
   OnboardingState,
   Task,
@@ -86,7 +93,7 @@ interface PendingReply {
 }
 
 interface MenuState {
-  kind: "agent" | "channel" | "task";
+  kind: "agent" | "channel" | "conversation" | "task";
   channel: Channel | null;
   agent: AgentProfile | null;
   task: Task | null;
@@ -240,6 +247,14 @@ export default function App() {
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
+  const [creatingConversation, setCreatingConversation] = useState(false);
+  const [conversationTitle, setConversationTitle] = useState("");
+  const [conversationAgentId, setConversationAgentId] = useState("");
+  const [conversationContext, setConversationContext] =
+    useState<ConversationContext | null>(null);
+  const [contextBusy, setContextBusy] = useState(false);
+  const [contextVersion, setContextVersion] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskDescription, setTaskDescription] = useState("");
   const [taskOutput, setTaskOutput] = useState("");
@@ -276,13 +291,14 @@ export default function App() {
     [channels, selectedId],
   );
 
-  const selectedAgent = useMemo(
-    () =>
-      selectedChannel?.agent_id
-        ? agents.find((agent) => agent.id === selectedChannel.agent_id) ?? null
-        : null,
-    [agents, selectedChannel],
-  );
+  const selectedAgent = useMemo(() => {
+    if (!selectedChannel) return null;
+    const agentId =
+      selectedChannel.kind === "conversation"
+        ? conversationContext?.agent_id ?? null
+        : selectedChannel.agent_id;
+    return agentId ? agents.find((agent) => agent.id === agentId) ?? null : null;
+  }, [agents, conversationContext, selectedChannel]);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -315,7 +331,7 @@ export default function App() {
         if (current && next.some((channel) => channel.id === current)) {
           return current;
         }
-        const firstDirect = next.find((channel) => channel.agent_id);
+        const firstDirect = next.find((channel) => channel.kind === "direct");
         return (firstDirect ?? next[0])?.id ?? null;
       });
       void refreshPreviews(next);
@@ -437,6 +453,24 @@ export default function App() {
   }, [refreshMessages, selectedId]);
 
   useEffect(() => {
+    if (!selectedChannel || selectedChannel.kind !== "conversation") {
+      setConversationContext(null);
+      return;
+    }
+    let cancelled = false;
+    getConversationContext(selectedChannel.id)
+      .then((context) => {
+        if (!cancelled) setConversationContext(context);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contextVersion, selectedChannel]);
+
+  useEffect(() => {
     refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
   }, [refreshTaskDetail, selectedTaskId]);
 
@@ -525,6 +559,7 @@ export default function App() {
         if (message && typeof message.channel_id === "string") {
           setPreviews((current) => ({ ...current, [message.channel_id]: message }));
         }
+        setContextVersion((version) => version + 1);
         refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
       }
       if (
@@ -611,6 +646,7 @@ export default function App() {
       if (event.error) {
         setError(event.error);
       }
+      setContextVersion((version) => version + 1);
       refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
     })
       .then((stop) => {
@@ -651,7 +687,10 @@ export default function App() {
     const rows = agents
       .map((agent) => ({
         agent,
-        channel: channels.find((channel) => channel.agent_id === agent.id) ?? null,
+        channel:
+          channels.find(
+            (channel) => channel.kind === "direct" && channel.agent_id === agent.id,
+          ) ?? null,
       }))
       .filter(
         (row): row is { agent: AgentProfile; channel: Channel } => row.channel !== null,
@@ -659,9 +698,16 @@ export default function App() {
     return rows.sort((left, right) => byRecentActivity(left, right, previews));
   }, [agents, channels, previews]);
 
+  const conversationRows = useMemo(() => {
+    return channels
+      .filter((channel) => channel.kind === "conversation")
+      .map((channel) => ({ channel }))
+      .sort((left, right) => byRecentActivity(left, right, previews));
+  }, [channels, previews]);
+
   const groupChannels = useMemo(() => {
     return channels
-      .filter((channel) => !channel.agent_id)
+      .filter((channel) => channel.kind === "channel")
       .map((channel) => ({ channel }))
       .sort((left, right) => byRecentActivity(left, right, previews));
   }, [channels, previews]);
@@ -682,6 +728,16 @@ export default function App() {
         ? groupChannels.filter((row) => row.channel.name.toLowerCase().includes(normalizedQuery))
         : groupChannels,
     [groupChannels, normalizedQuery],
+  );
+
+  const visibleConversations = useMemo(
+    () =>
+      normalizedQuery
+        ? conversationRows.filter((row) =>
+            row.channel.name.toLowerCase().includes(normalizedQuery),
+          )
+        : conversationRows,
+    [conversationRows, normalizedQuery],
   );
 
   const visibleTasks = useMemo(() => {
@@ -712,6 +768,8 @@ export default function App() {
   }, [agents]);
 
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+  const conversationFull =
+    selectedChannel?.kind === "conversation" && conversationContext?.state === "full";
 
   const inlineApprovals = useMemo(
     () =>
@@ -746,9 +804,102 @@ export default function App() {
     }
   }
 
+  function openNewConversation() {
+    setView("chat");
+    setCreatingConversation(true);
+    setError(null);
+    setConversationAgentId((current) => current || agents[0]?.id || "");
+  }
+
+  async function handleCreateConversation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!conversationAgentId) return;
+
+    setBusy("create-conversation");
+    setError(null);
+    try {
+      const channel = await createConversation(
+        conversationTitle.trim() || null,
+        conversationAgentId,
+      );
+      setCreatingConversation(false);
+      setConversationTitle("");
+      await refreshChannels(channel.id);
+      setContextVersion((version) => version + 1);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function compactChannel(channel: Channel) {
+    setContextBusy(true);
+    setError(null);
+    try {
+      const outcome = await compactConversation(channel.id);
+      setNotice(
+        outcome.compacted
+          ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
+          : "Nothing to compact yet.",
+      );
+      setContextVersion((version) => version + 1);
+      await refreshMessages(channel.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function clearContextForChannel(channel: Channel) {
+    if (
+      !window.confirm(
+        "Clear this conversation's context? Messages stay visible, but the model will no longer see them.",
+      )
+    ) {
+      return;
+    }
+
+    setContextBusy(true);
+    setError(null);
+    try {
+      const cleared = await clearConversationContext(channel.id);
+      setNotice(
+        cleared > 0
+          ? `Cleared ${cleared} context entries.`
+          : "The context was already empty.",
+      );
+      setContextVersion((version) => version + 1);
+      await refreshMessages(channel.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function updateConversationOptions(
+    channel: Channel,
+    autoCompact: boolean,
+    threshold: number,
+  ) {
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        channel.id,
+        autoCompact,
+        threshold,
+      );
+      setConversationContext(context);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   function openMenu(
     event: ReactMouseEvent,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
@@ -759,7 +910,7 @@ export default function App() {
 
   function openMenuFromButton(
     event: ReactMouseEvent<HTMLButtonElement>,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
@@ -771,7 +922,7 @@ export default function App() {
 
   function openMenuFromKey(
     event: ReactKeyboardEvent<HTMLButtonElement>,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
@@ -956,7 +1107,7 @@ export default function App() {
 
   async function sendMessage() {
     const content = draft.trim();
-    if (!content || !selectedChannel || sending) return;
+    if (!content || !selectedChannel || sending || conversationFull) return;
 
     setSending(true);
     setError(null);
@@ -983,7 +1134,7 @@ export default function App() {
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      void sendMessage();
+      if (!conversationFull) void sendMessage();
     }
   }
 
@@ -1183,21 +1334,45 @@ export default function App() {
               ]
             : []),
         ]
-      : [
-          {
-            label: "Rename channel…",
-            onSelect: () => openRenameDialog(channel),
-          },
-          {
-            label: channel.pinned ? "Unpin" : "Pin to top",
-            onSelect: () => void togglePin(channel),
-          },
-          {
-            label: "Delete channel…",
-            danger: true,
-            onSelect: () => openDeleteDialog(channel),
-          },
-        ];
+      : menu.kind === "conversation"
+        ? [
+            {
+              label: "Rename conversation…",
+              onSelect: () => openRenameDialog(channel),
+            },
+            {
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
+            },
+            {
+              label: "Compact context",
+              onSelect: () => void compactChannel(channel),
+            },
+            {
+              label: "Clear context…",
+              onSelect: () => void clearContextForChannel(channel),
+            },
+            {
+              label: "Delete conversation…",
+              danger: true,
+              onSelect: () => openDeleteDialog(channel),
+            },
+          ]
+        : [
+            {
+              label: "Rename channel…",
+              onSelect: () => openRenameDialog(channel),
+            },
+            {
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
+            },
+            {
+              label: "Delete channel…",
+              danger: true,
+              onSelect: () => openDeleteDialog(channel),
+            },
+          ];
   })();
 
   const activeModelProvider =
@@ -1268,6 +1443,126 @@ export default function App() {
         <div className="sidebar-scroll">
           {view === "chat" ? (
             <>
+              <section className="sidebar-section" aria-label="Conversations">
+                <div className="nav-heading">
+                  <span>Conversations</span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={openNewConversation}
+                    disabled={agents.length === 0}
+                  >
+                    New
+                  </button>
+                </div>
+                {visibleConversations.length > 0 ? (
+                  <ul className="contact-list">
+                    {visibleConversations.map(({ channel }) => {
+                      const preview = previews[channel.id] ?? null;
+                      return (
+                        <li key={channel.id} className="contact-item">
+                          <button
+                            type="button"
+                            className="contact-row"
+                            aria-current={channel.id === selectedId ? "page" : undefined}
+                            onClick={() => setSelectedId(channel.id)}
+                            onContextMenu={(event) =>
+                              openMenu(event, "conversation", channel)
+                            }
+                            onKeyDown={(event) =>
+                              openMenuFromKey(event, "conversation", channel)
+                            }
+                          >
+                            <Avatar name={channel.name} kind="channel" />
+                            <span className="contact-text">
+                              <span className="contact-top">
+                                <span className="contact-name">
+                                  {channel.pinned ? <PinMark /> : null}
+                                  {channel.name}
+                                </span>
+                                <time className="contact-time">
+                                  {preview ? formatListTime(preview.created_at) : ""}
+                                </time>
+                              </span>
+                              <span className="contact-snippet">
+                                {preview
+                                  ? previewSnippet(preview, channel)
+                                  : channel.topic || "New conversation"}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="contact-more"
+                            title="Conversation actions"
+                            aria-label={`Actions for ${channel.name}`}
+                            onClick={(event) =>
+                              openMenuFromButton(event, "conversation", channel)
+                            }
+                          >
+                            ⋯
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : normalizedQuery && conversationRows.length > 0 ? (
+                  <p className="nav-note">No conversations match.</p>
+                ) : null}
+
+                {creatingConversation ? (
+                  <form className="new-channel" onSubmit={handleCreateConversation}>
+                    <label className="field">
+                      <span>Title</span>
+                      <input
+                        value={conversationTitle}
+                        onChange={(event) => setConversationTitle(event.target.value)}
+                        placeholder="Design review"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Agent</span>
+                      <select
+                        value={conversationAgentId}
+                        onChange={(event) => setConversationAgentId(event.target.value)}
+                      >
+                        {agents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={busy === "create-conversation" || !conversationAgentId}
+                      >
+                        {busy === "create-conversation" ? "Creating…" : "Create"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setCreatingConversation(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    className="new-channel-button"
+                    onClick={openNewConversation}
+                    disabled={agents.length === 0}
+                  >
+                    <span aria-hidden="true">+</span> New conversation
+                  </button>
+                )}
+              </section>
+
               <section className="sidebar-section" aria-label="Agents">
                 <div className="nav-heading">
                   <span>Agents</span>
@@ -1635,6 +1930,15 @@ export default function App() {
           </div>
         ) : null}
 
+        {notice ? (
+          <div className="notice-banner" role="status">
+            <span>{notice}</span>
+            <button type="button" className="text-button" onClick={() => setNotice(null)}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="loading-state">
             <p>Opening your workspace…</p>
@@ -1651,7 +1955,11 @@ export default function App() {
                   />
                   <div className="chat-heading">
                     <h2 className="chat-title">
-                      {selectedAgent?.name ?? (
+                      {selectedChannel.kind === "conversation" ? (
+                        selectedChannel.name
+                      ) : selectedAgent ? (
+                        selectedAgent.name
+                      ) : (
                         <>
                           <span className="channel-hash" aria-hidden="true">
                             #
@@ -1661,11 +1969,15 @@ export default function App() {
                       )}
                     </h2>
                     <p className="chat-subtitle">
-                      {selectedAgent
-                        ? selectedAgent.role
-                        : selectedChannel.topic.trim() || "No topic yet."}
+                      {selectedChannel.kind === "conversation"
+                        ? selectedAgent
+                          ? `${selectedAgent.name} · ${selectedAgent.role}`
+                          : "Private conversation"
+                        : selectedAgent
+                          ? selectedAgent.role
+                          : selectedChannel.topic.trim() || "No topic yet."}
                     </p>
-                    {!selectedAgent && channelMentionNames.length > 0 ? (
+                    {selectedChannel.kind === "channel" && channelMentionNames.length > 0 ? (
                       <p className="chat-members">
                         Mention{" "}
                         {channelMentionNames.map((agent) => `@${agent.name}`).join(" · ")}
@@ -1674,7 +1986,36 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {selectedAgent ? <span className="chat-kind">Direct</span> : null}
+                  {selectedChannel.kind === "conversation" ? (
+                    <>
+                      {conversationContext ? (
+                        <ContextMeter
+                          context={conversationContext}
+                          busy={contextBusy}
+                          onCompact={() => void compactChannel(selectedChannel)}
+                          onClear={() => void clearContextForChannel(selectedChannel)}
+                          onAutoCompactChange={(enabled) =>
+                            void updateConversationOptions(
+                              selectedChannel,
+                              enabled,
+                              conversationContext.compact_threshold,
+                            )
+                          }
+                          onThresholdChange={(threshold) =>
+                            void updateConversationOptions(
+                              selectedChannel,
+                              conversationContext.auto_compact,
+                              threshold,
+                            )
+                          }
+                          onNewConversation={openNewConversation}
+                        />
+                      ) : null}
+                      <span className="chat-kind">Conversation</span>
+                    </>
+                  ) : selectedAgent ? (
+                    <span className="chat-kind">Direct</span>
+                  ) : null}
                 </div>
               </header>
 
@@ -1691,12 +2032,20 @@ export default function App() {
                       size="large"
                     />
                     <p className="empty-title">
-                      {selectedAgent ? `Say hello to ${selectedAgent.name}.` : "No messages yet."}
+                      {selectedChannel.kind === "conversation"
+                        ? selectedAgent
+                          ? `Start a conversation with ${selectedAgent.name}.`
+                          : "Start a conversation."
+                        : selectedAgent
+                          ? `Say hello to ${selectedAgent.name}.`
+                          : "No messages yet."}
                     </p>
                     <p>
-                      {selectedAgent
-                        ? "Every message here goes straight to this agent."
-                        : `Write the first message to #${selectedChannel.name}.`}
+                      {selectedChannel.kind === "conversation"
+                        ? "Each conversation keeps its own context branch; the header meter shows how full it is."
+                        : selectedAgent
+                          ? "Every message here goes straight to this agent."
+                          : `Write the first message to #${selectedChannel.name}.`}
                     </p>
                   </div>
                 ) : (
@@ -1820,6 +2169,40 @@ export default function App() {
                 <div ref={endRef} />
               </section>
 
+              {conversationFull && selectedChannel.kind === "conversation" ? (
+                <div className="context-full-banner" role="alert">
+                  <span>
+                    This conversation's context is full. Compact it, clear it, or start a
+                    new conversation before sending.
+                  </span>
+                  <div className="context-full-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={contextBusy}
+                      onClick={() => void compactChannel(selectedChannel)}
+                    >
+                      Compact
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={contextBusy}
+                      onClick={() => void clearContextForChannel(selectedChannel)}
+                    >
+                      Clear context
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={openNewConversation}
+                    >
+                      New conversation
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <form
                 className="composer-bar"
                 onSubmit={(event) => {
@@ -1843,14 +2226,19 @@ export default function App() {
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleComposerKeyDown}
-                    placeholder={`Message ${composerTarget}`}
+                    placeholder={
+                      conversationFull
+                        ? "Context full — compact or start a new conversation"
+                        : `Message ${composerTarget}`
+                    }
                     aria-label={`Message ${composerTarget}`}
+                    disabled={conversationFull}
                     rows={1}
                   />
                   <button
                     type="submit"
                     className="composer-send"
-                    disabled={!draft.trim() || sending}
+                    disabled={!draft.trim() || sending || conversationFull}
                     aria-label="Send message"
                   >
                     <svg
@@ -2096,7 +2484,11 @@ export default function App() {
 
       {dialog?.kind === "rename-channel" ? (
         <Modal
-          title="Rename channel"
+          title={
+            dialog.channel.kind === "conversation"
+              ? "Rename conversation"
+              : "Rename channel"
+          }
           onClose={closeDialog}
           footer={
             <>
@@ -2145,7 +2537,11 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "delete-channel" ? (
         <Modal
-          title="Delete channel"
+          title={
+            dialog.channel.kind === "conversation"
+              ? "Delete conversation"
+              : "Delete channel"
+          }
           onClose={closeDialog}
           footer={
             <>
@@ -2163,16 +2559,27 @@ export default function App() {
                 onClick={() => void submitDelete()}
                 disabled={dialogBusy}
               >
-                {dialogBusy ? "Deleting…" : "Delete channel"}
+                {dialogBusy
+                  ? "Deleting…"
+                  : dialog.channel.kind === "conversation"
+                    ? "Delete conversation"
+                    : "Delete channel"}
               </button>
             </>
           }
         >
-          <p className="dialog-copy">
-            Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
-            deleted. Tasks keep their history but are no longer linked to the
-            channel.
-          </p>
+          {dialog.channel.kind === "conversation" ? (
+            <p className="dialog-copy">
+              Delete <strong>{dialog.channel.name}</strong>? Its messages and context
+              will be deleted. This cannot be undone.
+            </p>
+          ) : (
+            <p className="dialog-copy">
+              Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
+              deleted. Tasks keep their history but are no longer linked to the
+              channel.
+            </p>
+          )}
           {dialogError ? (
             <p className="dialog-error" role="alert">
               {dialogError}

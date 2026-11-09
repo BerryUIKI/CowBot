@@ -11,6 +11,8 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  CompactionOutcome,
+  ConversationContext,
   CowEvent,
   ModelMetadata,
   ModelSettings,
@@ -69,6 +71,37 @@ export function clearChannelMessages(channelId: string): Promise<number> {
 
 export function listMessages(channelId: string, limit = 200): Promise<ChannelMessage[]> {
   return invoke<ChannelMessage[]>("list_messages", { channelId, limit });
+}
+
+export function createConversation(
+  title: string | null,
+  agentId: string,
+): Promise<Channel> {
+  return invoke<Channel>("create_conversation", { title, agentId });
+}
+
+export function getConversationContext(channelId: string): Promise<ConversationContext> {
+  return invoke<ConversationContext>("get_conversation_context", { channelId });
+}
+
+export function updateConversationSettings(
+  channelId: string,
+  autoCompact: boolean,
+  compactThreshold: number,
+): Promise<ConversationContext> {
+  return invoke<ConversationContext>("update_conversation_settings", {
+    channelId,
+    autoCompact,
+    compactThreshold,
+  });
+}
+
+export function compactConversation(channelId: string): Promise<CompactionOutcome> {
+  return invoke<CompactionOutcome>("compact_conversation", { channelId });
+}
+
+export function clearConversationContext(channelId: string): Promise<number> {
+  return invoke<number>("clear_conversation_context", { channelId });
 }
 
 export function postMessage(
