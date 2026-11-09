@@ -28,6 +28,8 @@ interface TaskDetailProps {
   onCancel: () => void;
   running: boolean;
   onRun: () => void;
+  onToggleArchive: () => void;
+  archiveBusy: boolean;
 }
 
 function outcomeText(outcome: AssignmentOutcome): string {
@@ -57,10 +59,14 @@ export default function TaskDetail({
   onCancel,
   running,
   onRun,
+  onToggleArchive,
+  archiveBusy,
 }: TaskDetailProps) {
   const kind = taskStatusKind(task.status);
   const canCancel = (kind === "pending" || kind === "in_progress") && !running;
   const canRun = kind === "pending" && !running;
+  const canArchive =
+    kind === "completed" || kind === "failed" || kind === "cancelled";
   const approvalLevel = assignments[0]
     ? approvalLevelLabel(assignments[0].assignment.approval_level)
     : "—";
@@ -71,9 +77,10 @@ export default function TaskDetail({
         <div className="task-heading">
           <div className="task-badges">
             <span className={`status-badge status-${kind}`}>{taskStatusLabel(task.status)}</span>
+            {task.archived ? <span className="settings-badge">Archived</span> : null}
             <span className="task-id">Task {task.id.slice(0, 8)}</span>
           </div>
-          <h2 className="task-title">{task.description}</h2>
+          <h2 className="task-title">{task.title || task.description}</h2>
           <p className="task-output">
             <span className="task-output-label">Expected output</span>
             {task.expected_output}
@@ -90,6 +97,20 @@ export default function TaskDetail({
               {running ? "Running…" : "Run task"}
             </button>
           ) : null}
+          {canArchive ? (
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={onToggleArchive}
+              disabled={archiveBusy}
+            >
+              {archiveBusy
+                ? "Saving…"
+                : task.archived
+                  ? "Unarchive task"
+                  : "Archive task"}
+            </button>
+          ) : null}
           {canCancel || kind === "pending" ? (
             <button
               type="button"
@@ -102,6 +123,11 @@ export default function TaskDetail({
           ) : null}
         </div>
       </header>
+
+      <section className="task-prompt" aria-label="Task prompt">
+        <h3 className="task-prompt-label">Task prompt</h3>
+        <p className="task-prompt-text">{task.description}</p>
+      </section>
 
       <dl className="task-meta">
         <div>

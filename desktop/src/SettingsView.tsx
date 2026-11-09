@@ -29,14 +29,15 @@ interface SettingsViewProps {
   busy: string | null;
   updater: Updater;
   tasksRunning: boolean;
+  section: SettingsSection;
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
 }
 
-type SettingsSection = "model" | "team" | "workspace" | "about";
+export type SettingsSection = "model" | "team" | "workspace" | "about";
 
-const sections: { id: SettingsSection; label: string }[] = [
+export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "team", label: "Team" },
   { id: "workspace", label: "Workspace" },
@@ -82,11 +83,11 @@ export default function SettingsView({
   busy,
   updater,
   tasksRunning,
+  section,
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
 }: SettingsViewProps) {
-  const [section, setSection] = useState<SettingsSection>("model");
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -205,20 +206,6 @@ export default function SettingsView({
       </header>
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {sections.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="settings-nav-item"
-              aria-current={section === item.id ? "page" : undefined}
-              onClick={() => setSection(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
         <div className="settings-content">
           {section === "model" ? (
             <section className="settings-section" aria-labelledby="settings-model">

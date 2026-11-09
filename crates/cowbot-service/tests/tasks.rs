@@ -40,10 +40,20 @@ async fn task_service_creates_lists_and_cancels_tasks() {
     assert_eq!(listed[0].id, task.id);
     assert_eq!(listed[0].status, TaskStatus::Pending);
 
+    assert!(tasks.set_archived(&task.id, true).await.is_err());
+
     tasks.cancel(&task.id, "no longer needed").await.unwrap();
 
     let stored = tasks.get(&task.id).await.unwrap().unwrap();
     assert_eq!(stored.status, TaskStatus::Cancelled);
     let stored_assignment = store.get_assignment(&assignment.id).await.unwrap().unwrap();
     assert_eq!(stored_assignment.status, AssignmentStatus::Cancelled);
+
+    let archived = tasks.set_archived(&task.id, true).await.unwrap();
+    assert!(archived.archived);
+    let listed = tasks.list(&context.workspace.id).await.unwrap();
+    assert!(listed[0].archived);
+
+    let restored = tasks.set_archived(&task.id, false).await.unwrap();
+    assert!(!restored.archived);
 }
