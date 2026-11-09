@@ -3,6 +3,7 @@ use std::sync::Arc;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
+use cowbot_core::approval::ApprovalStatus;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::error::{CowError, CowResult};
@@ -261,8 +262,10 @@ impl ChannelAgentService {
              Workspace agents:\n{roster}\n\n\
              Workspace actions (only when enabled for you): create_channel creates a group \
              channel; create_task queues work for another agent but does not run it; \
-             instantiate_team adds agents from a template; list_agents and list_templates \
-             inspect the workspace. Deleting channels or agents is a UI action you cannot perform.\n\n\
+             instantiate_team adds agents from a template; list_agents, list_channels, and \
+             list_templates inspect the workspace. delete_channel deletes a group channel \
+             and always requires human approval; agent direct conversations cannot be \
+             deleted. Deleting agents is a UI action you cannot perform.\n\n\
              Rendering: normal answers use Markdown. For an interactive interface, put a \
              complete HTML document in a ```html code block; it runs in a sandbox with inline \
              CSS and JavaScript but no network access, and it cannot send messages back.\n\n\
@@ -322,6 +325,7 @@ impl ChannelAgentService {
             "A concise reply addressed to the user, ready to post in the channel.",
         )
         .with_title(message.content.lines().next().unwrap_or_default())
+        .with_channel(channel.id.clone())
         .assign_to(agent.id.clone())
     }
 
@@ -343,8 +347,22 @@ impl ChannelAgentService {
             TaskStatus::Completed { output } => {
                 let content = output.trim();
                 if content.is_empty() {
-                    self.post_notice(channel, &format!("{name} finished without a reply."))
+                    let approvals = self.store.list_approvals_for_task(&task.id).await?;
+                    let expired = approvals
+                        .iter()
+                        .any(|approval| approval.status == ApprovalStatus::Expired);
+                    if expired {
+                        self.post_notice(
+                            channel,
+                            &format!(
+                                "{name} did not reply because the approval request expired before a decision."
+                            ),
+                        )
                         .await?;
+                    } else {
+                        self.post_notice(channel, &format!("{name} finished without a reply."))
+                            .await?;
+                    }
                 } else {
                     self.channels
                         .post_message(&channel.id, Sender::Agent(assignee), content.to_string())

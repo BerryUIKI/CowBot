@@ -66,6 +66,9 @@ impl AppState {
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
             client.clone(),
         )));
+        tools.register(Arc::new(workspace_tools::ListChannelsTool::new(
+            client.clone(),
+        )));
         tools.register(Arc::new(workspace_tools::ListTemplatesTool::new(
             client.clone(),
         )));
@@ -73,6 +76,9 @@ impl AppState {
             client.clone(),
         )));
         tools.register(Arc::new(workspace_tools::CreateTaskTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::DeleteChannelTool::new(
             client.clone(),
         )));
         tools.register(Arc::new(workspace_tools::InstantiateTeamTool::new(client)));

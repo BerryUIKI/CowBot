@@ -12,13 +12,15 @@ pub const MAX_ASSIGNMENT_DEPTH: u32 = 8;
 /// Inherit an approval level for delegated work.
 ///
 /// `PlanOnly` is treated as a hard read-only boundary and always wins.
-/// Otherwise the more permissive of the parent and requested levels wins.
+/// Otherwise the more permissive of the parent and requested levels wins,
+/// ordered `Ask < AcceptEdits < SafeAuto < Trusted`.
 pub fn inherit_approval_level(parent: ApprovalLevel, requested: ApprovalLevel) -> ApprovalLevel {
-    use ApprovalLevel::{Ask, PlanOnly, SafeAuto, Trusted};
+    use ApprovalLevel::{AcceptEdits, Ask, PlanOnly, SafeAuto, Trusted};
     match (parent, requested) {
         (PlanOnly, _) | (_, PlanOnly) => PlanOnly,
         (Trusted, _) | (_, Trusted) => Trusted,
         (SafeAuto, _) | (_, SafeAuto) => SafeAuto,
+        (AcceptEdits, _) | (_, AcceptEdits) => AcceptEdits,
         (Ask, Ask) => Ask,
     }
 }
