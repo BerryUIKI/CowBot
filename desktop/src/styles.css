@@ -2904,6 +2904,41 @@ button {
   background: var(--ink-raised);
 }
 
+.approval-card-inline {
+  max-width: 560px;
+  padding: 12px 14px;
+}
+
+.approval-card-destructive {
+  border-color: var(--danger);
+}
+
+.approval-destructive {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.chat-approval-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.chat-approval-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-bubble-waiting {
+  color: var(--paper-faint);
+  font-size: 13px;
+  font-style: italic;
+}
+
 .approval-head {
   display: flex;
   align-items: center;

@@ -102,6 +102,7 @@ export interface Task {
   description: string;
   expected_output: string;
   assigned_agent: string | null;
+  channel_id: string | null;
   context_tasks: string[];
   status: TaskStatus;
   archived: boolean;

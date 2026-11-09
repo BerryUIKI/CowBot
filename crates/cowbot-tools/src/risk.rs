@@ -24,7 +24,7 @@ impl StaticRiskClassifier {
                 self.classify_path_tool(call, RiskLevel::Medium, RiskLevel::High, "write_file")
             }
             "execute_code" => self.classify_command(call),
-            "list_agents" | "list_templates" => RiskAssessment {
+            "list_agents" | "list_templates" | "list_channels" => RiskAssessment {
                 level: RiskLevel::ReadOnly,
                 rule_id: "workspace.read_only".to_string(),
                 reason: format!("{} reads workspace metadata", call.name),
@@ -43,6 +43,11 @@ impl StaticRiskClassifier {
                 level: RiskLevel::High,
                 rule_id: "workspace.instantiate_team".to_string(),
                 reason: "instantiate_team adds agents to the workspace".to_string(),
+            },
+            "delete_channel" => RiskAssessment {
+                level: RiskLevel::High,
+                rule_id: "workspace.delete_channel".to_string(),
+                reason: "delete_channel destroys a group channel and its messages".to_string(),
             },
             other => RiskAssessment {
                 level: RiskLevel::High,
@@ -340,6 +345,16 @@ mod tests {
                 .classify(&call("list_templates", json!({})))
                 .level,
             RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            classifier.classify(&call("list_channels", json!({}))).level,
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            classifier
+                .classify(&call("delete_channel", json!({ "channel": "ops" })))
+                .level,
+            RiskLevel::High
         );
         assert_eq!(
             classifier
