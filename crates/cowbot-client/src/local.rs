@@ -193,6 +193,20 @@ impl LocalClient {
             )
             .await
     }
+    /// Ensure every workspace agent has a direct conversation channel.
+    ///
+    /// Idempotent: existing conversations are reused, missing ones are created
+    /// and published on the bus. The desktop shell calls this at startup and
+    /// after instantiating agents from a template.
+    pub async fn ensure_agent_channels(&self) -> CowResult<Vec<Channel>> {
+        let workspace_id = &self.session.workspace.id;
+        let agents = self.store.list_agents(workspace_id).await?;
+        self.channels
+            .ensure_agent_channels(workspace_id, &agents)
+            .await?;
+        self.channels.list_channels(workspace_id).await
+    }
+
     /// Answer a channel message on behalf of every agent it mentions.
     ///
     /// The caller posts the message first; this method routes it through the
@@ -563,6 +577,30 @@ mod tests {
 
         let channels = imported.list_channels().await.unwrap();
         assert!(channels.iter().any(|channel| channel.name == "general"));
+    }
+
+    #[tokio::test]
+    async fn ensure_agent_channels_provisions_one_conversation_per_agent() {
+        let store = Store::connect_in_memory().await.unwrap();
+        store.migrate().await.unwrap();
+        let context = bootstrap_local(&store).await.unwrap();
+        let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+        store
+            .upsert_agent(&context.workspace.id, &agent)
+            .await
+            .unwrap();
+
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let channels = client.ensure_agent_channels().await.unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].agent_id.as_ref(), Some(&agent.id));
+
+        let again = client.ensure_agent_channels().await.unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].id, channels[0].id);
     }
 
     #[tokio::test]

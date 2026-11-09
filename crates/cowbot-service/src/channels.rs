@@ -1,4 +1,5 @@
 use cowbot_bus::EventBus;
+use cowbot_core::agent::AgentProfile;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::error::CowResult;
 use cowbot_core::event::{Event, EventPayload};
@@ -43,6 +44,42 @@ impl ChannelService {
 
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         self.store.list_channels(workspace_id).await
+    }
+
+    /// Return the agent's direct conversation, creating it on first use.
+    ///
+    /// Every agent gets exactly one direct channel, so the desktop can show a
+    /// contact list that never spawns duplicates.
+    pub async fn ensure_agent_channel(
+        &self,
+        workspace_id: &WorkspaceId,
+        agent: &AgentProfile,
+    ) -> CowResult<Channel> {
+        if let Some(channel) = self
+            .store
+            .get_channel_for_agent(workspace_id, &agent.id)
+            .await?
+        {
+            return Ok(channel);
+        }
+
+        let channel = Channel::direct(agent, agent.role.clone());
+        self.store.create_channel(workspace_id, &channel).await?;
+        self.bus
+            .publish(Event::new(EventPayload::ChannelCreated(channel.clone())));
+        Ok(channel)
+    }
+
+    /// Create the direct conversation of every agent that lacks one.
+    pub async fn ensure_agent_channels(
+        &self,
+        workspace_id: &WorkspaceId,
+        agents: &[AgentProfile],
+    ) -> CowResult<()> {
+        for agent in agents {
+            self.ensure_agent_channel(workspace_id, agent).await?;
+        }
+        Ok(())
     }
 
     pub async fn post_message(

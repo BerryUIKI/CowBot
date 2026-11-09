@@ -98,50 +98,75 @@ impl ChannelAgentService {
             )));
         };
         let agents = self.store.list_agents(&self.workspace_id).await?;
-        let resolution = resolve_mentions(&message.content, &agents);
+        let direct = channel.agent_id.is_some();
 
-        if agents.is_empty() {
-            if !resolution.is_empty() {
+        // A direct conversation has exactly one addressee: its agent answers
+        // every message, so the user never has to type an @mention. Mentions
+        // in a direct conversation are plain text, including @team.
+        let addressees: Vec<AgentProfile> = if direct {
+            let agent = channel
+                .agent_id
+                .as_ref()
+                .and_then(|agent_id| agents.iter().find(|agent| &agent.id == agent_id));
+            match agent {
+                Some(agent) => vec![agent.clone()],
+                None => {
+                    self.post_notice(
+                        &channel,
+                        "This conversation's agent is no longer available.",
+                    )
+                    .await?;
+                    return Ok(ChannelTurnReport::default());
+                }
+            }
+        } else {
+            let resolution = resolve_mentions(&message.content, &agents);
+
+            if agents.is_empty() {
+                if !resolution.is_empty() {
+                    self.post_notice(
+                        &channel,
+                        "No agents in this workspace yet. Add a team from a template in Settings, then mention an agent by name.",
+                    )
+                    .await?;
+                }
+                return Ok(ChannelTurnReport {
+                    unknown_mentions: resolution.unknown,
+                    ..ChannelTurnReport::default()
+                });
+            }
+
+            if !resolution.unknown.is_empty() {
+                let available = agents
+                    .iter()
+                    .map(|agent| format!("@{}", agent.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 self.post_notice(
                     &channel,
-                    "No agents in this workspace yet. Add a team from a template in Settings, then mention an agent by name.",
+                    &format!(
+                        "No agent matched {}. Available agents: {}.",
+                        resolution
+                            .unknown
+                            .iter()
+                            .map(|name| format!("@{name}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        available
+                    ),
                 )
                 .await?;
             }
-            return Ok(ChannelTurnReport {
-                unknown_mentions: resolution.unknown,
-                ..ChannelTurnReport::default()
-            });
-        }
 
-        if !resolution.unknown.is_empty() {
-            let available = agents
-                .iter()
-                .map(|agent| format!("@{}", agent.name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            self.post_notice(
-                &channel,
-                &format!(
-                    "No agent matched {}. Available agents: {}.",
-                    resolution
-                        .unknown
-                        .iter()
-                        .map(|name| format!("@{name}"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    available
-                ),
-            )
-            .await?;
-        }
+            if resolution.agents.is_empty() {
+                return Ok(ChannelTurnReport {
+                    unknown_mentions: resolution.unknown,
+                    ..ChannelTurnReport::default()
+                });
+            }
 
-        if resolution.agents.is_empty() {
-            return Ok(ChannelTurnReport {
-                unknown_mentions: resolution.unknown,
-                ..ChannelTurnReport::default()
-            });
-        }
+            resolution.agents
+        };
 
         let requester = match &message.sender {
             Sender::User(id) => AssignmentRequester::User(id.clone()),
@@ -168,9 +193,9 @@ impl ChannelAgentService {
         let history = self.render_history(&channel, message, &agents).await?;
 
         let mut tasks = Vec::new();
-        for agent in &resolution.agents {
+        for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
-            let task = Self::turn_task(agent, &channel, message, &history);
+            let task = Self::turn_task(agent, &channel, message, &history, direct);
             scheduler
                 .enqueue(
                     &task,
@@ -192,12 +217,8 @@ impl ChannelAgentService {
 
         outcome?;
         Ok(ChannelTurnReport {
-            agents: resolution
-                .agents
-                .iter()
-                .map(|agent| agent.id.clone())
-                .collect(),
-            unknown_mentions: resolution.unknown,
+            agents: addressees.iter().map(|agent| agent.id.clone()).collect(),
+            unknown_mentions: Vec::new(),
             tasks,
         })
     }
@@ -207,6 +228,7 @@ impl ChannelAgentService {
         channel: &Channel,
         message: &ChannelMessage,
         history: &str,
+        direct: bool,
     ) -> Task {
         let author = match &message.sender {
             Sender::User(_) => "the user".to_string(),
@@ -214,18 +236,31 @@ impl ChannelAgentService {
             Sender::System => "the system".to_string(),
         };
 
-        let description = format!(
-            "You were mentioned in the channel #{channel_name}.\n\n\
-             Recent channel messages:\n{history}\n\n\
-             Latest message from {author}:\n{content}\n\n\
-             Reply to the latest message as a teammate in this channel. \
-             Be concise, answer what was asked, and do not repeat the channel \
-             history back to the user.",
-            channel_name = channel.name,
-            history = history,
-            author = author,
-            content = message.content.trim(),
-        );
+        let description = if direct {
+            format!(
+                "You are the agent in a direct conversation with {author}.\n\n\
+                 Recent messages in this conversation:\n{history}\n\n\
+                 Latest message from {author}:\n{content}\n\n\
+                 Reply as yourself. Be concise, answer what was asked, and do not \
+                 repeat the conversation history back to the user.",
+                history = history,
+                author = author,
+                content = message.content.trim(),
+            )
+        } else {
+            format!(
+                "You were mentioned in the channel #{channel_name}.\n\n\
+                 Recent channel messages:\n{history}\n\n\
+                 Latest message from {author}:\n{content}\n\n\
+                 Reply to the latest message as a teammate in this channel. \
+                 Be concise, answer what was asked, and do not repeat the channel \
+                 history back to the user.",
+                channel_name = channel.name,
+                history = history,
+                author = author,
+                content = message.content.trim(),
+            )
+        };
 
         Task::new(
             description,
