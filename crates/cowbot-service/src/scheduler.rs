@@ -17,6 +17,7 @@ use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::tool::{ToolCall, ToolCallRecorder, ToolGate, ToolResult};
+use cowbot_core::usage::{LlmCallRecord, LlmCallUsage, LlmUsageRecorder};
 use cowbot_llm::LlmProvider;
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -68,6 +69,7 @@ impl AgentExecution {
         bus: &EventBus,
         gate: Arc<dyn ToolGate>,
         recorder: Arc<dyn ToolCallRecorder>,
+        usage_recorder: Arc<dyn LlmUsageRecorder>,
     ) -> CowResult<String> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
@@ -77,6 +79,7 @@ impl AgentExecution {
         );
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
+        agent.set_usage_recorder(Some(usage_recorder));
         agent.execute_task(task, context, bus).await
     }
 }
@@ -452,9 +455,22 @@ impl AssignmentScheduler {
             store: self.assignments.store().clone(),
             run_id: run.id.clone(),
         });
+        let usage_recorder = Arc::new(RunUsageRecorder {
+            store: self.assignments.store().clone(),
+            run_id: run.id.clone(),
+            task_id: task.id.clone(),
+            agent_id: assignment.assignee.clone(),
+        });
 
         match executor
-            .execute(&task, &context, self.assignments.bus(), gate, recorder)
+            .execute(
+                &task,
+                &context,
+                self.assignments.bus(),
+                gate,
+                recorder,
+                usage_recorder,
+            )
             .await
         {
             Ok(output) => {
@@ -539,5 +555,26 @@ impl ToolCallRecorder for RunToolCallRecorder {
         record.result = Some(serde_json::to_value(result)?);
         record.approved_by = approved_by.map(str::to_string);
         self.store.record_tool_call(&record).await
+    }
+}
+
+/// Persists LLM usage under the run that produced it.
+struct RunUsageRecorder {
+    store: Store,
+    run_id: RunId,
+    task_id: TaskId,
+    agent_id: AgentId,
+}
+
+#[async_trait]
+impl LlmUsageRecorder for RunUsageRecorder {
+    async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()> {
+        let mut record = LlmCallRecord::new(call.call_kind, call.model.clone());
+        record.run_id = Some(self.run_id.clone());
+        record.task_id = Some(self.task_id.clone());
+        record.agent_id = Some(self.agent_id.clone());
+        record.usage = call.usage.clone();
+        record.raw_usage = call.raw_usage.clone();
+        self.store.record_llm_call(&record).await
     }
 }
