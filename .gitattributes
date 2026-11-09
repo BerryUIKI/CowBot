@@ -1,1 +1,4 @@
 *.sh text eol=lf
+# Embedded migration checksums cover the exact file bytes, so keep them LF on
+# every platform. See docs/ADR/0024-migration-checksum-compatibility.md.
+crates/cowbot-store/migrations/*.sql text eol=lf
