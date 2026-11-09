@@ -2039,6 +2039,66 @@ button {
   font-size: 11px;
 }
 
+.task-prompt {
+  max-width: 78ch;
+  margin-top: 22px;
+}
+
+.task-prompt-label {
+  margin: 0 0 6px;
+  color: var(--paper-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-prompt-text {
+  margin: 0;
+  color: var(--paper-dim);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.task-filter {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 8px;
+}
+
+.task-filter-item {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--paper-faint);
+  font-size: 11px;
+}
+
+.task-filter-item:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.task-filter-item[aria-pressed="true"] {
+  background: var(--brass-soft);
+  border-color: rgba(201, 166, 107, 0.28);
+  color: var(--paper);
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-row .contact-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .task-actions {
   display: flex;
   flex: none;
@@ -2314,45 +2374,8 @@ button {
 }
 
 .settings-layout {
-  display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  align-items: start;
-  gap: 36px;
   max-width: 1040px;
   margin-top: 24px;
-}
-
-.settings-nav {
-  position: sticky;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.settings-nav-item {
-  padding: 8px 11px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--paper-dim);
-  font-size: 13px;
-  text-align: left;
-  transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease;
-}
-
-.settings-nav-item:hover {
-  background: var(--ink-hover);
-  color: var(--paper);
-}
-
-.settings-nav-item[aria-current="page"] {
-  background: var(--brass-soft);
-  border-color: rgba(201, 166, 107, 0.32);
-  color: var(--paper);
 }
 
 .settings-content {
@@ -3046,19 +3069,7 @@ button {
   }
 
   .settings-layout {
-    grid-template-columns: 1fr;
-    gap: 18px;
     margin-top: 18px;
-  }
-
-  .settings-nav {
-    position: static;
-    flex-direction: row;
-    overflow-x: auto;
-  }
-
-  .settings-nav-item {
-    white-space: nowrap;
   }
 
   .catalogue-list {

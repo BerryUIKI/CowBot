@@ -112,11 +112,13 @@ export type TaskStatus =
 
 export interface Task {
   id: string;
+  title: string;
   description: string;
   expected_output: string;
   assigned_agent: string | null;
   context_tasks: string[];
   status: TaskStatus;
+  archived: boolean;
 }
 
 export type AssignmentStatus =

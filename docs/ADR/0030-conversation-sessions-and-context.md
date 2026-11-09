@@ -46,7 +46,7 @@ provider prompt caches can hit.
 - `conversation` — a user-created session with its own participant set and
   context branch.
 
-Migration `0006_conversations.sql` adds the column with a `channel` default and
+Migration `0007_conversations.sql` adds the column with a `channel` default and
 backfills `direct` for rows that already have `agent_id`. Earlier migrations
 stay untouched (ADR-0025). `Channel` carries `kind` and defaults to `channel`
 when deserializing older payloads.

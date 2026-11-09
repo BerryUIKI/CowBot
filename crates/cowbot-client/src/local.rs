@@ -416,6 +416,14 @@ impl Client for LocalClient {
         self.tasks.cancel(task_id, reason).await
     }
 
+    async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.set_archived(task_id, true).await
+    }
+
+    async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.set_archived(task_id, false).await
+    }
+
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
         self.assignments.list_for_task(task_id).await
     }

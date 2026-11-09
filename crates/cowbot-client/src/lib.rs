@@ -182,6 +182,8 @@ pub trait Client: Send + Sync {
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>>;
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
+    async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
+    async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>>;
 
     async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>>;

@@ -13,11 +13,13 @@ import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
 import RichText from "./RichText";
 import Onboarding from "./Onboarding";
-import SettingsView from "./SettingsView";
+import SettingsView, { settingsSections } from "./SettingsView";
+import type { SettingsSection } from "./SettingsView";
 import TaskDetail from "./TaskDetail";
 import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
+  archiveTask,
   cancelTask,
   clearChannelMessages,
   clearConversationContext,
@@ -51,6 +53,7 @@ import {
   renameChannel,
   runTask,
   setChannelPinned,
+  unarchiveTask,
   updateAgent,
   updateConversationSettings,
 } from "./api";
@@ -85,9 +88,10 @@ interface PendingReply {
 }
 
 interface MenuState {
-  kind: "agent" | "channel" | "conversation";
-  channel: Channel;
+  kind: "agent" | "channel" | "conversation" | "task";
+  channel: Channel | null;
   agent: AgentProfile | null;
+  task: Task | null;
   x: number;
   y: number;
 }
@@ -216,6 +220,7 @@ function PinMark() {
 
 export default function App() {
   const [view, setView] = useState<View>("chat");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [session, setSession] = useState<ClientSession | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -223,6 +228,9 @@ export default function App() {
   const [previews, setPreviews] = useState<Record<string, ChannelMessage | null>>({});
   const [query, setQuery] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskFilter, setTaskFilter] = useState<"active" | "archived" | "all">(
+    "active",
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
@@ -536,6 +544,7 @@ export default function App() {
       }
       if (
         type === "TaskCreated" ||
+        type === "TaskUpdated" ||
         type === "TaskAssigned" ||
         type === "TaskCompleted" ||
         type === "TaskFailed"
@@ -711,17 +720,22 @@ export default function App() {
     [conversationRows, normalizedQuery],
   );
 
-  const visibleTasks = useMemo(
-    () =>
-      normalizedQuery
-        ? tasks.filter(
-            (task) =>
-              task.description.toLowerCase().includes(normalizedQuery) ||
-              agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
-          )
-        : tasks,
-    [agents, normalizedQuery, tasks],
-  );
+  const visibleTasks = useMemo(() => {
+    const filtered = tasks.filter((task) =>
+      taskFilter === "all"
+        ? true
+        : taskFilter === "archived"
+          ? task.archived
+          : !task.archived,
+    );
+    if (!normalizedQuery) return filtered;
+    return filtered.filter(
+      (task) =>
+        (task.title || task.description).toLowerCase().includes(normalizedQuery) ||
+        task.description.toLowerCase().includes(normalizedQuery) ||
+        agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
+    );
+  }, [agents, normalizedQuery, taskFilter, tasks]);
 
   const channelMentionNames = useMemo(() => {
     const seen = new Set<string>();
@@ -857,7 +871,7 @@ export default function App() {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    setMenu({ kind, channel, agent, x: event.clientX, y: event.clientY });
+    setMenu({ kind, channel, agent, task: null, x: event.clientX, y: event.clientY });
   }
 
   function openMenuFromButton(
@@ -869,7 +883,7 @@ export default function App() {
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({ kind, channel, agent, x: rect.right - 4, y: rect.bottom + 4 });
+    setMenu({ kind, channel, agent, task: null, x: rect.right - 4, y: rect.bottom + 4 });
   }
 
   function openMenuFromKey(
@@ -881,7 +895,24 @@ export default function App() {
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({ kind, channel, agent, x: rect.left + 24, y: rect.bottom + 4 });
+    setMenu({ kind, channel, agent, task: null, x: rect.left + 24, y: rect.bottom + 4 });
+  }
+
+  function openTaskMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    task: Task,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setMenu({
+      kind: "task",
+      channel: null,
+      agent: null,
+      task,
+      x: rect.right - 4,
+      y: rect.bottom + 4,
+    });
   }
 
   async function togglePin(channel: Channel) {
@@ -891,6 +922,21 @@ export default function App() {
       await refreshChannels();
     } catch (err) {
       setError(errorMessage(err));
+    }
+  }
+
+  async function handleToggleArchive(task: Task) {
+    setError(null);
+    setBusy("archive-task");
+    try {
+      const updated = task.archived
+        ? await unarchiveTask(task.id)
+        : await archiveTask(task.id);
+      await refreshTasks(updated.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -1189,9 +1235,26 @@ export default function App() {
     });
   }, [messages]);
 
-  const menuAgent = menu?.agent ?? null;
-  const menuItems: ContextMenuItem[] = menu
-    ? menu.kind === "agent"
+  const menuItems: ContextMenuItem[] = (() => {
+    if (!menu) return [];
+    if (menu.kind === "task" && menu.task) {
+      const task = menu.task;
+      const kind = taskStatusKind(task.status);
+      const terminal =
+        kind === "completed" || kind === "failed" || kind === "cancelled";
+      if (!terminal) return [];
+      return [
+        {
+          label: task.archived ? "Unarchive task" : "Archive task",
+          onSelect: () => void handleToggleArchive(task),
+        },
+      ];
+    }
+
+    const channel = menu.channel;
+    if (!channel) return [];
+    const menuAgent = menu.agent;
+    return menu.kind === "agent"
       ? [
           ...(menuAgent
             ? [
@@ -1202,15 +1265,15 @@ export default function App() {
               ]
             : []),
           {
-            label: menu.channel.pinned ? "Unpin" : "Pin to top",
-            onSelect: () => void togglePin(menu.channel),
+            label: channel.pinned ? "Unpin" : "Pin to top",
+            onSelect: () => void togglePin(channel),
           },
           ...(menuAgent
             ? [
                 {
                   label: "Clear history…",
                   danger: true,
-                  onSelect: () => openClearDialog(menu.channel, menuAgent),
+                  onSelect: () => openClearDialog(channel, menuAgent),
                 },
               ]
             : []),
@@ -1219,42 +1282,42 @@ export default function App() {
         ? [
             {
               label: "Rename conversation…",
-              onSelect: () => openRenameDialog(menu.channel),
+              onSelect: () => openRenameDialog(channel),
             },
             {
-              label: menu.channel.pinned ? "Unpin" : "Pin to top",
-              onSelect: () => void togglePin(menu.channel),
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
             },
             {
               label: "Compact context",
-              onSelect: () => void compactChannel(menu.channel),
+              onSelect: () => void compactChannel(channel),
             },
             {
               label: "Clear context…",
-              onSelect: () => void clearContextForChannel(menu.channel),
+              onSelect: () => void clearContextForChannel(channel),
             },
             {
               label: "Delete conversation…",
               danger: true,
-              onSelect: () => openDeleteDialog(menu.channel),
+              onSelect: () => openDeleteDialog(channel),
             },
           ]
         : [
             {
               label: "Rename channel…",
-              onSelect: () => openRenameDialog(menu.channel),
+              onSelect: () => openRenameDialog(channel),
             },
             {
-              label: menu.channel.pinned ? "Unpin" : "Pin to top",
-              onSelect: () => void togglePin(menu.channel),
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
             },
             {
               label: "Delete channel…",
               danger: true,
-              onSelect: () => openDeleteDialog(menu.channel),
+              onSelect: () => openDeleteDialog(channel),
             },
-          ]
-    : [];
+          ];
+  })();
 
   return (
     <div className="app">
@@ -1599,11 +1662,28 @@ export default function App() {
                   New
                 </button>
               </div>
+              <div className="task-filter" role="group" aria-label="Task filter">
+                {(["active", "archived", "all"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className="task-filter-item"
+                    aria-pressed={taskFilter === filter}
+                    onClick={() => setTaskFilter(filter)}
+                  >
+                    {filter === "active"
+                      ? "Active"
+                      : filter === "archived"
+                        ? "Archived"
+                        : "All"}
+                  </button>
+                ))}
+              </div>
               <ul className="contact-list">
                 {visibleTasks.map((task) => {
                   const kind = taskStatusKind(task.status);
                   return (
-                    <li key={task.id}>
+                    <li key={task.id} className="task-row">
                       <button
                         type="button"
                         className="contact-row"
@@ -1622,14 +1702,26 @@ export default function App() {
                         />
                         <span className="contact-text">
                           <span className="contact-top">
-                            <span className="contact-name">{task.description}</span>
+                            <span className="contact-name">
+                              {task.title || task.description}
+                            </span>
                           </span>
                           <span className="contact-snippet">
                             <span className={`status-dot status-${kind}`} />{" "}
                             {taskStatusLabel(task.status)} ·{" "}
                             {agentName(agents, task.assigned_agent)}
+                            {task.archived ? " · Archived" : ""}
                           </span>
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="contact-more"
+                        title="Task actions"
+                        aria-label={`Actions for ${task.title || task.description}`}
+                        onClick={(event) => openTaskMenu(event, task)}
+                      >
+                        ⋯
                       </button>
                     </li>
                   );
@@ -1655,11 +1747,45 @@ export default function App() {
                 runs.
               </p>
             </section>
+          ) : view === "settings" ? (
+            <section className="sidebar-section" aria-label="Settings sections">
+              <div className="nav-heading">
+                <span>Settings</span>
+              </div>
+              <ul className="contact-list">
+                {settingsSections.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="contact-row"
+                      aria-current={
+                        settingsSection === item.id ? "page" : undefined
+                      }
+                      onClick={() => setSettingsSection(item.id)}
+                    >
+                      <span className="contact-text">
+                        <span className="contact-top">
+                          <span className="contact-name">{item.label}</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
         </div>
 
         <div className="sidebar-footer">
           <nav className="footer-nav" aria-label="Views">
+            <button
+              type="button"
+              className="footer-nav-item"
+              aria-current={view === "chat" ? "page" : undefined}
+              onClick={() => setView("chat")}
+            >
+              Chat
+            </button>
             <button
               type="button"
               className="footer-nav-item"
@@ -2160,6 +2286,8 @@ export default function App() {
               onCancel={handleCancelTask}
               running={runningTasks.has(selectedTask.id)}
               onRun={() => handleRunTask(selectedTask.id)}
+              onToggleArchive={() => void handleToggleArchive(selectedTask)}
+              archiveBusy={busy === "archive-task"}
             />
           ) : (
             <div className="empty-workspace">
@@ -2188,6 +2316,7 @@ export default function App() {
             busy={busy}
             updater={updater}
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
+            section={settingsSection}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
             onEditAgent={handleEditAgent}

@@ -3,24 +3,27 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{Assignment, AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::ChannelId;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::task::{Task, TaskId};
 use cowbot_store::Store;
 
 use crate::assignments::AssignmentService;
 
-/// Application service for task creation, lookup, and cancellation.
+/// Application service for task creation, lookup, archiving, and cancellation.
 #[derive(Clone)]
 pub struct TaskService {
     store: Store,
+    bus: EventBus,
     assignments: AssignmentService,
 }
 
 impl TaskService {
     pub fn new(store: Store, bus: EventBus) -> Self {
         Self {
-            assignments: AssignmentService::new(store.clone(), bus),
+            assignments: AssignmentService::new(store.clone(), bus.clone()),
             store,
+            bus,
         }
     }
 
@@ -68,5 +71,22 @@ impl TaskService {
             .find(|assignment| assignment.parent_id.is_none() && !assignment.is_terminal())
             .ok_or_else(|| CowError::Task(format!("task '{task_id}' has no active assignment")))?;
         self.assignments.cancel(&root.id, reason).await
+    }
+
+    /// Archive or restore a terminal task without deleting its history.
+    pub async fn set_archived(&self, task_id: &TaskId, archived: bool) -> CowResult<Task> {
+        let Some(mut task) = self.store.get_task(task_id).await? else {
+            return Err(CowError::Task(format!("task '{task_id}' was not found")));
+        };
+        if !task.status.is_terminal() {
+            return Err(CowError::Task(format!(
+                "task '{task_id}' must complete, fail, or be cancelled before it can be archived"
+            )));
+        }
+        self.store.set_task_archived(task_id, archived).await?;
+        task.archived = archived;
+        self.bus
+            .publish(Event::new(EventPayload::TaskUpdated(task.clone())));
+        Ok(task)
     }
 }

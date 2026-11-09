@@ -78,7 +78,7 @@ one summary entry plus a context event.
 
 ### M2.2 `cowbot-store`: schema and repositories
 
-Migration `0006_conversations.sql`:
+Migration `0007_conversations.sql`:
 
 - `channels.kind` plus an index and a `direct` backfill;
 - `channel_participants`;

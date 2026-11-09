@@ -463,6 +463,24 @@ pub async fn cancel_task(
 }
 
 #[tauri::command]
+pub async fn archive_task(state: State<'_, AppState>, task_id: String) -> Result<Task, String> {
+    state
+        .client
+        .archive_task(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unarchive_task(state: State<'_, AppState>, task_id: String) -> Result<Task, String> {
+    state
+        .client
+        .unarchive_task(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn list_assignments(
     state: State<'_, AppState>,
     task_id: String,
