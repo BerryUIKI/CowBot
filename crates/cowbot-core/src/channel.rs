@@ -1,4 +1,5 @@
 use crate::agent::{AgentId, AgentProfile};
+use crate::conversation::ChannelKind;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -36,6 +37,8 @@ pub enum Sender {
 ///
 /// A channel with `agent_id` set is that agent's direct conversation: it has a
 /// single addressee, so messages do not need an `@mention` to reach the agent.
+/// User-created conversations have no `agent_id`; their participants live in
+/// `channel_participants` and their context is independent (ADR-0030).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub id: ChannelId,
@@ -48,6 +51,10 @@ pub struct Channel {
     /// Whether the user pinned this channel or conversation.
     #[serde(default)]
     pub pinned: bool,
+    /// What this row represents. Legacy rows default to a group channel; the
+    /// migration marks agent-owned rows as direct.
+    #[serde(default)]
+    pub kind: ChannelKind,
 }
 
 impl Channel {
@@ -59,6 +66,7 @@ impl Channel {
             created_at: Utc::now(),
             agent_id: None,
             pinned: false,
+            kind: ChannelKind::Channel,
         }
     }
 
@@ -71,7 +79,29 @@ impl Channel {
             created_at: Utc::now(),
             agent_id: Some(agent.id.clone()),
             pinned: false,
+            kind: ChannelKind::Direct,
         }
+    }
+
+    /// Create a user-created conversation channel.
+    pub fn conversation(name: impl Into<String>, topic: impl Into<String>) -> Self {
+        Self {
+            id: ChannelId::random(),
+            name: name.into(),
+            topic: topic.into(),
+            created_at: Utc::now(),
+            agent_id: None,
+            pinned: false,
+            kind: ChannelKind::Conversation,
+        }
+    }
+
+    pub fn is_direct(&self) -> bool {
+        self.kind == ChannelKind::Direct
+    }
+
+    pub fn is_conversation(&self) -> bool {
+        self.kind == ChannelKind::Conversation
     }
 }
 
@@ -113,6 +143,18 @@ mod tests {
         let json = r#"{"id":"c1","name":"general","topic":"","created_at":"2026-01-01T00:00:00Z"}"#;
         let channel: Channel = serde_json::from_str(json).unwrap();
         assert_eq!(channel.agent_id, None);
+        assert_eq!(channel.kind, ChannelKind::Channel);
+    }
+
+    #[test]
+    fn conversation_channels_have_no_agent_id_and_a_kind() {
+        let channel = Channel::conversation("Design review", "Week 12");
+        assert!(channel.is_conversation());
+        assert!(channel.agent_id.is_none());
+        let json = serde_json::to_string(&channel).unwrap();
+        assert!(json.contains("\"kind\":\"conversation\""));
+        let restored: Channel = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.kind, ChannelKind::Conversation);
     }
 
     #[test]

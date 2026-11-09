@@ -1,4 +1,5 @@
 use crate::agent::AgentId;
+use crate::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -59,6 +60,10 @@ pub struct Task {
     pub assigned_agent: Option<AgentId>,
     /// Prerequisite task IDs whose outputs will be injected as context
     pub context_tasks: Vec<TaskId>,
+    /// Channel the task was created in, when any. Used to attribute LLM usage
+    /// to the conversation that caused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<ChannelId>,
     /// Current execution status
     pub status: TaskStatus,
     /// Whether the task was archived by the user
@@ -76,6 +81,7 @@ impl Task {
             expected_output: expected_output.into(),
             assigned_agent: None,
             context_tasks: Vec::new(),
+            channel_id: None,
             status: TaskStatus::Pending,
             archived: false,
         }
@@ -91,6 +97,11 @@ impl Task {
 
     pub fn assign_to(mut self, agent_id: AgentId) -> Self {
         self.assigned_agent = Some(agent_id);
+        self
+    }
+
+    pub fn in_channel(mut self, channel_id: ChannelId) -> Self {
+        self.channel_id = Some(channel_id);
         self
     }
 
