@@ -6,6 +6,8 @@ import type {
 } from "react";
 
 import ApprovalCards from "./ApprovalCards";
+import ApprovalCard from "./ApprovalCard";
+import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -72,7 +74,7 @@ import type {
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
+import { taskStatusKind, taskStatusLabel } from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "approvals" | "settings";
@@ -98,8 +100,6 @@ type DialogState =
   | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
   | { kind: "edit-agent"; agent: AgentProfile }
   | null;
-
-const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
 
 const broadcastNames = ["team", "all", "everyone", "here"];
 
@@ -712,6 +712,20 @@ export default function App() {
   }, [agents]);
 
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+
+  const inlineApprovals = useMemo(
+    () =>
+      approvals.filter(
+        (approval) =>
+          tasks.find((task) => task.id === approval.task_id)?.channel_id ===
+          selectedId,
+      ),
+    [approvals, selectedId, tasks],
+  );
+  const inlineApprovalTool =
+    inlineApprovals.length > 0
+      ? toolCallDetails[inlineApprovals[0].tool_call_id]?.name
+      : null;
 
   async function handleCreateChannel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1660,23 +1674,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {agents.length > 0 ? (
-                    <label className="channel-approval">
-                      <span>Approval</span>
-                      <select
-                        value={channelApproval}
-                        onChange={(event) =>
-                          setChannelApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
                   {selectedAgent ? <span className="chat-kind">Direct</span> : null}
                 </div>
               </header>
@@ -1754,23 +1751,70 @@ export default function App() {
                         )}
                       </Fragment>
                     ))}
-                    {replyingHere
-                      ? pendingReply.agents.map((agent) => (
-                          <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
-                            <Avatar name={agent.name} kind="agent" size="small" />
-                            <div className="chat-bubble-wrap">
-                              <span className="chat-sender">{agent.name}</span>
-                              <div className="chat-bubble chat-bubble-agent">
-                                <span className="typing-dots" aria-label="Working">
-                                  <span />
-                                  <span />
-                                  <span />
-                                </span>
-                              </div>
+                    {inlineApprovals.map((approval) => {
+                      const task = tasks.find(
+                        (candidate) => candidate.id === approval.task_id,
+                      );
+                      const agent = task?.assigned_agent
+                        ? agents.find(
+                            (candidate) => candidate.id === task.assigned_agent,
+                          )
+                        : undefined;
+                      return (
+                        <li
+                          className="chat-approval-row"
+                          key={`approval-${approval.id}`}
+                        >
+                          {agent ? (
+                            <Avatar
+                              name={agent.name}
+                              kind="agent"
+                              size="small"
+                            />
+                          ) : null}
+                          <div className="chat-approval-body">
+                            <span className="chat-sender">
+                              {agent?.name ?? "Approval"}
+                            </span>
+                            <ApprovalCard
+                              approval={approval}
+                              task={task}
+                              call={toolCallDetails[approval.tool_call_id]}
+                              risk={approvalDetails[approval.id]}
+                              deciding={busy === approval.id}
+                              compact
+                              onDecide={handleDecideApproval}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                    {inlineApprovals.length > 0 ? (
+                      <li className="chat-row chat-row-agent" key="approval-waiting">
+                        <div className="chat-bubble-wrap">
+                          <div className="chat-bubble chat-bubble-agent chat-bubble-waiting">
+                            Waiting for approval
+                            {inlineApprovalTool ? `: ${inlineApprovalTool}` : ""}…
+                          </div>
+                        </div>
+                      </li>
+                    ) : replyingHere ? (
+                      pendingReply.agents.map((agent) => (
+                        <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
+                          <Avatar name={agent.name} kind="agent" size="small" />
+                          <div className="chat-bubble-wrap">
+                            <span className="chat-sender">{agent.name}</span>
+                            <div className="chat-bubble chat-bubble-agent">
+                              <span className="typing-dots" aria-label="Working">
+                                <span />
+                                <span />
+                                <span />
+                              </span>
                             </div>
-                          </li>
-                        ))
-                      : null}
+                          </div>
+                        </li>
+                      ))
+                    ) : null}
                   </ol>
                 )}
                 <div ref={endRef} />
@@ -1823,6 +1867,12 @@ export default function App() {
                 </div>
                 <div className="composer-footer">
                   <span className="composer-footer-spacer" />
+                  {agents.length > 0 ? (
+                    <ApprovalModeMenu
+                      value={channelApproval}
+                      onChange={setChannelApproval}
+                    />
+                  ) : null}
                   <button
                     type="button"
                     className="composer-model"
@@ -1937,21 +1987,13 @@ export default function App() {
                         ))}
                       </select>
                     </label>
-                    <label className="field">
+                    <div className="field">
                       <span>Approval</span>
-                      <select
+                      <ApprovalModeMenu
                         value={taskApproval}
-                        onChange={(event) =>
-                          setTaskApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={setTaskApproval}
+                      />
+                    </div>
                   </div>
                   <div className="form-actions">
                     <button
