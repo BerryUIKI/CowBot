@@ -199,8 +199,7 @@ Progress refreshes from live events; all history persists across restarts.
 
 ### Approval policies
 
-- **Auto** — approve read-only and low-risk tools automatically; ask for
-  medium and high risk.
+- **Auto** — approve read-only and low-risk tools automatically; medium and high risk are decided by the active model's permission evaluator, which falls back to asking you when it is unsure or unavailable.
 - **Manual** — approve read-only tools automatically; ask before anything that
   changes state (default for interactive use).
 - **Accept edits** — run workspace file edits automatically; other tools
