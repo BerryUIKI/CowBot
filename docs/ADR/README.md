@@ -29,6 +29,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0023](0023-channel-turn-scheduler-scope.md) | Scoped assignment scheduling for background turns |
 | [0024](0024-agent-direct-conversations.md) | Agent direct conversations |
 | [0025](0025-database-migration-checksum-compatibility.md) | Database migration checksum compatibility |
+| [0026](0026-channel-and-conversation-management.md) | Channel and conversation management |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

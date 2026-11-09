@@ -139,12 +139,19 @@ agent editor is not part of this release.
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
 - **Channels** — group rooms sit below the agents. Create one with **New
-  channel** or the **+** button, post messages, and follow the timeline.
-  Mention an agent by name to get an answer in the channel: `@Planner, which
-  module owns the parser?` The agents in the workspace are listed in the
+  channel** or the **+** button, post messages, and follow the timeline. Names
+  must be unique in the workspace, case-insensitively. Mention an agent by name
+  to get an answer in the channel: `@Planner, which module owns the parser?`
+  The agents in the workspace are listed in the
   channel header, and `@team` (also `@all`, `@everyone`, `@here`) addresses all
   of them. Matching is case-insensitive; an unknown name produces a system
   notice listing the agents that exist.
+- **Manage conversations** — right-click an agent or channel row (or use its
+  **⋯** button) to pin it to the top, rename a channel, delete a group channel,
+  or clear an agent conversation's history. Deleting a channel deletes its
+  messages; tasks keep their history but are no longer linked to that channel.
+  Clearing a conversation keeps the agent and removes only its messages. Agent
+  conversations cannot be deleted from the channel list.
 - **Search** — the field above the sidebar list filters agents, channels, and
   tasks by name.
 - **Approval** — the dropdown in the conversation header sets the approval

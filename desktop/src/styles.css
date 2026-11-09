@@ -300,6 +300,167 @@ button {
   font-size: 11px;
 }
 
+.contact-item {
+  position: relative;
+}
+
+.contact-item .contact-row {
+  padding-right: 32px;
+}
+
+.contact-more {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--paper-faint);
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.contact-item:hover .contact-more,
+.contact-more:focus-visible {
+  opacity: 1;
+}
+
+.contact-item:hover .contact-time {
+  visibility: hidden;
+}
+
+.contact-more:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.pin-mark {
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  color: var(--brass);
+  vertical-align: -1px;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 11px;
+  background: #2e2c27;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.context-menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 13px;
+  text-align: left;
+}
+
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background: var(--ink-hover);
+  color: var(--paper);
+  outline: none;
+}
+
+.context-menu-item.is-danger {
+  color: var(--danger);
+}
+
+.context-menu-item.is-danger:hover {
+  background: rgba(208, 144, 127, 0.12);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal {
+  width: min(440px, 100%);
+  border: 1px solid var(--rule-strong);
+  border-radius: 16px;
+  background: var(--ink-panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 16px 18px;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 18px 18px;
+}
+
+.modal-close {
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog-copy {
+  margin: 0;
+  color: var(--paper-dim);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dialog-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .workspace {
   display: flex;
   flex-direction: column;
