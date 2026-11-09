@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
+pub use cowbot_service::AgentUpdate;
 pub use local::LocalClient;
 
 /// User identity as seen by the client.
@@ -178,4 +179,5 @@ pub trait Client: Send + Sync {
     async fn export_template(&self, id: &str) -> CowResult<String>;
     async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>>;
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
+    async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
 }

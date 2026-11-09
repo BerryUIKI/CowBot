@@ -31,6 +31,7 @@ import {
   listAgents,
   listAssignmentEvents,
   listAssignments,
+  listAvailableTools,
   listChannels,
   listMessages,
   listRuns,
@@ -45,6 +46,7 @@ import {
   renameChannel,
   runTask,
   setChannelPinned,
+  updateAgent,
 } from "./api";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
@@ -60,6 +62,9 @@ import type {
   OnboardingState,
   Task,
   TemplateDocument,
+  ToolCallDetail,
+  ToolDefinition,
+  ApprovalRisk,
 } from "./types";
 import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
 import { useUpdater } from "./updater";
@@ -84,6 +89,7 @@ type DialogState =
   | { kind: "rename-channel"; channel: Channel }
   | { kind: "delete-channel"; channel: Channel }
   | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
+  | { kind: "edit-agent"; agent: AgentProfile }
   | null;
 
 const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
@@ -239,6 +245,11 @@ export default function App() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [dialogName, setDialogName] = useState("");
   const [dialogTopic, setDialogTopic] = useState("");
+  const [dialogRole, setDialogRole] = useState("");
+  const [dialogTools, setDialogTools] = useState<string[]>([]);
+  const [availableTools, setAvailableTools] = useState<ToolDefinition[]>([]);
+  const [toolCallDetails, setToolCallDetails] = useState<Record<string, ToolCallDetail>>({});
+  const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -425,13 +436,61 @@ export default function App() {
   }, [templates, templateId]);
 
   useEffect(() => {
+    listAvailableTools()
+      .then((tools) =>
+        setAvailableTools(
+          [...tools].sort((left, right) => left.name.localeCompare(right.name)),
+        ),
+      )
+      .catch((err) => setError(errorMessage(err)));
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
-      if (type === "ChannelCreated" || type === "ChannelUpdated" || type === "ChannelDeleted") {
+      if (type === "ChannelCreated") {
+        const channel = event.payload.payload as Channel | undefined;
+        if (channel?.agent_id) {
+          refreshAgents().catch((err) => setError(errorMessage(err)));
+        }
         refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "ChannelUpdated" || type === "ChannelDeleted") {
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "AgentUpdated") {
+        refreshAgents().catch((err) => setError(errorMessage(err)));
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "ToolCallRequested") {
+        const payload = event.payload.payload as
+          | { call?: { id?: string; name?: string; arguments?: unknown } }
+          | undefined;
+        const call = payload?.call;
+        if (call?.id && call.name) {
+          setToolCallDetails((current) => ({
+            ...current,
+            [call.id as string]: { name: call.name as string, arguments: call.arguments },
+          }));
+        }
+      }
+      if (type === "ApprovalRequested") {
+        const payload = event.payload.payload as
+          | { approval?: { id?: string }; risk?: string; reason?: string }
+          | undefined;
+        const approval = payload?.approval;
+        if (approval?.id) {
+          setApprovalDetails((current) => ({
+            ...current,
+            [approval.id as string]: {
+              risk: payload?.risk ?? "unknown",
+              reason: payload?.reason ?? "",
+            },
+          }));
+        }
       }
       if (type === "MessagePosted") {
         const message = event.payload.payload as ChannelMessage | undefined;
@@ -469,6 +528,7 @@ export default function App() {
       unlisten?.();
     };
   }, [
+    refreshAgents,
     refreshApprovals,
     refreshChannels,
     refreshMessages,
@@ -754,6 +814,44 @@ export default function App() {
     }
   }
 
+  function openEditAgentDialog(agent: AgentProfile) {
+    setDialog({ kind: "edit-agent", agent });
+    setDialogName(agent.name);
+    setDialogRole(agent.role);
+    setDialogTools([...agent.tools]);
+    setDialogError(null);
+  }
+
+  function toggleTool(name: string) {
+    setDialogTools((current) =>
+      current.includes(name)
+        ? current.filter((tool) => tool !== name)
+        : [...current, name],
+    );
+  }
+
+  async function submitEditAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!dialog || dialog.kind !== "edit-agent") return;
+    const target = dialog.agent;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await updateAgent(target.id, dialogName, dialogRole, dialogTools);
+      setDialog(null);
+      await refreshAgents();
+      await refreshChannels();
+    } catch (err) {
+      setDialogError(errorMessage(err));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  function handleEditAgent(agent: AgentProfile) {
+    openEditAgentDialog(agent);
+  }
+
   async function sendMessage() {
     const content = draft.trim();
     if (!content || !selectedChannel || sending) return;
@@ -944,6 +1042,14 @@ export default function App() {
   const menuItems: ContextMenuItem[] = menu
     ? menu.kind === "agent"
       ? [
+          ...(menuAgent
+            ? [
+                {
+                  label: "Edit agent…",
+                  onSelect: () => openEditAgentDialog(menuAgent),
+                },
+              ]
+            : []),
           {
             label: menu.channel.pinned ? "Unpin" : "Pin to top",
             onSelect: () => void togglePin(menu.channel),
@@ -1680,6 +1786,8 @@ export default function App() {
           <ApprovalCards
             approvals={approvals}
             tasks={tasks}
+            toolCalls={toolCallDetails}
+            risks={approvalDetails}
             decidingId={busy}
             onDecide={handleDecideApproval}
           />
@@ -1694,6 +1802,7 @@ export default function App() {
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
+            onEditAgent={handleEditAgent}
           />
         )}
       </main>
@@ -1835,6 +1944,75 @@ export default function App() {
               {dialogError}
             </p>
           ) : null}
+        </Modal>
+      ) : dialog?.kind === "edit-agent" ? (
+        <Modal
+          title="Edit agent"
+          onClose={closeDialog}
+          footer={
+            <>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={closeDialog}
+                disabled={dialogBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="edit-agent-form"
+                className="primary-button"
+                disabled={dialogBusy || !dialogName.trim()}
+              >
+                {dialogBusy ? "Saving…" : "Save"}
+              </button>
+            </>
+          }
+        >
+          <form id="edit-agent-form" className="dialog-form" onSubmit={submitEditAgent}>
+            <label className="field">
+              <span>Name</span>
+              <input
+                value={dialogName}
+                onChange={(event) => setDialogName(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Role</span>
+              <input
+                value={dialogRole}
+                onChange={(event) => setDialogRole(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <fieldset className="tool-picker">
+              <legend>Tools</legend>
+              {availableTools.length === 0 ? (
+                <p className="dialog-copy">Loading tools…</p>
+              ) : (
+                availableTools.map((tool) => (
+                  <label key={tool.name} className="tool-option">
+                    <input
+                      type="checkbox"
+                      checked={dialogTools.includes(tool.name)}
+                      onChange={() => toggleTool(tool.name)}
+                    />
+                    <span>
+                      <strong>{tool.name}</strong>
+                      <small>{tool.description}</small>
+                    </span>
+                  </label>
+                ))
+              )}
+            </fieldset>
+            {dialogError ? (
+              <p className="dialog-error" role="alert">
+                {dialogError}
+              </p>
+            ) : null}
+          </form>
         </Modal>
       ) : null}
     </div>

@@ -79,6 +79,8 @@ async fn a_mentioned_agent_answers_in_the_channel() {
         .unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(tasks[0].description.contains("#general"));
+    assert!(tasks[0].description.contains("CowBot"));
+    assert!(tasks[0].description.contains("Workspace agents"));
 }
 
 #[tokio::test]
@@ -237,6 +239,8 @@ async fn a_direct_conversation_answers_without_a_mention() {
     let tasks = store.list_tasks(&workspace).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(tasks[0].description.contains("direct conversation"));
+    assert!(tasks[0].description.contains("CowBot"));
+    assert!(tasks[0].description.contains("Workspace agents"));
 }
 
 #[tokio::test]

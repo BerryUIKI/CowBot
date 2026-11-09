@@ -127,9 +127,24 @@ on the next start.
 ## Team
 
 **Settings → Team** lists the built-in templates and the agents in the
-workspace. **Add agents** instantiates every agent in a template with its role,
-goal, and tool access. The 0.1.x app creates agents from templates; a standalone
-agent editor is not part of this release.
+workspace. The **Main Assistant** is the primary agent for a one-person
+company: agent `main` plans work, can create channels, start specialist teams,
+and queue tasks for other agents. **Add agents** instantiates every agent in a
+template with its role, goal, and tool access. The 0.1.x app creates agents
+from templates; a standalone agent editor is not part of this release.
+
+- **Edit an agent** with **Edit** in Settings → Team or **Edit agent…** in an
+  agent conversation's context menu. You can change its name, role, and tool
+  selection. Names must be unique; the agent's conversation follows the new
+  name.
+- To turn an existing Assistant into the main assistant, open **Edit**, set the
+  name to `main`, choose a role such as `Primary Assistant`, and enable the
+  workspace tools (`create_channel`, `create_task`, `instantiate_team`,
+  `list_agents`, `list_templates`). Adding the Main Assistant template is the
+  alternative.
+- Agent actions that change the workspace ask for approval under the
+  **Ask** and **Safe auto** policies. The approval card shows the tool name,
+  arguments, risk, and reason.
 
 ## Agents, channels, and tasks
 
@@ -322,6 +337,11 @@ reporting, see [SECURITY.md](../SECURITY.md).
 - HTML previews cannot reach the network, external images, or the app, and a
   button inside one cannot send a message back to the agent yet. Reply in the
   composer after using the preview.
+- Workspace tools are available in the desktop app only; the CLI's channel
+  turns do not expose them. `create_task` queues a pending task and does not run
+  the assigned agent automatically.
+- Agents cannot be deleted from the UI; edit their name, role, or tools
+  instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
 - No streaming responses, retries, rate limiting, or token accounting.

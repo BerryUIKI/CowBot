@@ -32,6 +32,13 @@ fenced `html` blocks open as sandboxed HTML artifacts with a Preview/Code
 toggle, where inline scripts run but network access, external images, forms,
 and the app itself stay out of reach (ADR-0027).
 
+The starter template is **Main Assistant** (agent `main`), which can create
+channels, instantiate specialist teams, and queue tasks for other agents via
+desktop workspace tools; those actions go through the normal approval policy and
+their arguments and risk appear on the approval card (ADR-0028). Agents can be
+edited from Settings → Team or the conversation context menu (name, role,
+tools); names are unique and the direct conversation follows a rename.
+
 Model providers are OpenAI Chat Completions, Anthropic Messages, or OpenAI
 Responses endpoints kept in `config.json` under the same app-data directory as
 `cowbot.db`. **Add provider** opens a searchable, grouped vendor catalogue; each

@@ -31,6 +31,7 @@ interface SettingsViewProps {
   tasksRunning: boolean;
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
+  onEditAgent: (agent: AgentProfile) => void;
 }
 
 type SettingsSection = "model" | "team" | "workspace" | "about";
@@ -83,6 +84,7 @@ export default function SettingsView({
   tasksRunning,
   onSelectTemplate,
   onAddAgents,
+  onEditAgent,
 }: SettingsViewProps) {
   const [section, setSection] = useState<SettingsSection>("model");
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
@@ -237,7 +239,8 @@ export default function SettingsView({
                 <div className="settings-section-head">
                   <h3 id="settings-templates">Agent templates</h3>
                   <p className="settings-hint">
-                    Instantiating a template adds its agents to this workspace.
+                    The Main Assistant is the primary agent; specialist templates
+                    add more agents to this workspace.
                   </p>
                 </div>
                 {templates.length === 0 ? (
@@ -301,6 +304,13 @@ export default function SettingsView({
                             <span className="settings-card-title">{agent.name}</span>
                             <p className="settings-card-subtitle">{agent.role}</p>
                           </div>
+                          <button
+                            type="button"
+                            className="text-button settings-card-action"
+                            onClick={() => onEditAgent(agent)}
+                          >
+                            Edit
+                          </button>
                         </div>
                         {agent.goal ? <p className="settings-card-body">{agent.goal}</p> : null}
                         <div className="settings-card-foot">

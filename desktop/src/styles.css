@@ -461,6 +461,88 @@ button {
   font-size: 12px;
 }
 
+.approval-args {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--paper-dim);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-risk {
+  margin: 8px 0 0;
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.approval-risk.risk-read_only,
+.approval-risk.risk-low {
+  color: var(--sage);
+}
+
+.approval-risk.risk-medium {
+  color: var(--brass);
+}
+
+.approval-risk.risk-high,
+.approval-risk.risk-critical {
+  color: var(--danger);
+}
+
+.tool-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 0;
+}
+
+.tool-picker legend {
+  margin-bottom: 4px;
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.tool-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.tool-option input {
+  margin-top: 3px;
+}
+
+.tool-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tool-option strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-option small {
+  color: var(--paper-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .workspace {
   display: flex;
   flex-direction: column;
@@ -2080,6 +2162,10 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.settings-card-action {
+  margin-left: auto;
 }
 
 .settings-card-title {
