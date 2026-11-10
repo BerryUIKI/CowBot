@@ -160,7 +160,8 @@ Locked decisions:
 - Channel names are unique per project; Home is a separate namespace.
 - Archiving makes a project read-only without cancelling running work; hard deletion is limited to projects with no tasks or messages.
 - Mentions and task assignment reject agents outside the project team; removing a member keeps history and blocks new assignments.
-- Code projects bind one local directory through a machine-local record excluded from `.cowpkg` export.
+- Code projects bind one repository from the device-local registry, which is excluded from `.cowpkg` export.
+- The existing device-local git registry keeps its behavior but is renamed **Repositories**; **Project** means the work unit in this plan.
 - Workspace policy sets the enforced security floor; project settings may only tighten it.
 
 **Branded editions (deferred, not started).** Future distribution may build separate installers from the same codebase — for example CowBot Finance or CowBot Medical — each with its own application identity, data directory, update channel, compliance defaults, and support terms. This is deferred until a paying vertical customer requires a distinct procurement identity, update channel, or compliance package. Switching editions inside one installation is not planned; domain adaptation stays at runtime through project-level presets, capability packs, and security policies.

@@ -209,6 +209,7 @@ CowBot follows a "single core, two forms" model:
 6. Medical research and medical writing are a later vertical; clinical diagnosis, treatment recommendations, and clinical decision support are out of scope.
 7. Branded editions are deferred. There is no runtime edition switching; separate installers, if ever needed, are built from the same codebase.
 8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
+9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
 
 ### 7.3 Open Questions
 

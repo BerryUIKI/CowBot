@@ -2,7 +2,7 @@
 
 - Status: Planned (not started)
 - Date: 2026-11-10
-- Related: [ROADMAP 6.2](../ROADMAP.md#62-deferred-product-directions-not-started), [ADR-0024](../ADR/0024-agent-direct-conversations.md), [ADR-0026](../ADR/0026-channel-and-conversation-management.md), [ADR-0028](../ADR/0028-main-assistant-and-workspace-actions.md), [ADR-0030](../ADR/0030-conversation-sessions-and-context.md)
+- Related: [ROADMAP 6.2](../ROADMAP.md#62-deferred-product-directions-not-started), [ADR-0024](../ADR/0024-agent-direct-conversations.md), [ADR-0026](../ADR/0026-channel-and-conversation-management.md), [ADR-0028](../ADR/0028-main-assistant-and-workspace-actions.md), [ADR-0030](../ADR/0030-conversation-sessions-and-context.md), [ADR-0031](../ADR/0031-task-worktrees-and-background-cards.md)
 - Follow-ups: finance starter kits and security policy, Code profile tools, medical research kit
 
 ## Goal
@@ -74,8 +74,18 @@ CowBot adapts to different audiences through layers, not through separate applic
 | Profile | `work` or `code`, chosen when the project is created |
 | Lifecycle | Archive is read-only for new work but lets running work finish; hard delete only for projects with no tasks or messages |
 | Membership | Mentions and assignments reject non-members; removing a member keeps history and blocks new assignments |
-| Code binding | One local folder per project, stored machine-locally and excluded from `.cowpkg` |
+| Code binding | One device-local folder, registered as a Repository and excluded from `.cowpkg` |
+| Existing git registry | Keeps its behavior but is renamed **Repositories**; **Project** is the work unit in this plan |
 | Scheduling | Concurrency root remains the workspace |
+
+### Naming: projects and repositories
+
+The desktop already registers device-local git repositories for per-task worktrees (Settings → Projects, ADR-0031). That registry keeps its behavior but is renamed **Repositories** in the UI and documentation; **Project** is reserved for the work unit defined in this plan.
+
+- A Project is the unit of work; a Repository is a device-local git checkout that a Code project may use.
+- A Code project binds one registered repository. The binding is device-local and excluded from `.cowpkg`.
+- The existing `ProjectEntry` configuration, `task_worktrees` records, and Tauri command names may retain their internal names during M6. The user-facing rename ships with the M6 desktop work.
+- ADR-0031 describes the current registry under its old name; it will be amended when the rename lands.
 
 ### Behaviour rules
 
@@ -91,7 +101,7 @@ CowBot adapts to different audiences through layers, not through separate applic
 - `projects`: id, workspace id, name, description, kind (`work`/`code`), status (`active`/`archived`), pinned, timestamps.
 - `project_agents`: project id, agent id, timestamp; unique pair.
 - `channels.project_id` and `tasks.project_id`: nullable; `NULL` is Home.
-- `project_bindings`: project id, local path, timestamp; machine-local and excluded from workspace packages. Phase 2 adds a host key.
+- Code project binding: the project references one device-local Repository (the existing registry); no absolute path is stored in the portable project record. The registry is excluded from workspace packages. Phase 2 adds a host key.
 - No backfill: existing channels and tasks remain in Home.
 - Project lifecycle and membership events are added to the event bus.
 - Channel and task payloads carry their project id so the desktop can filter without extra lookups.
@@ -115,9 +125,9 @@ The Main Assistant stays global in Home. M6 adds project awareness:
 
 ## Code projects
 
-- A Code project binds one local folder through a file picker; the path is normalized and stored in `project_bindings`.
+- A Code project binds one repository from the device-local registry (Settings → Repositories); the path is normalized and stays machine-local.
 - Tools for a run are built from the project context. Home runs keep the current workspace directory.
-- A missing or invalid binding disables code tools for that project and asks the user to rebind.
+- A missing, unregistered, or invalid repository binding disables code tools for that project and asks the user to rebind.
 - Diff approval, terminal, git, tests, streaming output, and checkpoint/rollback belong to the Code profile follow-up, not M6.
 - The first Code audience is still open: quant/finance users first or general engineering. This changes the follow-up scope but not the M6 model.
 
@@ -157,7 +167,7 @@ The Main Assistant stays global in Home. M6 adds project awareness:
 - M6.3 `cowbot-service`: lifecycle, membership, channel/task validation, audit.
 - M6.4 `cowbot-client` and CLI: project operations and scoped queries.
 - M6.5 Desktop: Home, project list, project view, scoped sidebar, project settings, move channel/task, Main Assistant tools.
-- M6.6 Code binding: folder picker, binding table, per-run tool context; no code-profile tools.
+- M6.6 Code binding: repository picker, repository reference, per-run tool context; no code-profile tools.
 - M6.7 Tests and docs: migration, round trip, membership rules, UI flows, PRD/architecture updates, ADR.
 
 ## Success criteria
@@ -166,7 +176,7 @@ The Main Assistant stays global in Home. M6 adds project awareness:
 - A user can create Work and Code projects, add agents, create project channels and tasks, and see them scoped correctly.
 - Mentions and assignments outside the project team are rejected with a clear notice.
 - Archive, restore, and delete follow the locked lifecycle rules.
-- A Code project can bind a folder and pass it to tool execution; the binding survives restart and is absent after package import.
+- A Code project can bind a registered repository and pass its root to tool execution; the binding survives restart and is absent after package import.
 - `.cowpkg` round-trips projects and membership without local paths.
 - No regression in Home, direct conversations, user conversations, tasks, approvals, or scheduling.
 
@@ -178,5 +188,6 @@ These are implementation details, not open product decisions:
 - Sidebar layout and project header details.
 - Project template and pack manifest schema.
 - Policy field set and how existing workspace policy is extended.
+- Final internal names for the existing repository registry; the user-facing name Repositories is locked.
 - Code profile tool set and first Code audience.
 - Target market geography and first finance design partners.
