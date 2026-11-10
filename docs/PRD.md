@@ -199,7 +199,18 @@ CowBot follows a "single core, two forms" model:
 14. Authentication: local accounts + Argon2id + opaque server session tokens + API tokens; OIDC/SSO is P1.
 15. PostgreSQL is deferred to the server phase; local/offline functionality comes first.
 
-### 7.2 Open Questions
+### 7.2 Planned Direction (2026-11-10)
+
+1. Work and Code are project profiles, not global application modes; a project chooses its profile.
+2. Workspaces remain the data, tenant, and scheduling boundary. Projects are the unit of work inside a workspace; Home is the unassigned view.
+3. Agents remain workspace-wide with one direct conversation each; projects track team membership and own group channels.
+4. Audience adaptation uses starter kits, capability packs, and security policies, not separate applications. A workspace policy is the enforced security floor; projects may only tighten it.
+5. Finance is the first vertical target, aimed at small private funds, family offices, and independent analysts. It is a research/analysis workspace, not investment advice or trading.
+6. Medical research and medical writing are a later vertical; clinical diagnosis, treatment recommendations, and clinical decision support are out of scope.
+7. Branded editions are deferred. There is no runtime edition switching; separate installers, if ever needed, are built from the same codebase.
+8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
+
+### 7.3 Open Questions
 
 1. Data-at-rest encryption design.
 2. Online template marketplace and template signing (P2).
