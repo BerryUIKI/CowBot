@@ -45,6 +45,7 @@ import {
   listAvailableTools,
   listChannels,
   listMessages,
+  listProjectBranches,
   listProjects,
   listRunTasks,
   listRuns,
@@ -81,6 +82,7 @@ import type {
   ModelSettings,
   OnboardingState,
   Project,
+  ProjectBranches,
   Task,
   TemplateDocument,
   ToolCallDetail,
@@ -153,6 +155,24 @@ function plainTextPreview(content: string): string {
     .replace(/[*_~#>]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Preview of the branch a worktree task will create. */
+function worktreeBranchPreview(description: string): string {
+  let slug = "";
+  let pendingDash = false;
+  for (const character of description.toLowerCase()) {
+    if (/[a-z0-9]/.test(character)) {
+      if (pendingDash && slug) slug += "-";
+      pendingDash = false;
+      slug += character;
+      if (slug.length >= 32) break;
+    } else if (slug) {
+      pendingDash = true;
+    }
+  }
+  const trimmed = slug.replace(/-+$/, "") || "task";
+  return `cowbot/${trimmed}-xxxx`;
 }
 
 function mentionedNames(content: string): string[] {
@@ -268,6 +288,11 @@ export default function App() {
   const [taskAssignee, setTaskAssignee] = useState("");
   const [taskChannel, setTaskChannel] = useState("");
   const [taskApproval, setTaskApproval] = useState<ApprovalLevel>("ask");
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [taskProject, setTaskProject] = useState("");
+  const [taskBaseBranch, setTaskBaseBranch] = useState("");
+  const [projectBranches, setProjectBranches] = useState<ProjectBranches | null>(null);
+  const [projectBranchesBusy, setProjectBranchesBusy] = useState(false);
   const [channelApproval, setChannelApproval] = useState<ApprovalLevel>("ask");
   const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -311,6 +336,11 @@ export default function App() {
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
+  );
+
+  const availableProjects = useMemo(
+    () => projects.filter((project) => project.available),
+    [projects],
   );
 
   const onboardingOpen = onboarding !== null && !onboarding.completed;
@@ -495,6 +525,41 @@ export default function App() {
   useEffect(() => {
     if (!templateId && templates.length > 0) setTemplateId(templates[0].id);
   }, [templates, templateId]);
+
+  useEffect(() => {
+    if (!creatingTask || !worktreeEnabled) return;
+    if (!taskProject && availableProjects.length > 0) {
+      setTaskProject(availableProjects[0].id);
+    }
+  }, [availableProjects, creatingTask, taskProject, worktreeEnabled]);
+
+  useEffect(() => {
+    if (!worktreeEnabled || !taskProject) {
+      setProjectBranches(null);
+      return;
+    }
+    let cancelled = false;
+    setProjectBranchesBusy(true);
+    listProjectBranches(taskProject)
+      .then((listing) => {
+        if (cancelled) return;
+        setProjectBranches(listing);
+        setTaskBaseBranch((current) =>
+          listing.branches.includes(current)
+            ? current
+            : listing.current ?? listing.branches[0] ?? "",
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setProjectBranchesBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskProject, worktreeEnabled]);
 
   useEffect(() => {
     listAvailableTools()
@@ -1211,11 +1276,19 @@ export default function App() {
         assignee: taskAssignee,
         channelId: taskChannel || null,
         approvalLevel: taskApproval,
+        worktree:
+          worktreeEnabled && taskProject && taskBaseBranch
+            ? { projectId: taskProject, baseBranch: taskBaseBranch }
+            : null,
       });
       setCreatingTask(false);
       setTaskDescription("");
       setTaskOutput("");
       setTaskChannel("");
+      setWorktreeEnabled(false);
+      setTaskProject("");
+      setTaskBaseBranch("");
+      setProjectBranches(null);
       await refreshTasks(task.id);
       setSelectedTaskId(task.id);
     } catch (err) {
@@ -2469,6 +2542,78 @@ export default function App() {
                       />
                     </div>
                   </div>
+                  {availableProjects.length > 0 ? (
+                    <section
+                      className="task-worktree"
+                      aria-label="Run in a git worktree"
+                    >
+                      <label className="worktree-toggle">
+                        <input
+                          type="checkbox"
+                          checked={worktreeEnabled}
+                          onChange={(event) =>
+                            setWorktreeEnabled(event.target.checked)
+                          }
+                        />
+                        <span>
+                          <strong>Run in a git worktree</strong>
+                          <small>
+                            Work in an isolated checkout on its own branch. The
+                            branch is not merged automatically.
+                          </small>
+                        </span>
+                      </label>
+                      {worktreeEnabled ? (
+                        <div className="form-row">
+                          <label className="field">
+                            <span>Project</span>
+                            <select
+                              value={taskProject}
+                              onChange={(event) =>
+                                setTaskProject(event.target.value)
+                              }
+                            >
+                              {availableProjects.map((project) => (
+                                <option key={project.id} value={project.id}>
+                                  {project.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>Base branch</span>
+                            <select
+                              value={taskBaseBranch}
+                              onChange={(event) =>
+                                setTaskBaseBranch(event.target.value)
+                              }
+                              disabled={projectBranchesBusy || !projectBranches}
+                            >
+                              {projectBranches ? (
+                                projectBranches.branches.map((branch) => (
+                                  <option key={branch} value={branch}>
+                                    {branch}
+                                  </option>
+                                ))
+                              ) : (
+                                <option value="">
+                                  {projectBranchesBusy
+                                    ? "Loading branches…"
+                                    : "No local branches"}
+                                </option>
+                              )}
+                            </select>
+                          </label>
+                          <div className="field">
+                            <span>Worktree branch</span>
+                            <code className="worktree-preview">
+                              {worktreeBranchPreview(taskDescription)}
+                            </code>
+                          </div>
+                        </div>
+                      ) : null}
+                    </section>
+                  ) : null}
                   <div className="form-actions">
                     <button
                       type="submit"
@@ -2477,7 +2622,11 @@ export default function App() {
                         busy === "create-task" ||
                         !taskDescription.trim() ||
                         !taskOutput.trim() ||
-                        !taskAssignee
+                        !taskAssignee ||
+                        (worktreeEnabled &&
+                          (!taskProject ||
+                            !taskBaseBranch ||
+                            projectBranchesBusy))
                       }
                     >
                       {busy === "create-task" ? "Creating…" : "Create task"}

@@ -3267,6 +3267,50 @@ button {
   gap: 14px;
 }
 
+.task-worktree {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: rgba(46, 44, 39, 0.25);
+}
+
+.worktree-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.worktree-toggle input {
+  margin-top: 3px;
+}
+
+.worktree-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.worktree-toggle small {
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.worktree-preview {
+  display: block;
+  padding: 9px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--ink-panel);
+  color: var(--brass);
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .agent-bootstrap {
   max-width: 560px;
   padding: 24px;

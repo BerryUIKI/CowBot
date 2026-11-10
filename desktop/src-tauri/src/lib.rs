@@ -62,15 +62,26 @@ impl AppState {
     }
 
     fn build_tools(workspace_dir: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
-        let sandbox = Arc::new(SubprocessSandbox::default());
-        let mut tools = ToolRegistry::new();
+        Self::rooted_tools(workspace_dir, client)
+    }
+
+    /// Build a registry whose file, code, and working directory tools are
+    /// rooted at `root`, plus the client-backed workspace tools.
+    ///
+    /// Worktree runs use this so agents edit the checkout instead of the
+    /// app-data workspace; channel turns and non-worktree runs keep the shared
+    /// registry.
+    pub fn rooted_tools(root: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
+        let sandbox = Arc::new(SubprocessSandbox::new(Some(root.to_path_buf())));
+        let mut tools = Self::workspace_tools(client);
         tools.register(Arc::new(CodeExecutionTool::new(sandbox)));
-        tools.register(Arc::new(ReadFileTool::new(Some(
-            workspace_dir.to_path_buf(),
-        ))));
-        tools.register(Arc::new(WriteFileTool::new(Some(
-            workspace_dir.to_path_buf(),
-        ))));
+        tools.register(Arc::new(ReadFileTool::new(Some(root.to_path_buf()))));
+        tools.register(Arc::new(WriteFileTool::new(Some(root.to_path_buf()))));
+        tools
+    }
+
+    fn workspace_tools(client: Arc<LocalClient>) -> ToolRegistry {
+        let mut tools = ToolRegistry::new();
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
             client.clone(),
         )));
@@ -137,6 +148,15 @@ pub fn run() {
 
             let client = Arc::new(tauri::async_runtime::block_on(LocalClient::open(&db_path))?);
             let session = tauri::async_runtime::block_on(client.session())?;
+
+            // Worktrees whose folders disappeared are reported as missing, and
+            // each registered project drops stale git worktree entries.
+            for project in &config.projects {
+                config::prune_project_worktrees(project);
+            }
+            if let Err(error) = tauri::async_runtime::block_on(client.reconcile_worktrees()) {
+                eprintln!("warning: failed to reconcile worktrees: {error}");
+            }
 
             // Keep the switcher registry in sync with the database in use and
             // drop entries whose files no longer exist.
