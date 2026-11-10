@@ -26,6 +26,7 @@ import type {
   Run,
   SessionDecisionEntry,
   Task,
+  TaskOverviewEntry,
   TaskWorktree,
   TaskWorktreeDiff,
   TemplateDocument,
@@ -186,6 +187,10 @@ export function taskWorktreeDiff(taskId: string): Promise<TaskWorktreeDiff> {
 
 export function discardTaskWorktree(taskId: string): Promise<TaskWorktree> {
   return invoke<TaskWorktree>("discard_task_worktree", { taskId });
+}
+
+export function listTaskOverview(): Promise<TaskOverviewEntry[]> {
+  return invoke<TaskOverviewEntry[]>("list_task_overview");
 }
 
 export function runTask(taskId: string, approvalLevel: ApprovalLevel): Promise<void> {

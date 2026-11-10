@@ -341,6 +341,28 @@ impl Store {
         rows.into_iter().map(AssignmentRow::into_domain).collect()
     }
 
+    /// Every assignment in a run: the owning task's own assignments and the
+    /// assignments of tasks whose `run_group` is that task.
+    pub async fn list_assignments_for_run(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
+        let rows = sqlx::query_as::<_, AssignmentRow>(
+            "SELECT a.id, a.root_id, a.parent_id, a.depth, a.task_id, a.origin, a.requester,
+                    a.assignee, a.mode, a.reply, a.status, a.executions, a.restarts, a.wakes,
+                    a.request_budget, a.execution_budget, a.wake_budget, a.approval_level,
+                    a.outcome, a.stall_strikes, a.repeated_errors, a.last_error,
+                    a.created_at, a.updated_at
+             FROM assignments a
+             JOIN tasks t ON t.id = a.task_id
+             WHERE t.id = ? OR t.run_group = ?
+             ORDER BY a.created_at",
+        )
+        .bind(&task_id.0)
+        .bind(&task_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(AssignmentRow::into_domain).collect()
+    }
+
     pub async fn list_child_assignments(
         &self,
         parent_id: &AssignmentId,

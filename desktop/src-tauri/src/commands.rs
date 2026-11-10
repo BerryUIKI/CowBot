@@ -2,7 +2,9 @@ use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
-use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
+use cowbot_core::assignment::{
+    Assignment, AssignmentEvent, AssignmentId, AssignmentOutcome, AssignmentStatus,
+};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
@@ -20,7 +22,7 @@ use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -632,6 +634,218 @@ pub async fn discard_task_worktree(
         .discard_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
+}
+
+/// One run in the background overview.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewEntry {
+    pub run_id: String,
+    pub title: String,
+    pub channel_id: Option<String>,
+    pub status: String,
+    pub progress: TaskOverviewProgress,
+    pub assignments: Vec<TaskOverviewAssignment>,
+    pub worktree: Option<TaskWorktree>,
+    pub latest_tool_call: Option<ToolCallRecord>,
+    pub started_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewProgress {
+    pub completed: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewAssignment {
+    pub id: String,
+    pub assignee: String,
+    pub status: AssignmentStatus,
+    pub detail: Option<String>,
+}
+
+/// Display status for a run, derived from its assignments.
+fn overview_status(assignments: &[Assignment]) -> &'static str {
+    use AssignmentStatus::*;
+    if assignments.is_empty() {
+        return "queued";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Running)
+    {
+        return "running";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == NeedsInput)
+    {
+        return "needs_input";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Waiting)
+    {
+        return "waiting";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Resume)
+    {
+        return "resume";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Queued)
+    {
+        return "queued";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Failed)
+    {
+        return "failed";
+    }
+    if assignments
+        .iter()
+        .all(|assignment| assignment.status == Cancelled)
+    {
+        return "cancelled";
+    }
+    "completed"
+}
+
+fn overview_detail(assignment: &Assignment) -> Option<String> {
+    if let Some(error) = &assignment.last_error {
+        return Some(error.clone());
+    }
+    match &assignment.outcome {
+        Some(AssignmentOutcome::Completed { output }) => Some(output.clone()),
+        Some(AssignmentOutcome::Failed { error }) => Some(error.clone()),
+        Some(AssignmentOutcome::Cancelled { reason }) => Some(reason.clone()),
+        None => None,
+    }
+}
+
+/// One summary entry per run group for sidebar cards and the background panel.
+#[tauri::command]
+pub async fn list_task_overview(
+    state: State<'_, AppState>,
+) -> Result<Vec<TaskOverviewEntry>, String> {
+    let tasks = state
+        .client
+        .list_tasks()
+        .await
+        .map_err(|error| error.to_string())?;
+    let worktree_by_task: HashMap<String, TaskWorktree> = state
+        .client
+        .list_worktrees()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|worktree| (worktree.task_id.0.clone(), worktree))
+        .collect();
+
+    let mut groups: HashMap<String, Vec<Task>> = HashMap::new();
+    for task in tasks {
+        let run_id = task
+            .run_group
+            .as_ref()
+            .map(|id| id.0.clone())
+            .unwrap_or_else(|| task.id.0.clone());
+        groups.entry(run_id).or_default().push(task);
+    }
+
+    let mut entries = Vec::new();
+    for (run_id, group_tasks) in groups {
+        let worktree = worktree_by_task.get(&run_id).cloned();
+        let assignments = state
+            .client
+            .list_run_assignments(&TaskId::new(run_id.clone()))
+            .await
+            .map_err(|error| error.to_string())?;
+        if assignments.is_empty() && worktree.is_none() {
+            continue;
+        }
+        let Some(owner) = group_tasks.iter().find(|task| task.id.0 == run_id) else {
+            continue;
+        };
+        if owner.archived {
+            continue;
+        }
+
+        let started_at = assignments
+            .iter()
+            .map(|assignment| assignment.created_at.to_rfc3339())
+            .chain(
+                worktree
+                    .iter()
+                    .map(|worktree| worktree.created_at.to_rfc3339()),
+            )
+            .min();
+        let updated_at = assignments
+            .iter()
+            .map(|assignment| assignment.updated_at.to_rfc3339())
+            .chain(
+                worktree
+                    .iter()
+                    .map(|worktree| worktree.updated_at.to_rfc3339()),
+            )
+            .max();
+        let (Some(started_at), Some(updated_at)) = (started_at, updated_at) else {
+            continue;
+        };
+
+        let completed = assignments
+            .iter()
+            .filter(|assignment| assignment.status.is_terminal())
+            .count() as u32;
+        let total = assignments.len() as u32;
+        let latest_tool_call = state
+            .client
+            .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
+            .await
+            .map_err(|error| error.to_string())?;
+        let title = if owner.title.trim().is_empty() {
+            owner.description.clone()
+        } else {
+            owner.title.clone()
+        };
+        let channel_id = owner
+            .channel_id
+            .as_ref()
+            .map(|channel| channel.0.clone())
+            .or_else(|| {
+                group_tasks
+                    .iter()
+                    .find_map(|task| task.channel_id.as_ref().map(|channel| channel.0.clone()))
+            });
+
+        entries.push(TaskOverviewEntry {
+            run_id,
+            title,
+            channel_id,
+            status: overview_status(&assignments).to_string(),
+            progress: TaskOverviewProgress { completed, total },
+            assignments: assignments
+                .iter()
+                .map(|assignment| TaskOverviewAssignment {
+                    id: assignment.id.0.clone(),
+                    assignee: assignment.assignee.0.clone(),
+                    status: assignment.status,
+                    detail: overview_detail(assignment),
+                })
+                .collect(),
+            worktree,
+            latest_tool_call,
+            started_at,
+            updated_at,
+        });
+    }
+
+    entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -1729,6 +1943,9 @@ fn summarize_reply(reply: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cowbot_core::assignment::{
+        AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
+    };
     use cowbot_core::conversation::ContextProjection;
 
     fn draft(name: &str, base_url: &str, model: &str, api_key: Option<&str>) -> ProviderDraft {
@@ -2071,5 +2288,70 @@ mod tests {
         );
         assert_eq!(view.tool_tokens, 250);
         assert_eq!(view.total_tokens, 1_250);
+    }
+
+    fn assignment_with(status: AssignmentStatus) -> Assignment {
+        let mut assignment = Assignment::new_root(
+            TaskId::new("task-1"),
+            AssignmentOrigin::User,
+            AssignmentRequester::System,
+            AgentId::new("agent-1"),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        assignment.status = status;
+        assignment
+    }
+
+    #[test]
+    fn overview_status_prioritizes_active_work() {
+        use AssignmentStatus::*;
+
+        assert_eq!(overview_status(&[]), "queued");
+        assert_eq!(
+            overview_status(&[
+                assignment_with(Queued),
+                assignment_with(NeedsInput),
+                assignment_with(Waiting),
+            ]),
+            "needs_input"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Waiting)]),
+            "waiting"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Resume)]),
+            "resume"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Running)]),
+            "running"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Completed), assignment_with(Failed)]),
+            "failed"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Cancelled), assignment_with(Cancelled)]),
+            "cancelled"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Completed), assignment_with(Completed)]),
+            "completed"
+        );
+    }
+
+    #[test]
+    fn overview_details_prefer_the_last_error() {
+        let mut assignment = assignment_with(AssignmentStatus::Failed);
+        assert_eq!(overview_detail(&assignment), None);
+        assignment.outcome = Some(AssignmentOutcome::Failed {
+            error: "boom".to_string(),
+        });
+        assert_eq!(overview_detail(&assignment), Some("boom".to_string()));
+        assignment.last_error = Some("stalled".to_string());
+        assert_eq!(overview_detail(&assignment), Some("stalled".to_string()));
     }
 }

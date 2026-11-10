@@ -399,6 +399,29 @@ impl Store {
         rows.into_iter().map(ToolCallRow::into_domain).collect()
     }
 
+    /// Newest tool call in a run, including the owning task's crew tasks.
+    pub async fn latest_tool_call_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> CowResult<Option<ToolCallRecord>> {
+        let row = sqlx::query_as::<_, ToolCallRow>(
+            "SELECT tc.id, tc.run_id, tc.name, tc.arguments, tc.result, tc.approved_by,
+                    tc.created_at
+             FROM tool_calls tc
+             JOIN runs r ON r.id = tc.run_id
+             JOIN tasks t ON t.id = r.task_id
+             WHERE t.id = ? OR t.run_group = ?
+             ORDER BY tc.created_at DESC
+             LIMIT 1",
+        )
+        .bind(&task_id.0)
+        .bind(&task_id.0)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        row.map(ToolCallRow::into_domain).transpose()
+    }
+
     pub async fn create_approval(&self, approval: &Approval) -> CowResult<()> {
         sqlx::query(
             "INSERT INTO approvals

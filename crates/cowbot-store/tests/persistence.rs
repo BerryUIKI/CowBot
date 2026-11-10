@@ -1,6 +1,9 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, BypassCritical, WorkspacePolicy};
+use cowbot_core::approval::{Approval, ApprovalLevel, BypassCritical, WorkspacePolicy};
+use cowbot_core::assignment::{
+    Assignment, AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
+};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::identity::{
@@ -515,6 +518,76 @@ async fn run_group_links_and_lists_crew_tasks() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn run_queries_span_the_owning_and_crew_tasks() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+    let agent = AgentId::new("agent-1");
+
+    let owner = Task::new("Ship the release", "A release");
+    store
+        .create_task(&workspace.id, None, &owner)
+        .await
+        .unwrap();
+    let child = Task::new("Implement", "Code").in_run_group(owner.id.clone());
+    store
+        .create_task(&workspace.id, None, &child)
+        .await
+        .unwrap();
+    let unrelated = Task::new("Other work", "Other output");
+    store
+        .create_task(&workspace.id, None, &unrelated)
+        .await
+        .unwrap();
+
+    for task in [&owner, &child, &unrelated] {
+        let assignment = Assignment::new_root(
+            task.id.clone(),
+            AssignmentOrigin::User,
+            AssignmentRequester::System,
+            agent.clone(),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        store.create_assignment(&assignment).await.unwrap();
+    }
+
+    let assignments = store.list_assignments_for_run(&owner.id).await.unwrap();
+    assert_eq!(assignments.len(), 2);
+    assert!(assignments.iter().any(|item| item.task_id == owner.id));
+    assert!(assignments.iter().any(|item| item.task_id == child.id));
+    assert_eq!(
+        store
+            .list_assignments_for_run(&unrelated.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let run = Run::new(child.id.clone(), agent);
+    store.create_run(&run).await.unwrap();
+    let mut older = ToolCallRecord::new(run.id.clone(), "read_file", json!({ "path": "a.rs" }));
+    older.created_at = Utc::now() - ChronoDuration::seconds(5);
+    store.record_tool_call(&older).await.unwrap();
+    let mut newer = ToolCallRecord::new(run.id.clone(), "write_file", json!({ "path": "b.rs" }));
+    newer.created_at = Utc::now();
+    store.record_tool_call(&newer).await.unwrap();
+
+    let latest = store
+        .latest_tool_call_for_task(&owner.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.name, "write_file");
+    assert!(store
+        .latest_tool_call_for_task(&unrelated.id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

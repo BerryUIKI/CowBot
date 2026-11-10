@@ -345,6 +345,88 @@ button {
   color: var(--paper);
 }
 
+.background-cards {
+  display: grid;
+  gap: 6px;
+  margin: 2px 4px 6px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--rule);
+}
+
+.background-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: rgba(46, 44, 39, 0.45);
+  color: var(--paper-dim);
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.background-card:hover {
+  background: var(--ink-hover);
+  border-color: var(--rule-strong);
+}
+
+.background-card .status-dot {
+  margin-top: 4px;
+}
+
+.background-card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.background-card-title {
+  overflow: hidden;
+  color: var(--paper);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-card-activity {
+  overflow: hidden;
+  color: var(--paper-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--paper-faint);
+  font-size: 10px;
+}
+
+.background-card-branch {
+  max-width: 160px;
+  overflow: hidden;
+  padding: 1px 6px;
+  border: 1px solid rgba(201, 166, 107, 0.35);
+  border-radius: 999px;
+  color: var(--brass);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-card-chevron {
+  color: var(--paper-faint);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
 .pin-mark {
   width: 12px;
   height: 12px;

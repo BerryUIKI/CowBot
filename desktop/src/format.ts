@@ -65,3 +65,15 @@ export function formatTokens(tokens: number): string {
   const value = tokens / 1_000_000;
   return `${value >= 100 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, "")}M`;
 }
+
+/** Elapsed time since an ISO timestamp, for running background tasks. */
+export function formatElapsed(startedAt: string, now: number = Date.now()): string {
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return "";
+  const seconds = Math.max(0, Math.floor((now - start) / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}

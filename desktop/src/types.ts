@@ -412,6 +412,46 @@ export interface TaskWorktreeDiff {
   truncated: boolean;
 }
 
+export type TaskOverviewStatus =
+  | "running"
+  | "needs_input"
+  | "waiting"
+  | "resume"
+  | "queued"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface TaskOverviewProgress {
+  completed: number;
+  total: number;
+}
+
+export interface TaskOverviewAssignment {
+  id: string;
+  assignee: string;
+  status: AssignmentStatus;
+  detail: string | null;
+}
+
+export interface TaskOverviewEntry {
+  run_id: string;
+  title: string;
+  channel_id: string | null;
+  status: TaskOverviewStatus;
+  progress: TaskOverviewProgress;
+  assignments: TaskOverviewAssignment[];
+  worktree: TaskWorktree | null;
+  latest_tool_call: ToolCallRecord | null;
+  started_at: string;
+  updated_at: string;
+}
+
+/** Whether an overview run still has work to show in the active sections. */
+export function isActiveOverviewStatus(status: TaskOverviewStatus): boolean {
+  return status !== "completed" && status !== "failed" && status !== "cancelled";
+}
+
 export interface AppInfo {
   version: string;
   autoCheckUpdates: boolean;
