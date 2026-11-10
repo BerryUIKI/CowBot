@@ -1025,6 +1025,18 @@ button {
   overflow: hidden;
 }
 
+.inspector-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inspector-pane[hidden] {
+  display: none;
+}
+
 .inspector-triggers {
   display: flex;
   align-items: center;

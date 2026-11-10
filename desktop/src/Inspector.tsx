@@ -94,13 +94,14 @@ export default function Inspector({
         </button>
       </header>
 
-      <div
-        className="inspector-body"
-        role="tabpanel"
-        id={`inspector-panel-${tab}`}
-        aria-labelledby={`inspector-tab-${tab}`}
-      >
-        {tab === "approvals" ? (
+      <div className="inspector-body">
+        <div
+          className="inspector-pane"
+          role="tabpanel"
+          id="inspector-panel-approvals"
+          aria-labelledby="inspector-tab-approvals"
+          hidden={tab !== "approvals"}
+        >
           <ApprovalCards
             embedded
             approvals={approvals}
@@ -110,14 +111,21 @@ export default function Inspector({
             decidingId={decidingId}
             onDecide={onDecide}
           />
-        ) : (
+        </div>
+        <div
+          className="inspector-pane"
+          role="tabpanel"
+          id="inspector-panel-background"
+          aria-labelledby="inspector-tab-background"
+          hidden={tab !== "background"}
+        >
           <BackgroundTasksContent
             overview={overview}
             agents={agents}
             now={now}
             onOpenTask={onOpenTask}
           />
-        )}
+        </div>
       </div>
     </aside>
   );
