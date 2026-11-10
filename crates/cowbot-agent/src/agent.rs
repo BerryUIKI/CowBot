@@ -243,6 +243,7 @@ impl AgentInstance {
 
                 bus.publish(Event::new(EventPayload::ToolCallRequested {
                     agent_id: self.profile.id.clone(),
+                    task_id: task.id.clone(),
                     call: tool_call.clone(),
                 }));
 
@@ -274,6 +275,7 @@ impl AgentInstance {
 
                 bus.publish(Event::new(EventPayload::ToolCallExecuted {
                     agent_id: self.profile.id.clone(),
+                    task_id: task.id.clone(),
                     result: tool_res.clone(),
                 }));
 

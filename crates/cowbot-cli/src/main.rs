@@ -565,13 +565,21 @@ async fn run_crew(
                 EventPayload::AgentThought { agent_id, thought } => {
                     println!("\n💭 [{}] Thought:\n{}", agent_id, thought.trim());
                 }
-                EventPayload::ToolCallRequested { agent_id, call } => {
+                EventPayload::ToolCallRequested {
+                    agent_id,
+                    task_id: _,
+                    call,
+                } => {
                     println!(
                         "\n🔧 [{}] Tool Call: {} (args: {})",
                         agent_id, call.name, call.arguments
                     );
                 }
-                EventPayload::ToolCallExecuted { agent_id, result } => {
+                EventPayload::ToolCallExecuted {
+                    agent_id,
+                    task_id: _,
+                    result,
+                } => {
                     let status = if result.success { "SUCCESS" } else { "FAILED" };
                     println!(
                         "⚡ [{}] Tool Result [{}]:\n{}",
