@@ -1351,6 +1351,11 @@ export default function App() {
     setError(null);
   }
 
+  function openChannel(channelId: string) {
+    setSelectedId(channelId);
+    setView("chat");
+  }
+
   function openTask(taskId: string) {
     setView("chat");
     setCreatingTask(false);
@@ -1722,18 +1727,38 @@ export default function App() {
       <aside className="sidebar" inert={onboardingOpen}>
         <div className="sidebar-head">
           <img className="wordmark" src={wordmark} alt="CowBot" />
-          <button
-            type="button"
-            className="icon-button"
-            title="New channel"
-            aria-label="New channel"
-            onClick={openNewChannel}
-          >
-            +
-          </button>
+          <div className="sidebar-head-actions">
+            <button
+              type="button"
+              className={`icon-button${view === "chat" ? " is-active" : ""}`}
+              title="Chat"
+              aria-label="Chat"
+              aria-current={view === "chat" ? "page" : undefined}
+              onClick={() => setView("chat")}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                aria-hidden="true"
+              >
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              title="New channel"
+              aria-label="New channel"
+              onClick={openNewChannel}
+            >
+              +
+            </button>
+          </div>
         </div>
 
-        {view === "chat" || view === "tasks" ? (
+        {view !== "settings" ? (
           <label className="search-field">
             <svg
               className="search-icon"
@@ -1756,7 +1781,7 @@ export default function App() {
         ) : null}
 
         <div className="sidebar-scroll">
-          {view === "chat" ? (
+          {view !== "settings" ? (
             <>
               <section className="sidebar-section" aria-label="Conversations">
                 <div className="nav-heading">
@@ -1780,7 +1805,7 @@ export default function App() {
                             type="button"
                             className="contact-row"
                             aria-current={channel.id === selectedId ? "page" : undefined}
-                            onClick={() => setSelectedId(channel.id)}
+                            onClick={() => openChannel(channel.id)}
                             onContextMenu={(event) =>
                               openMenu(event, "conversation", channel)
                             }
@@ -1899,7 +1924,7 @@ export default function App() {
                             type="button"
                             className="contact-row"
                             aria-current={channel.id === selectedId ? "page" : undefined}
-                            onClick={() => setSelectedId(channel.id)}
+                            onClick={() => openChannel(channel.id)}
                             onContextMenu={(event) =>
                               openMenu(event, "agent", channel, agent)
                             }
@@ -1959,7 +1984,7 @@ export default function App() {
                               type="button"
                               className="contact-row"
                               aria-current={channel.id === selectedId ? "page" : undefined}
-                              onClick={() => setSelectedId(channel.id)}
+                              onClick={() => openChannel(channel.id)}
                               onContextMenu={(event) => openMenu(event, "channel", channel)}
                               onKeyDown={(event) =>
                                 openMenuFromKey(event, "channel", channel)
@@ -2149,86 +2174,7 @@ export default function App() {
                 </button>
               </section>
             </>
-          ) : view === "tasks" ? (
-            <section className="sidebar-section" aria-label="Tasks">
-              <div className="nav-heading">
-                <span>Tasks</span>
-                <button type="button" className="text-button" onClick={startCreatingTask}>
-                  New
-                </button>
-              </div>
-              <div className="task-filter" role="group" aria-label="Task filter">
-                {(["active", "archived", "all"] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    type="button"
-                    className="task-filter-item"
-                    aria-pressed={taskFilter === filter}
-                    onClick={() => setTaskFilter(filter)}
-                  >
-                    {filter === "active"
-                      ? "Active"
-                      : filter === "archived"
-                        ? "Archived"
-                        : "All"}
-                  </button>
-                ))}
-              </div>
-              <ul className="contact-list">
-                {visibleTasks.map((task) => {
-                  const kind = taskStatusKind(task.status);
-                  return (
-                    <li key={task.id} className="task-row">
-                      <button
-                        type="button"
-                        className="contact-row"
-                        aria-current={
-                          task.id === selectedTaskId && !creatingTask ? "page" : undefined
-                        }
-                        onClick={() => openTask(task.id)}
-                      >
-                        <Avatar
-                          name={agentName(agents, task.assigned_agent)}
-                          kind="agent"
-                          size="small"
-                        />
-                        <span className="contact-text">
-                          <span className="contact-top">
-                            <span className="contact-name">
-                              {task.title || task.description}
-                            </span>
-                          </span>
-                          <span className="contact-snippet">
-                            <span className={`status-dot status-${kind}`} />{" "}
-                            {taskStatusLabel(task.status)} ·{" "}
-                            {agentName(agents, task.assigned_agent)}
-                            {task.archived ? " · Archived" : ""}
-                          </span>
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="contact-more"
-                        title="Task actions"
-                        aria-label={`Actions for ${task.title || task.description}`}
-                        onClick={(event) => openTaskMenu(event, task)}
-                      >
-                        ⋯
-                      </button>
-                    </li>
-                  );
-                })}
-                {visibleTasks.length === 0 ? (
-                  <li className="nav-empty">
-                    {tasks.length === 0 ? "No tasks yet." : "No tasks match."}
-                  </li>
-                ) : null}
-              </ul>
-              <button type="button" className="new-channel-button" onClick={startCreatingTask}>
-                <span aria-hidden="true">+</span> New task
-              </button>
-            </section>
-          ) : view === "settings" ? (
+          ) : (
             <section className="sidebar-section" aria-label="Settings sections">
               <div className="nav-heading">
                 <span>Settings</span>
@@ -2254,22 +2200,23 @@ export default function App() {
                 ))}
               </ul>
             </section>
-          ) : null}
+          )}
         </div>
 
         <div className="sidebar-footer">
-          <nav className="footer-nav" aria-label="Views">
+          <div className="profile">
+            <Avatar name={session?.user.name ?? "You"} kind="user" />
+            <span className="profile-text">
+              <span className="profile-name">{session?.user.name ?? "You"}</span>
+              <span className="profile-workspace">
+                {session?.workspace.name ?? "Local workspace"}
+              </span>
+            </span>
             <button
               type="button"
-              className="footer-nav-item"
-              aria-current={view === "chat" ? "page" : undefined}
-              onClick={() => setView("chat")}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              className="footer-nav-item footer-nav-icon"
+              className={`icon-button profile-settings${
+                view === "settings" ? " is-active" : ""
+              }`}
               title="Settings"
               aria-label="Settings"
               aria-current={view === "settings" ? "page" : undefined}
@@ -2286,15 +2233,6 @@ export default function App() {
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
-          </nav>
-          <div className="profile">
-            <Avatar name={session?.user.name ?? "You"} kind="user" />
-            <span className="profile-text">
-              <span className="profile-name">{session?.user.name ?? "You"}</span>
-              <span className="profile-workspace">
-                {session?.workspace.name ?? "Local workspace"}
-              </span>
-            </span>
           </div>
         </div>
       </aside>
