@@ -502,8 +502,7 @@ pub async fn run_task(
                     .await
                     .map_err(|error| error.to_string())?;
             } else {
-                let mut crew =
-                    build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
+                let mut crew = build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
                 client
                     .run_crew_with_options(&mut crew, options)
                     .await
