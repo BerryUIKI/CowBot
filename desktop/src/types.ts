@@ -166,6 +166,7 @@ export interface Task {
   assigned_agent: string | null;
   channel_id: string | null;
   context_tasks: string[];
+  run_group: string | null;
   status: TaskStatus;
   archived: boolean;
   plan?: string | null;

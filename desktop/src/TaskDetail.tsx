@@ -24,6 +24,8 @@ interface TaskDetailProps {
   task: Task;
   assignments: AssignmentWithEvents[];
   runs: RunWithCalls[];
+  runTasks: Task[];
+  onOpenTask: (taskId: string) => void;
   cancelling: boolean;
   onCancel: () => void;
   running: boolean;
@@ -57,6 +59,8 @@ export default function TaskDetail({
   task,
   assignments,
   runs,
+  runTasks,
+  onOpenTask,
   cancelling,
   onCancel,
   running,
@@ -196,6 +200,39 @@ export default function TaskDetail({
         <section className="task-result task-result-failed">
           <h3>Failure</h3>
           <pre>{task.status.failed.error}</pre>
+        </section>
+      ) : null}
+
+      {runTasks.length > 0 ? (
+        <section className="task-section" aria-label="Run tasks">
+          <h3>Run tasks</h3>
+          <p className="muted">
+            This run is split across {runTasks.length} crew tasks. Open one to see
+            its assignments and tool calls.
+          </p>
+          <ul className="run-task-list">
+            {runTasks.map((runTask) => {
+              const runKind = taskStatusKind(runTask.status);
+              return (
+                <li key={runTask.id}>
+                  <button
+                    type="button"
+                    className="run-task-row"
+                    onClick={() => onOpenTask(runTask.id)}
+                  >
+                    <span className={`status-dot status-${runKind}`} />
+                    <span className="run-task-title">
+                      {runTask.title || runTask.description}
+                    </span>
+                    <span className="muted">{taskStatusLabel(runTask.status)}</span>
+                    <span className="run-task-agent">
+                      {runTask.assigned_agent ?? "Unassigned"}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       ) : null}
 

@@ -168,6 +168,10 @@ export function listTasks(): Promise<Task[]> {
   return invoke<Task[]>("list_tasks");
 }
 
+export function listRunTasks(taskId: string): Promise<Task[]> {
+  return invoke<Task[]>("list_run_tasks", { taskId });
+}
+
 export function runTask(taskId: string, approvalLevel: ApprovalLevel): Promise<void> {
   return invoke<void>("run_task", { taskId, approvalLevel });
 }

@@ -479,6 +479,45 @@ async fn task_plan_roundtrip_and_approval() {
 }
 
 #[tokio::test]
+async fn run_group_links_and_lists_crew_tasks() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let owner = Task::new("Ship the release", "A release");
+    store
+        .create_task(&workspace.id, None, &owner)
+        .await
+        .unwrap();
+
+    let first = Task::new("Plan", "A plan").in_run_group(owner.id.clone());
+    let second = Task::new("Implement", "Code").in_run_group(owner.id.clone());
+    let unrelated = Task::new("Other work", "Other output");
+    for task in [&first, &second, &unrelated] {
+        store.create_task(&workspace.id, None, task).await.unwrap();
+    }
+
+    let loaded = store.get_task(&first.id).await.unwrap().unwrap();
+    assert_eq!(loaded.run_group, Some(owner.id.clone()));
+    assert!(store
+        .get_task(&owner.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .run_group
+        .is_none());
+
+    let group = store.list_tasks_by_run_group(&owner.id).await.unwrap();
+    assert_eq!(group.len(), 2);
+    assert_eq!(group[0].id, first.id);
+    assert_eq!(group[1].id, second.id);
+    assert!(store
+        .list_tasks_by_run_group(&unrelated.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn workspace_policy_defaults_to_allow_and_roundtrips() {
     let store = test_store().await;
     let (_user, workspace) = seed_workspace(&store).await;

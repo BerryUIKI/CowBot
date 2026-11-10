@@ -64,6 +64,13 @@ pub struct Task {
     pub channel_id: Option<ChannelId>,
     /// Prerequisite task IDs whose outputs will be injected as context
     pub context_tasks: Vec<TaskId>,
+    /// Task that started the run this task belongs to.
+    ///
+    /// A crew run sets this to the submitted task's id on every task it
+    /// creates, so cards and worktrees have one owning task. Manual tasks and
+    /// channel turns leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_group: Option<TaskId>,
     /// Current execution status
     pub status: TaskStatus,
     /// Whether the task was archived by the user
@@ -89,6 +96,7 @@ impl Task {
             assigned_agent: None,
             channel_id: None,
             context_tasks: Vec::new(),
+            run_group: None,
             status: TaskStatus::Pending,
             archived: false,
             plan: None,
@@ -121,6 +129,12 @@ impl Task {
 
     pub fn with_context_task(mut self, task_id: TaskId) -> Self {
         self.context_tasks.push(task_id);
+        self
+    }
+
+    /// Attach this task to the run started by `task_id`.
+    pub fn in_run_group(mut self, task_id: TaskId) -> Self {
+        self.run_group = Some(task_id);
         self
     }
 }
@@ -188,5 +202,31 @@ mod tests {
             error: "failed".to_string()
         }
         .is_terminal());
+    }
+
+    #[test]
+    fn run_groups_are_optional_and_serialize_cleanly() {
+        let owner = TaskId::new("owner");
+        let task = Task::new("Child", "Output").in_run_group(owner.clone());
+        assert_eq!(task.run_group, Some(owner));
+
+        let value = serde_json::to_value(&task).unwrap();
+        assert_eq!(value["run_group"], "owner");
+
+        let legacy: Task = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "description": "Old task",
+            "expected_output": "Output",
+            "assigned_agent": null,
+            "context_tasks": [],
+            "status": "pending",
+        }))
+        .unwrap();
+        assert!(legacy.run_group.is_none());
+        assert!(!serde_json::to_value(&legacy)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("run_group"));
     }
 }
