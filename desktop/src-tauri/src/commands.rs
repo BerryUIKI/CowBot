@@ -1427,6 +1427,50 @@ pub async fn create_workspace(
     app.restart();
 }
 
+/// Registered local git repositories available to worktree tasks.
+#[tauri::command]
+pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<config::ProjectView>, String> {
+    let config = load_config(&state)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Register a local git repository after resolving its work-tree root.
+#[tauri::command]
+pub fn add_project(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<config::ProjectView>, String> {
+    let mut config = load_config(&state)?;
+    let project = config::add_project(&mut config, &path)?;
+    config::prune_project_worktrees(&project);
+    let config = persist_config(&state, config)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Remove a project from the registry without touching its files.
+#[tauri::command]
+pub fn remove_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<config::ProjectView>, String> {
+    let mut config = load_config(&state)?;
+    config::remove_project(&mut config, &project_id)?;
+    let config = persist_config(&state, config)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Local branches of a registered project and its current branch.
+#[tauri::command]
+pub fn list_project_branches(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<config::ProjectBranches, String> {
+    let config = load_config(&state)?;
+    let project = config
+        .project(&project_id)
+        .ok_or_else(|| format!("project '{project_id}' was not found"))?;
+    config::project_branches(&project.path)
+}
 /// Send a minimal completion with the drafted provider settings.
 ///
 /// A blank API key falls back to the key stored for `provider_id`, so a saved

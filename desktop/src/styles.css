@@ -2641,6 +2641,12 @@ button {
   line-height: 1.5;
 }
 
+.settings-path {
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .settings-card-foot {
   display: flex;
   flex-wrap: wrap;
