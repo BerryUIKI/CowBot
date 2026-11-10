@@ -210,6 +210,7 @@ CowBot follows a "single core, two forms" model:
 7. Branded editions are deferred. There is no runtime edition switching; separate installers, if ever needed, are built from the same codebase.
 8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
 9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
+10. Group conversations with several agent participants, mention-scoped routing, opt-in automatic routing, and a Main Assistant fallback are planned as M3 and are not implemented. Single-agent conversations remain the default. See the [M3 plan](plans/M3-group-conversations-and-routing.md).
 
 ### 7.3 Open Questions
 
