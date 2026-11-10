@@ -9,6 +9,7 @@ import ApprovalCards from "./ApprovalCards";
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import BackgroundTaskCard from "./BackgroundTaskCard";
 import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -51,6 +52,7 @@ import {
   listProjects,
   listRunTasks,
   listRuns,
+  listTaskOverview,
   listTasks,
   listTemplates,
   listToolCalls,
@@ -86,13 +88,18 @@ import type {
   Project,
   ProjectBranches,
   Task,
+  TaskOverviewEntry,
   TaskWorktree,
   TemplateDocument,
   ToolCallDetail,
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import { taskStatusKind, taskStatusLabel } from "./types";
+import {
+  isActiveOverviewStatus,
+  taskStatusKind,
+  taskStatusLabel,
+} from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "approvals" | "settings";
@@ -314,6 +321,8 @@ export default function App() {
   const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [overview, setOverview] = useState<TaskOverviewEntry[]>([]);
+  const [overviewNow, setOverviewNow] = useState(() => Date.now());
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
@@ -321,6 +330,7 @@ export default function App() {
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const overviewTimer = useRef<number | null>(null);
   const updater = useUpdater();
 
   const selectedChannel = useMemo(
@@ -453,6 +463,37 @@ export default function App() {
     setAgents(await listAgents());
   }, []);
 
+  const refreshOverview = useCallback(async () => {
+    setOverview(await listTaskOverview());
+  }, []);
+
+  const scheduleOverviewRefresh = useCallback(() => {
+    if (overviewTimer.current !== null) {
+      window.clearTimeout(overviewTimer.current);
+    }
+    overviewTimer.current = window.setTimeout(() => {
+      overviewTimer.current = null;
+      refreshOverview().catch((err) => setError(errorMessage(err)));
+    }, 250);
+  }, [refreshOverview]);
+
+  useEffect(
+    () => () => {
+      if (overviewTimer.current !== null) {
+        window.clearTimeout(overviewTimer.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setOverviewNow(Date.now()),
+      30_000,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -467,6 +508,7 @@ export default function App() {
           nextTemplates,
           nextOnboarding,
           nextProjects,
+          nextOverview,
         ] = await Promise.all([
           getSession(),
           ensureAgentChannels(),
@@ -476,6 +518,7 @@ export default function App() {
           listTemplates(),
           getOnboardingState(),
           listProjects(),
+          listTaskOverview(),
         ]);
         if (cancelled) return;
         setSession(nextSession);
@@ -487,6 +530,7 @@ export default function App() {
         setTemplates(nextTemplates);
         setOnboarding(nextOnboarding);
         setProjects(nextProjects);
+        setOverview(nextOverview);
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
       } finally {
@@ -599,6 +643,19 @@ export default function App() {
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
+      if (
+        type === "TaskCreated" ||
+        type === "TaskUpdated" ||
+        type === "TaskAssigned" ||
+        type === "TaskCompleted" ||
+        type === "TaskFailed" ||
+        type === "AssignmentUpdated" ||
+        type === "WorktreeUpdated" ||
+        type === "ToolCallRequested" ||
+        type === "ToolCallExecuted"
+      ) {
+        scheduleOverviewRefresh();
+      }
       if (type === "ChannelCreated") {
         const channel = event.payload.payload as Channel | undefined;
         if (channel?.agent_id) {
@@ -703,6 +760,7 @@ export default function App() {
     refreshMessages,
     refreshTaskDetail,
     refreshTasks,
+    scheduleOverviewRefresh,
     selectedId,
     selectedTaskId,
   ]);
@@ -816,6 +874,17 @@ export default function App() {
       .map((channel) => ({ channel }))
       .sort((left, right) => byRecentActivity(left, right, previews));
   }, [channels, previews]);
+
+  const activeOverviewByChannel = useMemo(() => {
+    const byChannel = new Map<string, TaskOverviewEntry[]>();
+    for (const entry of overview) {
+      if (!entry.channel_id || !isActiveOverviewStatus(entry.status)) continue;
+      const entries = byChannel.get(entry.channel_id) ?? [];
+      if (entries.length < 2) entries.push(entry);
+      byChannel.set(entry.channel_id, entries);
+    }
+    return byChannel;
+  }, [overview]);
 
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -1862,6 +1931,20 @@ export default function App() {
                             >
                               ⋯
                             </button>
+                            {(activeOverviewByChannel.get(channel.id) ?? []).length > 0 ? (
+                              <div className="background-cards">
+                                {(activeOverviewByChannel.get(channel.id) ?? []).map(
+                                  (entry) => (
+                                    <BackgroundTaskCard
+                                      key={entry.run_id}
+                                      entry={entry}
+                                      now={overviewNow}
+                                      onOpen={() => openTask(entry.run_id)}
+                                    />
+                                  ),
+                                )}
+                              </div>
+                            ) : null}
                           </li>
                         );
                       })}

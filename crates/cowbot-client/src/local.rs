@@ -311,6 +311,19 @@ impl LocalClient {
     pub async fn reconcile_worktrees(&self) -> CowResult<Vec<TaskWorktree>> {
         self.worktrees.reconcile().await
     }
+
+    /// Assignments of a run, including its crew tasks.
+    pub async fn list_run_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
+        self.store.list_assignments_for_run(task_id).await
+    }
+
+    /// Newest tool call in a run, used by background task cards.
+    pub async fn latest_tool_call_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> CowResult<Option<ToolCallRecord>> {
+        self.store.latest_tool_call_for_task(task_id).await
+    }
 }
 
 #[async_trait]

@@ -237,6 +237,7 @@ pub fn run() {
             commands::get_task_worktree,
             commands::task_worktree_diff,
             commands::discard_task_worktree,
+            commands::list_task_overview,
             commands::cancel_task,
             commands::archive_task,
             commands::unarchive_task,
