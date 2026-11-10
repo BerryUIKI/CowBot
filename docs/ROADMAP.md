@@ -150,6 +150,8 @@ Each workstream can ship independently; prioritization will be decided with user
 
 ### 6.2 Deferred Product Directions (Not Started)
 
+**Group conversations and routing (M3, planned, not started).** User-created conversations gain several agent participants, mention-scoped routing, an opt-in mention-aware router, and a Main Assistant fallback, with per-agent context branches and per-agent context tabs. One provider/model stays fixed per conversation, and group channels keep their mention-only behavior. See the [M3 plan](plans/M3-group-conversations-and-routing.md) for the decisions and work breakdown.
+
 **Product structure and vertical kits (planned, not started).** Work and Code are project profiles rather than global modes; domain presets use starter kits, capability packs, and security policies. Finance is the first vertical, targeting small private funds and independent analysts; medical research is a later candidate. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the decision record and scope.
 
 **Project model (planned for internal M6; not started).** Projects become the unit of work inside a workspace, with channels and tasks optionally scoped to one; Home is the unscoped view. The model is settled at the decision level; implementation is not scheduled. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the locked decisions and work breakdown.
