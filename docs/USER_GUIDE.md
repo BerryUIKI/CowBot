@@ -125,6 +125,44 @@ The default database is `cowbot.db`; imported or created workspaces live under
 `workspaces/`. Deleting a database file removes that workspace from the switcher
 on the next start.
 
+## Projects and worktrees
+
+A **project** is a local git repository that CowBot may run tasks in. Projects
+are registered per machine: their paths live in the desktop `config.json` and
+are never included in `.cowpkg` packages.
+
+- **Register a repository** in **Settings → Projects** with **Add folder**.
+  Choose any folder inside the repository; CowBot resolves the work-tree root,
+  derives the project name from the folder, and shows the current branch.
+  Duplicate folders and folders outside git are rejected with an explanation.
+- **Remove** deletes only the registry entry; files and existing worktrees on
+  disk are untouched. A folder that is no longer available is marked
+  **Missing** without failing the list.
+- **Run a task in a worktree**: in **Tasks → New task**, enable **Run in a git
+  worktree**, pick the project and a base branch (the project's current branch
+  by default), and create the task. When you press **Run**, CowBot creates
+  `<repo>/.cowbot/worktrees/<slug>` on branch `cowbot/<slug>-<id>` and roots
+  the agents' file, code, and command tools there. The checkout is created from
+  the base branch at run time, so a queued task does not hold a stale checkout.
+  `.cowbot/` is added to the repository's local `.git/info/exclude`, not the
+  tracked `.gitignore`.
+- The branch is **not merged automatically**. Inspect it with git or from the
+  task detail, then merge it in your own tooling.
+- **Inspect a worktree** in the task detail's Worktree card: status, branch
+  (with **Copy**), base branch, project, path, and creation time.
+  **Open folder** reveals the checkout; **View diff** shows `git status`, the
+  diffstat, and the patch (up to 256 KiB, with a truncation notice).
+- **Discard** removes the checkout folder and the branch after a confirmation.
+  It is disabled while the task is running and loses uncommitted changes. The
+  record stays as **Removed**. A worktree whose folder disappeared shows
+  **Missing** and can be discarded to clean up its record; create a new task to
+  run in a worktree again.
+- If creating the worktree fails (not a repository, unknown base branch,
+  existing branch or path, git not installed), the run is rejected with the git
+  error and the task stays pending.
+- Worktrees are only created for tasks that requested a project. Channel turns
+  and tasks without a project keep using the shared app-data workspace.
+
 ## Team
 
 **Settings → Team** lists the built-in templates and the agents in the
@@ -146,6 +184,11 @@ from templates; a standalone agent editor is not part of this release.
 - Agent actions that change the workspace ask for approval under the
   **Manual** and **Auto** policies. The approval card shows the tool name,
   arguments, risk, and reason.
+- The Main Assistant can target a registered project: `create_task` accepts
+  `project` and an optional `base_branch`, validates them, and requests a
+  worktree for the queued task. Its environment block lists registered projects
+  with their current branches, and the approval card shows the project and base
+  branch arguments before you approve.
 
 ## Agents, channels, and tasks
 
@@ -196,12 +239,35 @@ from templates; a standalone agent editor is not part of this release.
   there. The answer is also posted back to the conversation as a message from
   that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
-  optional channel, and an approval policy. Select the task and choose **Run**
-  to execute the Planner → Coder → Reviewer crew. The task detail shows
-  assignments, assignment events, runs, and tool calls.
+  optional channel, an approval policy, and optionally a project worktree.
+  Select the task and choose **Run** to execute the Planner → Coder → Reviewer
+  crew. The submitted task becomes the run's owning task: its detail shows the
+  run tasks, assignments, assignment events, runs, tool calls, and the worktree
+  when one exists.
+- **Crew runs** create three related tasks (Planner, Coder, Reviewer) under the
+  task you ran.
 - **Cancel** stops a running task.
 
 Progress refreshes from live events; all history persists across restarts.
+
+### Background tasks
+
+Running work is visible without opening Tasks.
+
+- **Sidebar cards** — under a group channel, up to two compact cards show that
+  channel's active runs: status dot, title, latest activity (`Reading …`,
+  `Running: …`, or the tool name), a worktree branch chip, and elapsed time.
+  Select a card to open the owning task.
+- **Background panel** — the **Background** toggle in the sidebar footer shows
+  the active run count and opens a right-side panel. Each run shows its status,
+  elapsed time, an `x/y` progress bar, expandable assignment rows with the
+  responsible agent and latest detail, and an **Up next** line for queued
+  steps. **Finished** is collapsed by default and lists the last 20 runs with an
+  outcome snippet and duration; select one to open its task. The panel remembers
+  whether it was open.
+- Cards update from assignment, tool-call, task, and worktree events. Below a
+  window width of about 1180 px the panel opens as an overlay so the main pane
+  keeps its width.
 
 > Answers use the active model provider. With no provider configured the app
 > falls back to the offline mock model, which only echoes the prompt; with a
@@ -396,6 +462,10 @@ reporting, see [SECURITY.md](../SECURITY.md).
 - Workspace tools are available in the desktop app only; the CLI's channel
   turns do not expose them. `create_task` queues a pending task and does not run
   the assigned agent automatically.
+- Worktrees are per task run and are not merged back from CowBot: there is no
+  merge or pull-request action, and deleting a task does not delete its
+  worktree. Registered project paths and worktree records stay on one machine
+  and are not part of workspace packages.
 - Agents cannot be deleted from the UI; edit their name, role, or tools
   instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
