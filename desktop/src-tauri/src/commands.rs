@@ -474,25 +474,49 @@ pub async fn run_task(
     let use_model_permissions = state.uses_remote_model();
 
     tauri::async_runtime::spawn(async move {
-        let outcome = async {
-            let mut crew = build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
-            client
-                .run_crew_with_options(
-                    &mut crew,
-                    cowbot_service::CrewRunOptions {
-                        approval_level,
-                        use_model_permissions,
-                        ..cowbot_service::CrewRunOptions::default()
-                    },
-                )
-                .await
+        let outcome: Result<(), String> = async {
+            let mut options = cowbot_service::CrewRunOptions {
+                approval_level,
+                use_model_permissions,
+                ..cowbot_service::CrewRunOptions::default()
+            };
+            // Plan runs and approved plans belong to the stored task: run it
+            // with its own assignee so its plan, status, and history stay
+            // attached to it. Other runs keep the standard crew pipeline.
+            if approval_level == ApprovalLevel::PlanOnly || task.plan_approved {
+                let agents = client
+                    .list_agents()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let assignee = task.assigned_agent.clone();
+                let profile = agents
+                    .into_iter()
+                    .find(|agent| Some(&agent.id) == assignee.as_ref())
+                    .ok_or_else(|| format!("task '{}' has no assignable agent", task.id))?;
+                let agent = AgentInstance::new(profile, llm.clone(), tools.clone(), &model);
+                if approval_level == ApprovalLevel::PlanOnly {
+                    options.capture_plan_task = Some(task.id.clone());
+                }
+                client
+                    .run_existing_task(&task, agent, options)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            } else {
+                let mut crew =
+                    build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
+                client
+                    .run_crew_with_options(&mut crew, options)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(())
         }
         .await;
 
         running.lock().remove(&run_id);
 
         let payload = match outcome {
-            Ok(_) => RunFinished {
+            Ok(()) => RunFinished {
                 task_id: run_id,
                 ok: true,
                 error: None,
@@ -500,7 +524,7 @@ pub async fn run_task(
             Err(error) => RunFinished {
                 task_id: run_id,
                 ok: false,
-                error: Some(error.to_string()),
+                error: Some(error),
             },
         };
         let _ = app.emit("cowbot-run-finished", payload);
