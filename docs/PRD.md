@@ -142,9 +142,9 @@ CowBot follows a "single core, two forms" model:
 | Agent management | Create/edit agents (role, goal, backstory, model, tools, iteration limit) |
 | Tasks and orchestration | Task creation, assignment runtime (lifecycle, event log, budgets, restart reconciliation), sequential crew execution, deliverables, run and tool-call history, and status transitions |
 | Tools and sandbox | Code execution, file read/write; timeouts, output truncation, working-directory limits |
-| Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; tool/command/path allowlists |
+| Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; workspace allow / ask / deny rules per tool and command pattern; session decisions; Plan artifacts with approve-to-continue; a Bypass Critical tri-state; source-attributed audit |
 | Model configuration | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints (cloud APIs and local models), protocol selection, connection test |
-| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, and approval records |
+| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, approval records, conversation context, per-call token usage, permission rules, and task worktrees |
 | CLI | `cowbot` retained for initialization, diagnostics, headless runs, and debugging |
 
 ### 5.2 P1 (Enhancements)
@@ -157,7 +157,7 @@ CowBot follows a "single core, two forms" model:
 - Webhooks and Mattermost / Slack / Feishu integrations.
 - Long-term agent memory and knowledge base.
 - Streaming responses, retries, rate limiting, and cost/billing views (per-call token usage is recorded, ADR-0029).
-- Audit log and operation replay.
+- Operation replay built on the existing audit log.
 
 ### 5.3 P2 (Ecosystem)
 
