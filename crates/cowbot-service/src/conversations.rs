@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
+use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
@@ -227,12 +228,16 @@ impl ConversationService {
         .with_session_decisions(self.session_decisions.clone());
         scheduler.register_agent(agent.clone(), llm, tools, settings.model.clone());
 
-        let run_options = CrewRunOptions {
+        let mut run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
             max_concurrency: options.max_concurrency,
             use_model_permissions: options.use_model_permissions,
+            capture_plan_task: None,
         };
+        if options.approval_level == ApprovalLevel::PlanOnly {
+            run_options.capture_plan_task = Some(task.id.clone());
+        }
         scheduler
             .enqueue_conversation_turn(
                 &task,

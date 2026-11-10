@@ -35,6 +35,7 @@ fn options(max_concurrency: usize) -> CrewRunOptions {
         channel_id: None,
         max_concurrency,
         use_model_permissions: false,
+        capture_plan_task: None,
     }
 }
 
@@ -431,11 +432,17 @@ async fn plan_mode_stores_the_output_as_a_task_plan() {
         "mock-model",
     );
 
-    let task = Task::new("Design the change", "A plan").assign_to(planner_id);
+    let task = Task::new("Design the change", "A plan").assign_to(planner_id.clone());
+    let other = Task::new("Pipeline follow-up", "Output").assign_to(planner_id);
     let mut run_options = options(1);
     run_options.approval_level = ApprovalLevel::PlanOnly;
+    run_options.capture_plan_task = Some(task.id.clone());
     scheduler
         .enqueue(&task, requester(), AssignmentOrigin::User, &run_options)
+        .await
+        .unwrap();
+    scheduler
+        .enqueue(&other, requester(), AssignmentOrigin::User, &run_options)
         .await
         .unwrap();
 
@@ -445,6 +452,9 @@ async fn plan_mode_stores_the_output_as_a_task_plan() {
     assert_eq!(stored.plan.as_deref(), Some(output.as_str()));
     assert!(!stored.plan_approved);
     assert!(matches!(stored.status, TaskStatus::Completed { .. }));
+
+    let other_stored = store.get_task(&other.id).await.unwrap().unwrap();
+    assert!(other_stored.plan.is_none());
 }
 
 #[tokio::test]
@@ -469,6 +479,7 @@ async fn approved_plan_is_injected_into_the_continue_run() {
     );
     let mut plan_options = options(1);
     plan_options.approval_level = ApprovalLevel::PlanOnly;
+    plan_options.capture_plan_task = Some(task.id.clone());
     plan_run
         .enqueue(&task, requester(), AssignmentOrigin::User, &plan_options)
         .await
