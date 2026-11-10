@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentId;
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
+use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus, BypassCritical};
 use cowbot_core::assignment::AssignmentId;
 use cowbot_core::audit::{AuditEvent, AuditSource};
 use cowbot_core::error::{CowError, CowResult};
@@ -32,7 +32,14 @@ pub enum ApprovalDecision {
 }
 
 /// Apply the workspace/assignment approval level to a risk level.
-pub fn decision_for(level: ApprovalLevel, risk: RiskLevel) -> ApprovalDecision {
+///
+/// `bypass_critical` only matters for [`ApprovalLevel::Trusted`]; every other
+/// mode blocks Critical calls.
+pub fn decision_for(
+    level: ApprovalLevel,
+    risk: RiskLevel,
+    bypass_critical: BypassCritical,
+) -> ApprovalDecision {
     match level {
         ApprovalLevel::Ask | ApprovalLevel::AcceptEdits => match risk {
             RiskLevel::ReadOnly => ApprovalDecision::AutoApprove,
@@ -51,7 +58,11 @@ pub fn decision_for(level: ApprovalLevel, risk: RiskLevel) -> ApprovalDecision {
             _ => ApprovalDecision::Deny,
         },
         ApprovalLevel::Trusted => match risk {
-            RiskLevel::Critical => ApprovalDecision::Deny,
+            RiskLevel::Critical => match bypass_critical {
+                BypassCritical::Allow => ApprovalDecision::AutoApprove,
+                BypassCritical::Ask => ApprovalDecision::RequireApproval,
+                BypassCritical::Block => ApprovalDecision::Deny,
+            },
             _ => ApprovalDecision::AutoApprove,
         },
     }
@@ -60,18 +71,20 @@ pub fn decision_for(level: ApprovalLevel, risk: RiskLevel) -> ApprovalDecision {
 /// Apply the approval level with the tool call in hand.
 ///
 /// `AcceptEdits` auto-approves only `write_file` calls whose path is inside the
-/// workspace; all other calls follow the Manual policy.
+/// workspace; all other calls follow the Manual policy. `delete_channel` stays
+/// behind an approval in every mode except Plan and Bypass.
 pub fn decision_for_call(
     level: ApprovalLevel,
     risk: RiskLevel,
     tool_name: &str,
     rule_id: &str,
+    bypass_critical: BypassCritical,
 ) -> ApprovalDecision {
     if tool_name == "delete_channel" {
-        return if level == ApprovalLevel::PlanOnly {
-            ApprovalDecision::Deny
-        } else {
-            ApprovalDecision::RequireApproval
+        return match level {
+            ApprovalLevel::PlanOnly => ApprovalDecision::Deny,
+            ApprovalLevel::Trusted => ApprovalDecision::AutoApprove,
+            _ => ApprovalDecision::RequireApproval,
         };
     }
     if level == ApprovalLevel::AcceptEdits
@@ -80,7 +93,7 @@ pub fn decision_for_call(
     {
         return ApprovalDecision::AutoApprove;
     }
-    decision_for(level, risk)
+    decision_for(level, risk, bypass_critical)
 }
 
 /// Approval service used by the local runtime and the agent tool gate.
@@ -133,11 +146,13 @@ impl ApprovalService {
             .await?
             .ok_or_else(|| CowError::Task(format!("assignment '{assignment_id}' was not found")))?;
         let assessment = StaticRiskClassifier.classify(call);
+        let policy = self.store.get_workspace_policy(&self.workspace_id).await?;
         let base = decision_for_call(
             assignment.approval_level,
             assessment.level,
             &call.name,
             &assessment.rule_id,
+            policy.bypass_critical,
         );
         // A hard policy denial (Plan mode mutations, Critical outside Bypass)
         // cannot be softened by a workspace rule or a remembered decision.

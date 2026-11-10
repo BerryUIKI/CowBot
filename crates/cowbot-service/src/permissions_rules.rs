@@ -1,3 +1,4 @@
+use cowbot_core::approval::{BypassCritical, WorkspacePolicy};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -20,6 +21,22 @@ impl PermissionService {
 
     pub async fn list(&self) -> CowResult<Vec<PermissionRule>> {
         self.store.list_permission_rules(&self.workspace_id).await
+    }
+
+    pub async fn policy(&self) -> CowResult<WorkspacePolicy> {
+        self.store.get_workspace_policy(&self.workspace_id).await
+    }
+
+    pub async fn set_bypass_critical(
+        &self,
+        bypass_critical: BypassCritical,
+    ) -> CowResult<WorkspacePolicy> {
+        let policy = WorkspacePolicy {
+            workspace_id: self.workspace_id.clone(),
+            bypass_critical,
+        };
+        self.store.save_workspace_policy(&policy).await?;
+        Ok(policy)
     }
 
     pub async fn create(
