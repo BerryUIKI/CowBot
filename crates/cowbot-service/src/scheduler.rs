@@ -13,6 +13,7 @@ use cowbot_core::assignment::{
 };
 use cowbot_core::channel::ChannelId;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -28,6 +29,10 @@ use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
 use crate::permissions::ModelPermissionEvaluator;
 use crate::session_decisions::SessionDecisions;
+
+/// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
+/// approval policy; the agent is asked to finish with the plan itself.
+const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
 
 /// A conversation turn whose model request is assembled before the assignment
 /// is enqueued. The per-agent context branch receives the assistant and tool
@@ -87,6 +92,7 @@ impl AgentExecution {
         recorder: Arc<dyn ToolCallRecorder>,
         usage_recorder: Arc<dyn LlmUsageRecorder>,
         conversation: Option<Vec<ChatMessage>>,
+        plan_mode: bool,
     ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
@@ -97,6 +103,9 @@ impl AgentExecution {
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
         agent.set_usage_recorder(Some(usage_recorder));
+        if plan_mode {
+            agent.set_mode_instruction(Some(PLAN_MODE_INSTRUCTION.to_string()));
+        }
 
         match conversation {
             Some(messages) => {
@@ -597,6 +606,7 @@ impl AssignmentScheduler {
         });
 
         let messages = prepared.as_ref().map(|turn| turn.messages.clone());
+        let plan_mode = assignment.approval_level == ApprovalLevel::PlanOnly;
         match executor
             .execute(
                 &task,
@@ -606,6 +616,7 @@ impl AssignmentScheduler {
                 recorder,
                 usage_recorder,
                 messages,
+                plan_mode,
             )
             .await
         {
@@ -634,6 +645,20 @@ impl AssignmentScheduler {
                     .update_run_status(&run.id, RunStatus::Completed, Some(Utc::now()))
                     .await?;
                 self.assignments.complete(&assignment.id, &output).await?;
+                if assignment.parent_id.is_none()
+                    && assignment.approval_level == ApprovalLevel::PlanOnly
+                    && !output.trim().is_empty()
+                {
+                    self.assignments
+                        .store()
+                        .set_task_plan(&task.id, &output)
+                        .await?;
+                    if let Some(updated) = self.assignments.store().get_task(&task.id).await? {
+                        self.assignments
+                            .bus()
+                            .publish(Event::new(EventPayload::TaskUpdated(updated)));
+                    }
+                }
                 Ok((task.id.clone(), output))
             }
             Err(error) => {

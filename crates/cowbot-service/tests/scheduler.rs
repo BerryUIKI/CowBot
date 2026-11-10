@@ -12,7 +12,7 @@ use cowbot_core::assignment::{
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
-use cowbot_core::task::Task;
+use cowbot_core::task::{Task, TaskStatus};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider, MockLlmProvider};
 use cowbot_service::{bootstrap_local, AssignmentScheduler, AssignmentService, CrewRunOptions};
 use cowbot_store::Store;
@@ -415,4 +415,34 @@ async fn a_scoped_scheduler_claims_only_its_own_roots() {
     assert!(untouched
         .iter()
         .all(|assignment| assignment.status == AssignmentStatus::Queued));
+}
+
+#[tokio::test]
+async fn plan_mode_stores_the_output_as_a_task_plan() {
+    let (store, workspace_id) = setup().await;
+    let planner = StandardRoles::planner();
+    let planner_id = planner.id.clone();
+    let mut scheduler =
+        AssignmentScheduler::new(store.clone(), EventBus::default_bus(), workspace_id, 1);
+    scheduler.register_agent(
+        planner,
+        Arc::new(MockLlmProvider::echo()),
+        ToolRegistry::new(),
+        "mock-model",
+    );
+
+    let task = Task::new("Design the change", "A plan").assign_to(planner_id);
+    let mut run_options = options(1);
+    run_options.approval_level = ApprovalLevel::PlanOnly;
+    scheduler
+        .enqueue(&task, requester(), AssignmentOrigin::User, &run_options)
+        .await
+        .unwrap();
+
+    let completed = scheduler.run_until_idle().await.unwrap();
+    let output = completed.get(&task.id).expect("plan run output");
+    let stored = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(stored.plan.as_deref(), Some(output.as_str()));
+    assert!(!stored.plan_approved);
+    assert!(matches!(stored.status, TaskStatus::Completed { .. }));
 }
