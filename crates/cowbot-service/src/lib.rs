@@ -13,6 +13,7 @@ mod conversations;
 mod crew_runner;
 mod permissions;
 mod scheduler;
+mod session_decisions;
 mod task_service;
 mod templates;
 
@@ -31,5 +32,6 @@ pub use permissions::{
     PermissionRequest,
 };
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
+pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
 pub use templates::{builtin_templates, TemplateService};

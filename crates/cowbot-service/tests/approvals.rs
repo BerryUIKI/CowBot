@@ -18,6 +18,7 @@ use cowbot_core::tool::ToolCall;
 use cowbot_service::{
     bootstrap_local, decision_for, decision_for_call, ApprovalDecision, ApprovalService,
     PermissionDecision, PermissionDecisionKind, PermissionEvaluator, PermissionRequest,
+    SessionDecisions,
 };
 use cowbot_store::Store;
 use serde_json::json;
@@ -283,6 +284,80 @@ async fn delete_channel_never_uses_the_model() {
 
     assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn session_approval_skips_the_evaluator() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let decisions = SessionDecisions::new();
+    let write = call(
+        "write_file",
+        json!({"path": "src/main.rs", "content": "fn main() {}"}),
+    );
+    decisions.remember(&write, ApprovalStatus::Approved);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service
+        .with_session_decisions(Some(decisions))
+        .with_evaluator(Some(Arc::new(ScriptedEvaluator {
+            decision: PermissionDecisionKind::Deny,
+            calls: calls.clone(),
+        })));
+
+    let authorization = service
+        .authorize(&assignment.id, &agent, &write)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        authorization,
+        ToolAuthorization::Approved { approved_by: None }
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let events = store.list_audit_events(&workspace_id, 20).await.unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.action == "tool.session_approved"));
+}
+
+#[tokio::test]
+async fn session_rejection_denies_the_call() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let decisions = SessionDecisions::new();
+    let write = call(
+        "write_file",
+        json!({"path": "src/main.rs", "content": "fn main() {}"}),
+    );
+    decisions.remember(&write, ApprovalStatus::Rejected);
+    let service = service.with_session_decisions(Some(decisions));
+
+    let authorization = service
+        .authorize(&assignment.id, &agent, &write)
+        .await
+        .unwrap();
+
+    let ToolAuthorization::Denied { reason } = authorization else {
+        panic!("expected a denial");
+    };
+    assert!(reason.contains("rejected for this session"));
+}
+
+#[tokio::test]
+async fn session_approval_cannot_override_a_hard_denial() {
+    let (_store, service, assignment, agent, _workspace_id) =
+        setup(ApprovalLevel::SafeAuto, Duration::from_secs(1)).await;
+    let decisions = SessionDecisions::new();
+    let critical = call("execute_code", json!({"command": "rm -rf /"}));
+    decisions.remember(&critical, ApprovalStatus::Approved);
+    let service = service.with_session_decisions(Some(decisions));
+
+    let authorization = service
+        .authorize(&assignment.id, &agent, &critical)
+        .await
+        .unwrap();
+
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
 }
 
 struct ScriptedEvaluator {

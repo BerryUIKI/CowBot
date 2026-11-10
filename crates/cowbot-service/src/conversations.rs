@@ -21,6 +21,7 @@ use cowbot_tools::ToolRegistry;
 use crate::channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};
 use crate::channels::{normalize_channel_name, ChannelService};
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::session_decisions::SessionDecisions;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
 const MAX_TITLE_CHARS: usize = 68;
@@ -36,6 +37,7 @@ pub struct ConversationService {
     bus: EventBus,
     workspace_id: WorkspaceId,
     channels: ChannelService,
+    session_decisions: Option<Arc<SessionDecisions>>,
 }
 
 impl ConversationService {
@@ -45,7 +47,13 @@ impl ConversationService {
             store,
             bus,
             workspace_id,
+            session_decisions: None,
         }
+    }
+
+    pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
+        self.session_decisions = decisions;
+        self
     }
 
     /// Create a single-agent conversation with a fixed provider and model.
@@ -215,7 +223,8 @@ impl ConversationService {
             options.max_concurrency,
         )
         .with_scope()
-        .with_model_permissions(options.use_model_permissions);
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(self.session_decisions.clone());
         scheduler.register_agent(agent.clone(), llm, tools, settings.model.clone());
 
         let run_options = CrewRunOptions {

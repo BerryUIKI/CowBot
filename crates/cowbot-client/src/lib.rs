@@ -47,6 +47,13 @@ pub struct ClientSession {
     pub workspace: Workspace,
 }
 
+/// One remembered session approval decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionDecisionView {
+    pub key: String,
+    pub decision: String,
+}
+
 /// Summary of a workspace imported from a `.cowpkg` package.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceImport {
@@ -204,6 +211,14 @@ pub trait Client: Send + Sync {
         approval_id: &ApprovalId,
         approved: bool,
     ) -> CowResult<Approval>;
+    /// Decide an approval and remember it for the rest of this process.
+    async fn decide_approval_for_session(
+        &self,
+        approval_id: &ApprovalId,
+        approved: bool,
+    ) -> CowResult<Approval>;
+    async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>>;
+    async fn clear_session_decisions(&self) -> CowResult<()>;
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>>;
     async fn get_template(&self, id: &str) -> CowResult<Option<TemplateDocument>>;
