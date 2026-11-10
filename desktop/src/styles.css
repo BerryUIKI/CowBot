@@ -964,6 +964,261 @@ button {
   min-height: 0;
 }
 
+.app.with-background-panel {
+  grid-template-columns: 296px minmax(0, 1fr) 360px;
+}
+
+.background-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--rule);
+  background: linear-gradient(180deg, #2b2924 0%, #262521 100%);
+}
+
+.background-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 16px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.background-panel-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.background-panel-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  padding: 14px 14px 28px;
+  overflow-y: auto;
+}
+
+.background-panel-heading {
+  margin: 0 0 10px;
+  color: var(--paper-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.background-panel-empty {
+  margin: 0;
+  color: var(--paper-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.background-run {
+  margin-bottom: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: rgba(46, 44, 39, 0.4);
+}
+
+.background-run summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.background-run summary::-webkit-details-marker {
+  display: none;
+}
+
+.background-run summary .status-dot {
+  margin-top: 4px;
+}
+
+.background-run-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.background-run-title {
+  overflow: hidden;
+  color: var(--paper);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-run-meta {
+  color: var(--paper-faint);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.background-run-count {
+  color: var(--paper-dim);
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.background-run-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.background-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.background-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(240, 238, 231, 0.1);
+}
+
+.background-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brass);
+  transition: width 200ms ease;
+}
+
+.background-assignment-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.background-assignment {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.background-assignment-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.background-assignment-name {
+  color: var(--paper-dim);
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.background-assignment-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--paper-faint);
+  font-size: 11px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.background-upnext {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  color: var(--paper-dim);
+  font-size: 11px;
+}
+
+.background-finished summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 4px;
+  color: var(--paper-dim);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.background-finished summary::-webkit-details-marker {
+  display: none;
+}
+
+.background-finished-list {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.background-finished-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--paper-dim);
+  text-align: left;
+}
+
+.background-finished-row:hover {
+  background: var(--ink-hover);
+}
+
+.background-finished-row .status-dot {
+  margin-top: 4px;
+}
+
+.background-finished-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.background-finished-title {
+  overflow: hidden;
+  color: var(--paper-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-finished-snippet {
+  overflow: hidden;
+  color: var(--paper-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-finished-meta {
+  color: var(--paper-faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -3650,10 +3905,35 @@ button {
   }
 }
 
+@media (max-width: 1180px) {
+  .app.with-background-panel {
+    grid-template-columns: 296px minmax(0, 1fr);
+  }
+
+  .background-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    width: min(360px, 92vw);
+    box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
+  }
+}
+
 @media (max-width: 760px) {
   .app {
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-columns: 1fr;
+  }
+
+  .app.with-background-panel {
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: 1fr;
+  }
+
+  .background-panel {
+    width: min(340px, 94vw);
   }
 
   .sidebar {
