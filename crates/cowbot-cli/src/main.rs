@@ -590,6 +590,7 @@ async fn run_crew(
                     approval,
                     risk,
                     reason,
+                    ..
                 } => {
                     println!("\n🔐 Approval required: {}", reason);
                     println!(
