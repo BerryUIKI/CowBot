@@ -8,7 +8,11 @@ interface ApprovalCardProps {
   risk: ApprovalRisk | undefined;
   deciding: boolean;
   compact?: boolean;
-  onDecide: (approval: Approval, approved: boolean) => void;
+  onDecide: (
+    approval: Approval,
+    approved: boolean,
+    forSession?: boolean,
+  ) => void;
 }
 
 function channelArgument(call: ToolCallDetail | undefined): string | null {
@@ -30,6 +34,7 @@ export default function ApprovalCard({
 }: ApprovalCardProps) {
   const destructive = call?.name === "delete_channel";
   const channel = channelArgument(call);
+  const canRemember = risk?.risk !== "critical";
 
   return (
     <div
@@ -78,8 +83,18 @@ export default function ApprovalCard({
           disabled={deciding}
           onClick={() => onDecide(approval, true)}
         >
-          {deciding ? "Saving…" : "Approve"}
+          {deciding ? "Saving…" : "Approve once"}
         </button>
+        {canRemember ? (
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={deciding}
+            onClick={() => onDecide(approval, true, true)}
+          >
+            Approve for session
+          </button>
+        ) : null}
         <button
           type="button"
           className="ghost-button"

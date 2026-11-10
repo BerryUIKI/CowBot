@@ -222,6 +222,8 @@ pub fn run() {
             commands::list_tool_calls,
             commands::pending_approvals,
             commands::decide_approval,
+            commands::session_decisions,
+            commands::clear_session_decisions,
             commands::get_model_settings,
             commands::save_model_provider,
             commands::delete_model_provider,

@@ -8,8 +8,10 @@ import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
 import {
+  clearSessionDecisions,
   createWorkspace,
   exportWorkspace,
+  getSessionDecisions,
   importWorkspace,
   listWorkspaces,
   switchWorkspace,
@@ -18,6 +20,7 @@ import {
 import type {
   AgentProfile,
   ClientSession,
+  SessionDecisionEntry,
   TemplateDocument,
   WorkspaceSummary,
 } from "./types";
@@ -38,11 +41,17 @@ interface SettingsViewProps {
   onSessionChange: (session: ClientSession) => void;
 }
 
-export type SettingsSection = "model" | "team" | "workspace" | "about";
+export type SettingsSection =
+  | "model"
+  | "team"
+  | "approvals"
+  | "workspace"
+  | "about";
 
 export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "team", label: "Team" },
+  { id: "approvals", label: "Approvals" },
   { id: "workspace", label: "Workspace" },
   { id: "about", label: "About" },
 ];
@@ -103,6 +112,11 @@ export default function SettingsView({
   const [profileEmail, setProfileEmail] = useState("");
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [sessionDecisions, setSessionDecisions] = useState<
+    SessionDecisionEntry[]
+  >([]);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,8 +134,36 @@ export default function SettingsView({
     };
   }, []);
 
-  async function handleSwitchWorkspace(database: string) {
-    setWorkspaceBusy(`switch-${database}`);
+  useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setSessionError(null);
+    getSessionDecisions()
+      .then((entries) => {
+        if (!cancelled) setSessionDecisions(entries);
+      })
+      .catch((error) => {
+        if (!cancelled) setSessionError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  async function handleClearSessionDecisions() {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      await clearSessionDecisions();
+      setSessionDecisions([]);
+    } catch (error) {
+      setSessionError(errorMessage(error));
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleSwitchWorkspace(database: string) {    setWorkspaceBusy(`switch-${database}`);
     setWorkspaceError(null);
     setWorkspaceNotice(null);
     try {
@@ -347,6 +389,58 @@ export default function SettingsView({
                 )}
               </section>
             </>
+          ) : null}
+
+          {section === "approvals" ? (
+            <section
+              className="settings-section"
+              aria-labelledby="settings-approvals"
+            >
+              <div className="settings-section-head">
+                <h3 id="settings-approvals">Session approvals</h3>
+                <p className="settings-hint">
+                  Decisions remembered for this app session only. Restarting
+                  CowBot clears them. Rules and plan mode follow in this
+                  milestone.
+                </p>
+              </div>
+
+              {sessionError ? (
+                <p className="settings-status is-error" role="alert">
+                  {sessionError}
+                </p>
+              ) : null}
+              {sessionDecisions.length === 0 ? (
+                <p className="settings-empty">
+                  No session decisions yet. Use "Approve for session" on an
+                  approval card.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {sessionDecisions.map((entry) => (
+                    <li key={entry.key} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">{entry.key}</span>
+                        <span className="settings-badge">
+                          {entry.decision}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={handleClearSessionDecisions}
+                  disabled={sessionBusy || sessionDecisions.length === 0}
+                >
+                  {sessionBusy ? "Resetting…" : "Reset session decisions"}
+                </button>
+              </div>
+            </section>
           ) : null}
 
           {section === "workspace" ? (

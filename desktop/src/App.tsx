@@ -1249,11 +1249,15 @@ export default function App() {
     }
   }
 
-  async function handleDecideApproval(approval: Approval, approved: boolean) {
+  async function handleDecideApproval(
+    approval: Approval,
+    approved: boolean,
+    forSession = false,
+  ) {
     setBusy(approval.id);
     setError(null);
     try {
-      await decideApproval(approval.id, approved);
+      await decideApproval(approval.id, approved, forSession);
       await refreshApprovals();
       await refreshTasks();
       if (selectedTaskId) await refreshTaskDetail(selectedTaskId);
