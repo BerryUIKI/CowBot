@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 
 import { approvalModes } from "./types";
-import type { ApprovalLevel } from "./types";
+import type { ApprovalLevel, ApprovalMode } from "./types";
 
 interface ApprovalModeMenuProps {
   value: ApprovalLevel;
@@ -19,6 +19,20 @@ export default function ApprovalModeMenu({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const current = approvalModes.find((mode) => mode.value === value) ?? approvalModes[1];
+
+  function chooseMode(mode: ApprovalMode) {
+    // Bypass is warned about every time; the acknowledgment is never stored.
+    if (
+      mode.value === "trusted" &&
+      !window.confirm(
+        "Bypass permissions runs every tool call. Critical-risk calls follow the workspace policy in Settings → Approvals. Continue?",
+      )
+    ) {
+      return;
+    }
+    onChange(mode.value);
+    setOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -67,14 +81,16 @@ export default function ApprovalModeMenu({
       event.preventDefault();
       const mode = approvalModes[Number(event.key) - 1];
       if (mode) {
-        onChange(mode.value);
-        setOpen(false);
+        chooseMode(mode);
       }
     }
   }
 
   return (
-    <div className="approval-mode" ref={rootRef}>
+    <div
+      className={`approval-mode${value === "trusted" ? " is-bypass" : ""}`}
+      ref={rootRef}
+    >
       <button
         type="button"
         className="approval-mode-button"
@@ -107,8 +123,7 @@ export default function ApprovalModeMenu({
                 mode.value === value ? " is-active" : ""
               }`}
               onClick={() => {
-                onChange(mode.value);
-                setOpen(false);
+                chooseMode(mode);
               }}
             >
               <span className="approval-mode-check" aria-hidden="true">

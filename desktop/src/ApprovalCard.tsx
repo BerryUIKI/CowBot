@@ -40,7 +40,7 @@ export default function ApprovalCard({
     <div
       className={`approval-card${compact ? " approval-card-inline" : ""}${
         destructive ? " approval-card-destructive" : ""
-      }`}
+      }${risk?.risk === "critical" ? " approval-card-critical" : ""}`}
     >
       <div className="approval-head">
         <span className="status-badge status-in_progress">Pending</span>
