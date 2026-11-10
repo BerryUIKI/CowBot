@@ -4,5 +4,6 @@ pub(crate) mod audit;
 pub(crate) mod collaboration;
 pub(crate) mod conversations;
 pub(crate) mod identity;
+pub(crate) mod permissions;
 pub(crate) mod tasks;
 pub(crate) mod usage;
