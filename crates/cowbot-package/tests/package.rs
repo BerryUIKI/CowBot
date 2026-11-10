@@ -1,4 +1,5 @@
 use cowbot_core::agent::AgentProfile;
+use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationSettings,
@@ -104,6 +105,44 @@ async fn export_then_import_round_trip() {
     let tasks = target.list_tasks(&summary.workspace_id).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(matches!(tasks[0].status, TaskStatus::Pending));
+}
+
+#[tokio::test]
+async fn import_reattributes_audit_events_and_preserves_archived_tasks() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let event = AuditEvent::new(workspace.id.clone(), "tester", "test.action", "target");
+    source.append_audit_event(&event).await.unwrap();
+
+    let mut task = Task::new("Archived task", "Output");
+    task.status = TaskStatus::Completed {
+        output: "done".to_string(),
+    };
+    task.archived = true;
+    source
+        .create_task(&workspace.id, None, &task)
+        .await
+        .unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let target = test_store().await;
+    let summary = import_workspace(&target, &bytes).await.unwrap();
+    assert_eq!(summary.audit_events, 1);
+
+    let events = target
+        .list_audit_events(&summary.workspace_id, 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].workspace_id, summary.workspace_id);
+    assert_ne!(events[0].id, event.id);
+
+    let tasks = target.list_tasks(&summary.workspace_id).await.unwrap();
+    let imported = tasks
+        .iter()
+        .find(|candidate| candidate.id == task.id)
+        .expect("imported archived task");
+    assert!(imported.archived);
 }
 
 #[tokio::test]

@@ -165,7 +165,14 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         store.create_run(run).await?;
     }
     for event in &audit {
-        store.append_audit_event(event).await?;
+        // Audit rows carry the exporting workspace id and a globally unique
+        // event id; re-key both for the imported workspace.
+        let imported = AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: workspace_id.clone(),
+            ..event.clone()
+        };
+        store.append_audit_event(&imported).await?;
     }
     // Imported rules start disabled: the user reviews each one before it can
     // affect a decision.

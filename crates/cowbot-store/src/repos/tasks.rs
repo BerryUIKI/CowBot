@@ -178,7 +178,7 @@ impl Store {
                 (id, workspace_id, channel_id, title, description, expected_output,
                  assigned_agent, context_tasks, run_group, status, archived_at, plan, plan_approved,
                  created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id.0)
         .bind(&workspace_id.0)
@@ -194,6 +194,7 @@ impl Store {
         .bind(serde_json::to_string(&task.context_tasks)?)
         .bind(task.run_group.as_ref().map(|task_id| task_id.0.clone()))
         .bind(serde_json::to_string(&task.status)?)
+        .bind(task.archived.then(|| now.clone()))
         .bind(&task.plan)
         .bind(i64::from(task.plan_approved))
         .bind(&now)
