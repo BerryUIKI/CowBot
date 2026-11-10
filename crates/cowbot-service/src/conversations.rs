@@ -520,7 +520,7 @@ pub(crate) fn conversation_system_prompt(agent: &AgentProfile, agents: &[AgentPr
          follow are the retained conversation context. Reply to the latest user message, \
          use tools when they help, and do not restate the context.",
         agent.build_system_prompt(),
-        ChannelAgentService::platform_context(agents)
+        ChannelAgentService::platform_context(agents, None)
     )
 }
 

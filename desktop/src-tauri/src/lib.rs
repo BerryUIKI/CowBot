@@ -61,8 +61,12 @@ impl AppState {
         runtime.remote = remote;
     }
 
-    fn build_tools(workspace_dir: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
-        Self::rooted_tools(workspace_dir, client)
+    fn build_tools(
+        workspace_dir: &std::path::Path,
+        config_path: PathBuf,
+        client: Arc<LocalClient>,
+    ) -> ToolRegistry {
+        Self::rooted_tools(workspace_dir, config_path, client)
     }
 
     /// Build a registry whose file, code, and working directory tools are
@@ -71,16 +75,20 @@ impl AppState {
     /// Worktree runs use this so agents edit the checkout instead of the
     /// app-data workspace; channel turns and non-worktree runs keep the shared
     /// registry.
-    pub fn rooted_tools(root: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
+    pub fn rooted_tools(
+        root: &std::path::Path,
+        config_path: PathBuf,
+        client: Arc<LocalClient>,
+    ) -> ToolRegistry {
         let sandbox = Arc::new(SubprocessSandbox::new(Some(root.to_path_buf())));
-        let mut tools = Self::workspace_tools(client);
+        let mut tools = Self::workspace_tools(config_path, client);
         tools.register(Arc::new(CodeExecutionTool::new(sandbox)));
         tools.register(Arc::new(ReadFileTool::new(Some(root.to_path_buf()))));
         tools.register(Arc::new(WriteFileTool::new(Some(root.to_path_buf()))));
         tools
     }
 
-    fn workspace_tools(client: Arc<LocalClient>) -> ToolRegistry {
+    fn workspace_tools(config_path: PathBuf, client: Arc<LocalClient>) -> ToolRegistry {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
             client.clone(),
@@ -96,6 +104,7 @@ impl AppState {
         )));
         tools.register(Arc::new(workspace_tools::CreateTaskTool::new(
             client.clone(),
+            config_path,
         )));
         tools.register(Arc::new(workspace_tools::DeleteChannelTool::new(
             client.clone(),
@@ -192,7 +201,7 @@ pub fn run() {
                 }
             });
 
-            let tools = AppState::build_tools(&data_dir, client.clone());
+            let tools = AppState::build_tools(&data_dir, config_path.clone(), client.clone());
             app.manage(AppState {
                 client,
                 tools,

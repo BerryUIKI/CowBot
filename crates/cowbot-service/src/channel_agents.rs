@@ -31,6 +31,9 @@ pub struct ChannelTurnOptions {
     pub max_concurrency: usize,
     /// Let Auto mode ask the active model for permission decisions.
     pub use_model_permissions: bool,
+    /// Extra environment text appended to the platform context, for example
+    /// registered projects the desktop can target with workspace tools.
+    pub platform_context: Option<String>,
 }
 
 impl Default for ChannelTurnOptions {
@@ -39,6 +42,7 @@ impl Default for ChannelTurnOptions {
             approval_level: ApprovalLevel::Ask,
             max_concurrency: 4,
             use_model_permissions: false,
+            platform_context: None,
         }
     }
 }
@@ -226,7 +230,7 @@ impl ChannelAgentService {
         let history = self.render_history(&channel, message, &agents).await?;
 
         let mut tasks = Vec::new();
-        let platform = Self::platform_context(&agents);
+        let platform = Self::platform_context(&agents, options.platform_context.as_deref());
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
             let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
@@ -258,7 +262,7 @@ impl ChannelAgentService {
     }
 
     /// Environment shared by every channel turn.
-    pub(crate) fn platform_context(agents: &[AgentProfile]) -> String {
+    pub(crate) fn platform_context(agents: &[AgentProfile], extra: Option<&str>) -> String {
         let mut roster = agents
             .iter()
             .take(20)
@@ -270,6 +274,9 @@ impl ChannelAgentService {
         if roster.is_empty() {
             roster.push("- (no agents yet)".to_string());
         }
+        let extra = extra
+            .map(|extra| format!("\n\n{extra}"))
+            .unwrap_or_default();
 
         format!(
             "Environment: you are running inside CowBot, a local desktop workspace for a \
@@ -286,8 +293,9 @@ impl ChannelAgentService {
              CSS and JavaScript but no network access, and it cannot send messages back.\n\n\
              Rules: reply in the language of the latest user message. Do not invent or refer to \
              external products such as Slack, Discord, Teams, or Feishu. If a request needs an \
-             action you cannot perform, explain the matching CowBot UI action plainly.",
+             action you cannot perform, explain the matching CowBot UI action plainly.{extra}",
             roster = roster.join("\n"),
+            extra = extra,
         )
     }
 
