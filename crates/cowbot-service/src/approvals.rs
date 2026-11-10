@@ -6,10 +6,11 @@ use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
 use cowbot_core::assignment::AssignmentId;
-use cowbot_core::audit::AuditEvent;
+use cowbot_core::audit::{AuditEvent, AuditSource};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::permission::{matching_rule, PermissionRule, PermissionRuleMatch, RuleDecision};
 use cowbot_core::risk::RiskLevel;
 use cowbot_core::task::TaskId;
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
@@ -138,12 +139,21 @@ impl ApprovalService {
             &call.name,
             &assessment.rule_id,
         );
+        // A hard policy denial (Plan mode mutations, Critical outside Bypass)
+        // cannot be softened by a workspace rule or a remembered decision.
+        let rules = self.store.list_permission_rules(&self.workspace_id).await?;
+        let rule_match = if base == ApprovalDecision::Deny {
+            None
+        } else {
+            matching_rule(&rules, call)
+        };
         let session_decision = self
             .session_decisions
             .as_ref()
             .and_then(|decisions| decisions.lookup(call));
 
         let model_decision = if session_decision.is_none()
+            && rule_match.is_none()
             && base == ApprovalDecision::RequireApproval
             && assignment.approval_level == ApprovalLevel::SafeAuto
             && assessment.level != RiskLevel::Critical
@@ -191,19 +201,34 @@ impl ApprovalService {
             None
         };
 
-        let decision = match session_decision {
-            Some(ApprovalStatus::Approved) if base != ApprovalDecision::Deny => {
-                ApprovalDecision::AutoApprove
+        // Precedence: hard policy denial, then Deny rules, then a remembered
+        // human decision, then Ask/Allow rules, then the model evaluator.
+        let rule_decision = rule_match.map(|rule| rule.decision);
+        let (decision, source) = if base == ApprovalDecision::Deny {
+            (ApprovalDecision::Deny, AuditSource::Policy)
+        } else if rule_decision == Some(RuleDecision::Deny) {
+            (ApprovalDecision::Deny, AuditSource::Rule)
+        } else if let Some(status) = session_decision {
+            match status {
+                ApprovalStatus::Approved => (ApprovalDecision::AutoApprove, AuditSource::Session),
+                ApprovalStatus::Rejected => (ApprovalDecision::Deny, AuditSource::Session),
+                _ => (base, AuditSource::Policy),
             }
-            Some(ApprovalStatus::Rejected) if base != ApprovalDecision::Deny => {
-                ApprovalDecision::Deny
+        } else if rule_decision == Some(RuleDecision::Ask) {
+            (ApprovalDecision::RequireApproval, AuditSource::Rule)
+        } else if rule_decision == Some(RuleDecision::Allow) {
+            (ApprovalDecision::AutoApprove, AuditSource::Rule)
+        } else {
+            match model_decision.as_ref().map(|decision| decision.decision) {
+                Some(PermissionDecisionKind::Allow) => {
+                    (ApprovalDecision::AutoApprove, AuditSource::Model)
+                }
+                Some(PermissionDecisionKind::Deny) => (ApprovalDecision::Deny, AuditSource::Model),
+                Some(PermissionDecisionKind::Ask) => {
+                    (ApprovalDecision::RequireApproval, AuditSource::Model)
+                }
+                None => (base, AuditSource::Policy),
             }
-            _ => match model_decision.as_ref().map(|decision| decision.decision) {
-                Some(PermissionDecisionKind::Allow) => ApprovalDecision::AutoApprove,
-                Some(PermissionDecisionKind::Deny) => ApprovalDecision::Deny,
-                Some(PermissionDecisionKind::Ask) => ApprovalDecision::RequireApproval,
-                None => base,
-            },
         };
 
         match decision {
@@ -212,8 +237,15 @@ impl ApprovalService {
                     self.record_session_audit(&agent_id.0, "tool.session_approved", call)
                         .await?;
                 } else {
-                    self.record_audit(&agent_id.0, "tool.auto_approved", call, &assessment)
-                        .await?;
+                    self.record_audit(
+                        &agent_id.0,
+                        "tool.auto_approved",
+                        call,
+                        &assessment,
+                        source,
+                        rule_match,
+                    )
+                    .await?;
                 }
                 Ok(ToolAuthorization::Approved { approved_by: None })
             }
@@ -228,18 +260,30 @@ impl ApprovalService {
                         ),
                     });
                 }
-                self.record_audit(&agent_id.0, "tool.denied", call, &assessment)
-                    .await?;
-                let reason = model_decision
-                    .as_ref()
-                    .map(|decision| format!("model denied the tool call: {}", decision.reason))
-                    .unwrap_or_else(|| {
-                        format!(
-                            "approval policy denied {} risk operation: {}",
-                            assessment.level.as_str(),
-                            assessment.reason
-                        )
-                    });
+                self.record_audit(
+                    &agent_id.0,
+                    "tool.denied",
+                    call,
+                    &assessment,
+                    source,
+                    rule_match,
+                )
+                .await?;
+                let reason = match rule_match {
+                    Some(rule) if source == AuditSource::Rule => {
+                        format!("workspace rule '{}' denies the tool call", rule.describe())
+                    }
+                    _ => model_decision
+                        .as_ref()
+                        .map(|decision| format!("model denied the tool call: {}", decision.reason))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "approval policy denied {} risk operation: {}",
+                                assessment.level.as_str(),
+                                assessment.reason
+                            )
+                        }),
+                };
                 Ok(ToolAuthorization::Denied { reason })
             }
             ApprovalDecision::RequireApproval => {
@@ -248,23 +292,35 @@ impl ApprovalService {
                 if let Some(decisions) = &self.session_decisions {
                     decisions.record_pending(&approval.id, call);
                 }
-                let reason = model_decision
-                    .as_ref()
-                    .map(|decision| {
+                let rule = rule_match.map(PermissionRuleMatch::from);
+                let reason = match (&rule, &model_decision) {
+                    (Some(rule), _) if source == AuditSource::Rule => {
+                        format!("workspace rule '{}' requires approval", rule.description)
+                    }
+                    (_, Some(decision)) => {
                         format!(
                             "{} (model: {} confidence {:.2})",
                             decision.reason, decision.model, decision.confidence
                         )
-                    })
-                    .unwrap_or_else(|| assessment.reason.clone());
+                    }
+                    _ => assessment.reason.clone(),
+                };
                 self.bus
                     .publish(Event::new(EventPayload::ApprovalRequested {
                         approval: approval.clone(),
                         risk: assessment.level,
                         reason,
+                        rule,
                     }));
-                self.record_audit(&agent_id.0, "tool.approval_requested", call, &assessment)
-                    .await?;
+                self.record_audit(
+                    &agent_id.0,
+                    "tool.approval_requested",
+                    call,
+                    &assessment,
+                    source,
+                    rule_match,
+                )
+                .await?;
 
                 let decided = self.wait_for_decision(&approval.id).await?;
                 let decided = if decided.status == ApprovalStatus::Pending {
@@ -280,6 +336,8 @@ impl ApprovalService {
                             "tool.approval_approved",
                             call,
                             &assessment,
+                            AuditSource::Human,
+                            rule_match,
                         )
                         .await?;
                         Ok(ToolAuthorization::Approved { approved_by })
@@ -287,15 +345,29 @@ impl ApprovalService {
                     ApprovalStatus::Rejected => {
                         let decided_by =
                             decided.decided_by.unwrap_or_else(|| "unknown".to_string());
-                        self.record_audit(&decided_by, "tool.approval_rejected", call, &assessment)
-                            .await?;
+                        self.record_audit(
+                            &decided_by,
+                            "tool.approval_rejected",
+                            call,
+                            &assessment,
+                            AuditSource::Human,
+                            rule_match,
+                        )
+                        .await?;
                         Ok(ToolAuthorization::Denied {
                             reason: format!("approval rejected by {decided_by}"),
                         })
                     }
                     ApprovalStatus::Expired | ApprovalStatus::Pending => {
-                        self.record_audit("system", "tool.approval_expired", call, &assessment)
-                            .await?;
+                        self.record_audit(
+                            "system",
+                            "tool.approval_expired",
+                            call,
+                            &assessment,
+                            AuditSource::System,
+                            rule_match,
+                        )
+                        .await?;
                         Ok(ToolAuthorization::Denied {
                             reason: "approval expired without a decision".to_string(),
                         })
@@ -333,15 +405,18 @@ impl ApprovalService {
             "tool.approval_rejected"
         };
         self.store
-            .append_audit_event(&AuditEvent::new(
-                self.workspace_id.clone(),
-                decided_by,
-                action,
-                format!(
-                    "approval {} for tool call {}",
-                    approval.id, approval.tool_call_id
-                ),
-            ))
+            .append_audit_event(
+                &AuditEvent::new(
+                    self.workspace_id.clone(),
+                    decided_by,
+                    action,
+                    format!(
+                        "approval {} for tool call {}",
+                        approval.id, approval.tool_call_id
+                    ),
+                )
+                .with_source(AuditSource::Human),
+            )
             .await?;
         Ok(approval)
     }
@@ -390,15 +465,18 @@ impl ApprovalService {
             }
             expired += 1;
             self.store
-                .append_audit_event(&AuditEvent::new(
-                    self.workspace_id.clone(),
-                    "system",
-                    "tool.approval_expired",
-                    format!(
-                        "approval {} for tool call {} expired on startup",
-                        approval.id, approval.tool_call_id
-                    ),
-                ))
+                .append_audit_event(
+                    &AuditEvent::new(
+                        self.workspace_id.clone(),
+                        "system",
+                        "tool.approval_expired",
+                        format!(
+                            "approval {} for tool call {} expired on startup",
+                            approval.id, approval.tool_call_id
+                        ),
+                    )
+                    .with_source(AuditSource::System),
+                )
                 .await?;
         }
         Ok(expired)
@@ -466,20 +544,23 @@ impl ApprovalService {
         decision: &PermissionDecision,
     ) -> CowResult<()> {
         self.store
-            .append_audit_event(&AuditEvent::new(
-                self.workspace_id.clone(),
-                actor,
-                "tool.model_decision",
-                format!(
-                    "{} ({}) model={} decision={:?} confidence={:.2} reason={}",
-                    call.name,
-                    call.id,
-                    decision.model,
-                    decision.decision,
-                    decision.confidence,
-                    decision.reason
-                ),
-            ))
+            .append_audit_event(
+                &AuditEvent::new(
+                    self.workspace_id.clone(),
+                    actor,
+                    "tool.model_decision",
+                    format!(
+                        "{} ({}) model={} decision={:?} confidence={:.2} reason={}",
+                        call.name,
+                        call.id,
+                        decision.model,
+                        decision.decision,
+                        decision.confidence,
+                        decision.reason
+                    ),
+                )
+                .with_source(AuditSource::Model),
+            )
             .await
     }
 
@@ -490,15 +571,18 @@ impl ApprovalService {
         error: &str,
     ) -> CowResult<()> {
         self.store
-            .append_audit_event(&AuditEvent::new(
-                self.workspace_id.clone(),
-                actor,
-                "tool.model_fallback",
-                format!(
-                    "{} ({}) fell back to human approval: {error}",
-                    call.name, call.id
-                ),
-            ))
+            .append_audit_event(
+                &AuditEvent::new(
+                    self.workspace_id.clone(),
+                    actor,
+                    "tool.model_fallback",
+                    format!(
+                        "{} ({}) fell back to human approval: {error}",
+                        call.name, call.id
+                    ),
+                )
+                .with_source(AuditSource::Model),
+            )
             .await
     }
 
@@ -509,17 +593,20 @@ impl ApprovalService {
         call: &ToolCall,
     ) -> CowResult<()> {
         self.store
-            .append_audit_event(&AuditEvent::new(
-                self.workspace_id.clone(),
-                actor,
-                action,
-                format!(
-                    "{} ({}) session_key={}",
-                    call.name,
-                    call.id,
-                    session_key(call)
-                ),
-            ))
+            .append_audit_event(
+                &AuditEvent::new(
+                    self.workspace_id.clone(),
+                    actor,
+                    action,
+                    format!(
+                        "{} ({}) session_key={}",
+                        call.name,
+                        call.id,
+                        session_key(call)
+                    ),
+                )
+                .with_source(AuditSource::Session),
+            )
             .await
     }
 
@@ -529,21 +616,36 @@ impl ApprovalService {
         action: &str,
         call: &ToolCall,
         assessment: &RiskAssessment,
+        source: AuditSource,
+        rule: Option<&PermissionRule>,
     ) -> CowResult<()> {
-        self.store
-            .append_audit_event(&AuditEvent::new(
-                self.workspace_id.clone(),
-                actor,
-                action,
+        let rule_detail = rule
+            .map(|rule| {
                 format!(
-                    "{} ({}) risk={} rule={} arguments={}",
-                    call.name,
-                    call.id,
-                    assessment.level.as_str(),
-                    assessment.rule_id,
-                    call.arguments
-                ),
-            ))
+                    " workspace_rule={} ({}) decision={}",
+                    rule.id,
+                    rule.describe(),
+                    rule.decision
+                )
+            })
+            .unwrap_or_default();
+        self.store
+            .append_audit_event(
+                &AuditEvent::new(
+                    self.workspace_id.clone(),
+                    actor,
+                    action,
+                    format!(
+                        "{} ({}) risk={} risk_rule={}{rule_detail} arguments={}",
+                        call.name,
+                        call.id,
+                        assessment.level.as_str(),
+                        assessment.rule_id,
+                        call.arguments
+                    ),
+                )
+                .with_source(source),
+            )
             .await
     }
 }

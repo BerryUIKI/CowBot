@@ -12,6 +12,7 @@ mod channels;
 mod conversations;
 mod crew_runner;
 mod permissions;
+mod permissions_rules;
 mod scheduler;
 mod session_decisions;
 mod task_service;
@@ -31,6 +32,7 @@ pub use permissions::{
     ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
     PermissionRequest,
 };
+pub use permissions_rules::PermissionService;
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
