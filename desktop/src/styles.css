@@ -965,7 +965,7 @@ button {
 }
 
 .app.with-inspector {
-  grid-template-columns: 296px minmax(0, 1fr) 360px;
+  grid-template-columns: 296px minmax(0, 1fr) 400px;
 }
 
 .inspector {
@@ -1035,6 +1035,37 @@ button {
 
 .inspector-pane[hidden] {
   display: none;
+}
+
+.inspector .task-detail {
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.inspector .task-header {
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 16px;
+}
+
+.inspector .task-actions {
+  flex-wrap: wrap;
+}
+
+.inspector .task-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.inspector .task-prompt,
+.inspector .task-plan,
+.inspector .task-result {
+  margin-top: 18px;
+}
+
+.inspector .task-prompt {
+  max-width: none;
 }
 
 .inspector-triggers {
@@ -4019,7 +4050,7 @@ button {
     right: 0;
     bottom: 0;
     z-index: 40;
-    width: min(360px, 92vw);
+    width: min(400px, 92vw);
     box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
   }
 }
