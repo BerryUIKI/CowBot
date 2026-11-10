@@ -73,6 +73,30 @@ impl TaskService {
         self.assignments.cancel(&root.id, reason).await
     }
 
+    /// Approve the plan stored with a task so the user can continue in Manual
+    /// mode. Idempotent: approving an approved plan keeps it approved.
+    pub async fn approve_plan(&self, task_id: &TaskId) -> CowResult<Task> {
+        let Some(mut task) = self.store.get_task(task_id).await? else {
+            return Err(CowError::Task(format!("task '{task_id}' was not found")));
+        };
+        let has_plan = task
+            .plan
+            .as_deref()
+            .is_some_and(|plan| !plan.trim().is_empty());
+        if !has_plan {
+            return Err(CowError::Task(format!(
+                "task '{task_id}' has no plan to approve"
+            )));
+        }
+        if !task.plan_approved {
+            self.store.approve_task_plan(task_id).await?;
+            task.plan_approved = true;
+            self.bus
+                .publish(Event::new(EventPayload::TaskUpdated(task.clone())));
+        }
+        Ok(task)
+    }
+
     /// Archive or restore a terminal task without deleting its history.
     pub async fn set_archived(&self, task_id: &TaskId, archived: bool) -> CowResult<Task> {
         let Some(mut task) = self.store.get_task(task_id).await? else {

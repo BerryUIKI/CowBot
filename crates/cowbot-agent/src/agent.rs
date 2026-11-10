@@ -28,6 +28,7 @@ pub struct AgentInstance {
     tool_recorder: Option<Arc<dyn ToolCallRecorder>>,
     usage_recorder: Option<Arc<dyn LlmUsageRecorder>>,
     conversation_recorder: Option<Arc<dyn ConversationRecorder>>,
+    mode_instruction: Option<String>,
 }
 
 impl AgentInstance {
@@ -46,6 +47,7 @@ impl AgentInstance {
             tool_recorder: None,
             usage_recorder: None,
             conversation_recorder: None,
+            mode_instruction: None,
         }
     }
 
@@ -81,6 +83,11 @@ impl AgentInstance {
         self.conversation_recorder = None;
     }
 
+    /// Add a mode-specific system instruction, for example Plan mode.
+    pub fn set_mode_instruction(&mut self, instruction: Option<String>) {
+        self.mode_instruction = instruction;
+    }
+
     pub fn id(&self) -> &AgentId {
         &self.profile.id
     }
@@ -98,6 +105,9 @@ impl AgentInstance {
     ) -> CowResult<String> {
         let system_prompt = self.profile.build_system_prompt();
         let mut messages = vec![ChatMessage::system(system_prompt)];
+        if let Some(instruction) = &self.mode_instruction {
+            messages.push(ChatMessage::system(instruction.clone()));
+        }
 
         // Inject prerequisite context if any exists
         let mut prompt = format!(

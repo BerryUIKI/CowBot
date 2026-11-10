@@ -248,7 +248,9 @@ compacting the context never deletes messages.
   changes state (default for interactive use).
 - **Accept edits** — run workspace file edits automatically; other tools
   follow Manual.
-- **Plan** — run only read-only tools and deny everything else.
+- **Plan** — run only read-only tools and deny everything else. The agent is
+  asked to answer with a plan; it is stored with the task, and **Approve plan
+  and continue** switches the next run to Manual.
 - **Bypass permissions** — run every tool call except critical actions.
 
 Approvals appear in **Approvals**. Workspace rules in Settings → Approvals are

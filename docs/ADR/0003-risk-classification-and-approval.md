@@ -22,7 +22,7 @@ CowBot offers multiple approval modes (Ask / AcceptEdits / SafeAuto / PlanOnly /
    - `Ask` (default): ReadOnly auto-approves; Low and above require per-call approval; Critical is denied;
    - `AcceptEdits`: ReadOnly auto-approves; `write_file` calls inside the workspace auto-approve; all other calls follow `Ask`; Critical is denied;
    - `SafeAuto`: ReadOnly/Low auto-approve; Medium and above ask the configured model permission evaluator, which returns allow/ask/deny; without a provider they fall back to asking; Critical is denied;
-   - `PlanOnly`: only ReadOnly auto-approves; every write or execution is denied;
+   - `PlanOnly`: only ReadOnly auto-approves; every write or execution is denied, and the agent is told to finish with a plan. The final output is stored with the task; **Approve plan and continue** marks it approved and continues in Manual mode;
    - `Trusted`: everything except Critical auto-approves; Critical is denied in v1 (a future explicit allowlist may permit it).
 5. **Undecidable operations default to High** (fail-safe), never auto-approve.
 6. **Audit**: record the decision source (`rule`, `model`, `session`, `human`, `policy`, or `system`), the matched rule ID when one decided the call, the approver, timestamp, and operation arguments. The audit view filters by source.

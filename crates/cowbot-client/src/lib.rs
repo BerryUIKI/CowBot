@@ -195,6 +195,8 @@ pub trait Client: Send + Sync {
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;
+    /// Approve the Plan-mode artifact stored with a task.
+    async fn approve_task_plan(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>>;
 
     async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>>;

@@ -494,6 +494,10 @@ impl Client for LocalClient {
         self.tasks.set_archived(task_id, false).await
     }
 
+    async fn approve_task_plan(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.approve_plan(task_id).await
+    }
+
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
         self.assignments.list_for_task(task_id).await
     }

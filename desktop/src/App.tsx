@@ -22,6 +22,7 @@ import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
   archiveTask,
+  approveTaskPlan,
   cancelTask,
   clearChannelMessages,
   clearConversationContext,
@@ -1250,11 +1251,14 @@ export default function App() {
     }
   }
 
-  async function handleRunTask(taskId: string) {
+  async function handleRunTask(
+    taskId: string,
+    approvalLevel: ApprovalLevel = taskApproval,
+  ) {
     setError(null);
     setRunningTasks((current) => new Set(current).add(taskId));
     try {
-      await runTask(taskId, taskApproval);
+      await runTask(taskId, approvalLevel);
       await refreshTasks();
     } catch (err) {
       setRunningTasks((current) => {
@@ -1263,6 +1267,22 @@ export default function App() {
         return next;
       });
       setError(errorMessage(err));
+    }
+  }
+
+  async function handleApprovePlan(taskId: string) {
+    setBusy("approve-plan");
+    setError(null);
+    try {
+      await approveTaskPlan(taskId);
+      setTaskApproval("ask");
+      await handleRunTask(taskId, "ask");
+      await refreshTasks();
+      if (selectedTaskId) await refreshTaskDetail(selectedTaskId);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -2437,6 +2457,8 @@ export default function App() {
               onCancel={handleCancelTask}
               running={runningTasks.has(selectedTask.id)}
               onRun={() => handleRunTask(selectedTask.id)}
+              onApprovePlan={() => void handleApprovePlan(selectedTask.id)}
+              approvingPlan={busy === "approve-plan"}
               onToggleArchive={() => void handleToggleArchive(selectedTask)}
               archiveBusy={busy === "archive-task"}
             />

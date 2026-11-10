@@ -22,6 +22,8 @@ struct TaskRow {
     context_tasks: String,
     status: String,
     archived_at: Option<String>,
+    plan: Option<String>,
+    plan_approved: i64,
 }
 
 impl TaskRow {
@@ -36,6 +38,8 @@ impl TaskRow {
             context_tasks: parse_json(&self.context_tasks, "tasks.context_tasks")?,
             status: parse_json(&self.status, "tasks.status")?,
             archived: self.archived_at.is_some(),
+            plan: self.plan,
+            plan_approved: self.plan_approved != 0,
         })
     }
 }
@@ -170,8 +174,9 @@ impl Store {
         sqlx::query(
             "INSERT INTO tasks
                 (id, workspace_id, channel_id, title, description, expected_output,
-                 assigned_agent, context_tasks, status, archived_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                 assigned_agent, context_tasks, status, archived_at, plan, plan_approved,
+                 created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
         )
         .bind(&task.id.0)
         .bind(&workspace_id.0)
@@ -186,6 +191,8 @@ impl Store {
         .bind(task.assigned_agent.as_ref().map(|agent| agent.0.clone()))
         .bind(serde_json::to_string(&task.context_tasks)?)
         .bind(serde_json::to_string(&task.status)?)
+        .bind(&task.plan)
+        .bind(i64::from(task.plan_approved))
         .bind(&now)
         .bind(&now)
         .execute(self.pool())
@@ -197,7 +204,8 @@ impl Store {
     pub async fn get_task(&self, id: &TaskId) -> CowResult<Option<Task>> {
         let row = sqlx::query_as::<_, TaskRow>(
             "SELECT id, channel_id, title, description, expected_output, assigned_agent,
-                    context_tasks, status, archived_at FROM tasks WHERE id = ?",
+                    context_tasks, status, archived_at, plan, plan_approved
+             FROM tasks WHERE id = ?",
         )
         .bind(&id.0)
         .fetch_optional(self.pool())
@@ -220,7 +228,7 @@ impl Store {
     pub async fn list_tasks(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
             "SELECT id, channel_id, title, description, expected_output, assigned_agent,
-                    context_tasks, status, archived_at
+                    context_tasks, status, archived_at, plan, plan_approved
              FROM tasks WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(&workspace_id.0)
@@ -234,6 +242,29 @@ impl Store {
         let archived_at = archived.then(|| Utc::now().to_rfc3339());
         sqlx::query("UPDATE tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
             .bind(archived_at)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// Store a Plan-mode artifact and clear any previous approval.
+    pub async fn set_task_plan(&self, id: &TaskId, plan: &str) -> CowResult<()> {
+        sqlx::query("UPDATE tasks SET plan = ?, plan_approved = 0, updated_at = ? WHERE id = ?")
+            .bind(plan)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// Mark the stored plan approved so the task can continue in Manual mode.
+    pub async fn approve_task_plan(&self, id: &TaskId) -> CowResult<()> {
+        sqlx::query("UPDATE tasks SET plan_approved = 1, updated_at = ? WHERE id = ?")
             .bind(Utc::now().to_rfc3339())
             .bind(&id.0)
             .execute(self.pool())
