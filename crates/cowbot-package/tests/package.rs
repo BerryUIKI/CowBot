@@ -4,6 +4,7 @@ use cowbot_core::conversation::{
     ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationSettings,
 };
 use cowbot_core::identity::{Membership, Role, User, Workspace};
+use cowbot_core::permission::{PermissionRule, RuleDecision, RuleSource};
 use cowbot_core::task::{Task, TaskStatus};
 use cowbot_package::{
     export_workspace, import_workspace, inspect, PackageError, PackageKind, PACKAGE_FORMAT,
@@ -54,6 +55,13 @@ async fn seed(store: &Store) -> Workspace {
 async fn export_then_import_round_trip() {
     let source = test_store().await;
     let workspace = seed(&source).await;
+    let rule = PermissionRule::new(
+        workspace.id.clone(),
+        "execute_code",
+        Some("git status*".to_string()),
+        RuleDecision::Allow,
+    );
+    source.upsert_permission_rule(&rule).await.unwrap();
 
     let bytes = export_workspace(&source, &workspace.id).await.unwrap();
     assert!(!bytes.is_empty());
@@ -70,7 +78,18 @@ async fn export_then_import_round_trip() {
     assert_eq!(summary.messages, 1);
     assert_eq!(summary.agents, 1);
     assert_eq!(summary.tasks, 1);
+    assert_eq!(summary.permission_rules, 1);
     assert!(summary.workspace_name.ends_with("(imported)"));
+
+    let imported_rules = target
+        .list_permission_rules(&summary.workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(imported_rules.len(), 1);
+    assert!(!imported_rules[0].enabled);
+    assert_eq!(imported_rules[0].source, RuleSource::Imported);
+    assert_eq!(imported_rules[0].command.as_deref(), Some("git status*"));
+    assert_ne!(imported_rules[0].id, rule.id);
 
     let channels = target.list_channels(&summary.workspace_id).await.unwrap();
     assert_eq!(channels.len(), 1);
@@ -239,6 +258,7 @@ async fn manifest_checksums_cover_every_content_file() {
         "tasks.json",
         "runs.jsonl",
         "audit.jsonl",
+        "permission_rules.jsonl",
     ] {
         assert!(
             manifest.checksums.contains_key(path),

@@ -17,6 +17,7 @@ use cowbot_core::conversation::{
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -203,7 +204,26 @@ pub trait Client: Send + Sync {
         &self,
         assignment_id: &AssignmentId,
     ) -> CowResult<Vec<AssignmentEvent>>;
-    async fn list_audit_events(&self, limit: u32) -> CowResult<Vec<AuditEvent>>;
+    async fn list_audit_events(
+        &self,
+        limit: u32,
+        source: Option<&str>,
+    ) -> CowResult<Vec<AuditEvent>>;
+
+    /// Workspace-level allow / ask / deny rules for tool calls.
+    async fn list_permission_rules(&self) -> CowResult<Vec<PermissionRule>>;
+    async fn create_permission_rule(
+        &self,
+        tool: &str,
+        command: Option<&str>,
+        decision: RuleDecision,
+    ) -> CowResult<PermissionRule>;
+    async fn set_permission_rule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> CowResult<PermissionRule>;
+    async fn delete_permission_rule(&self, id: &str) -> CowResult<()>;
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>>;
     async fn decide_approval(

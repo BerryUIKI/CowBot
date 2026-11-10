@@ -16,6 +16,7 @@ use cowbot_core::conversation::{
     CompactionOutcome, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -23,8 +24,8 @@ use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
     ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, SessionDecisions, TaskService,
-    TemplateService,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
+    SessionDecisions, TaskService, TemplateService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -49,6 +50,7 @@ pub struct LocalClient {
     assignments: AssignmentService,
     approvals: ApprovalService,
     agents: AgentService,
+    permissions: PermissionService,
     session_decisions: Arc<SessionDecisions>,
 }
 
@@ -90,6 +92,7 @@ impl LocalClient {
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
+        let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -111,6 +114,7 @@ impl LocalClient {
             assignments,
             approvals,
             agents,
+            permissions,
             session_decisions,
         })
     }
@@ -513,10 +517,39 @@ impl Client for LocalClient {
         self.assignments.events(assignment_id).await
     }
 
-    async fn list_audit_events(&self, limit: u32) -> CowResult<Vec<AuditEvent>> {
+    async fn list_audit_events(
+        &self,
+        limit: u32,
+        source: Option<&str>,
+    ) -> CowResult<Vec<AuditEvent>> {
         self.store
-            .list_audit_events(&self.session.workspace.id, limit)
+            .list_audit_events_by_source(&self.session.workspace.id, source, limit)
             .await
+    }
+
+    async fn list_permission_rules(&self) -> CowResult<Vec<PermissionRule>> {
+        self.permissions.list().await
+    }
+
+    async fn create_permission_rule(
+        &self,
+        tool: &str,
+        command: Option<&str>,
+        decision: RuleDecision,
+    ) -> CowResult<PermissionRule> {
+        self.permissions.create(tool, command, decision).await
+    }
+
+    async fn set_permission_rule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> CowResult<PermissionRule> {
+        self.permissions.set_enabled(id, enabled).await
+    }
+
+    async fn delete_permission_rule(&self, id: &str) -> CowResult<()> {
+        self.permissions.delete(id).await
     }
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>> {
@@ -752,7 +785,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, AssignmentEventKind::Enqueued);
 
-        let audit = client.list_audit_events(10).await.unwrap();
+        let audit = client.list_audit_events(10, None).await.unwrap();
         assert!(audit.iter().any(|event| event.action == "test.action"));
     }
 

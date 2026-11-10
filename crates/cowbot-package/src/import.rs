@@ -1,5 +1,6 @@
 use std::io::Read;
 
+use chrono::Utc;
 use cowbot_core::agent::AgentProfile;
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage};
@@ -7,17 +8,20 @@ use cowbot_core::conversation::{
     ChannelParticipant, ContextEntry, ContextEvent, ConversationSettings,
 };
 use cowbot_core::identity::{Role, User, UserId, Workspace, WorkspaceId};
+use cowbot_core::permission::{PermissionRule, RuleSource};
 use cowbot_core::run::Run;
 use cowbot_core::task::Task;
 use cowbot_core::template::TemplateDocument;
 use cowbot_store::Store;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::export::MAX_PACKAGE_BYTES;
 use crate::manifest::{
     Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH, CHANNELS_PATH,
     CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH, MANIFEST_PATH,
-    MESSAGES_PATH, PARTICIPANTS_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH, WORKSPACE_PATH,
+    MESSAGES_PATH, PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH,
+    WORKSPACE_PATH,
 };
 
 /// Result of importing a package into a fresh local workspace.
@@ -33,6 +37,7 @@ pub struct ImportSummary {
     pub audit_events: usize,
     pub conversations: usize,
     pub context_entries: usize,
+    pub permission_rules: usize,
 }
 
 /// Read and verify a package without importing it.
@@ -66,6 +71,8 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     let tasks: Vec<Task> = parse(required(&entries, TASKS_PATH)?)?;
     let runs: Vec<Run> = parse_jsonl(required(&entries, RUNS_PATH)?)?;
     let audit: Vec<AuditEvent> = parse_jsonl(required(&entries, AUDIT_PATH)?)?;
+    let permission_rules: Vec<PermissionRule> =
+        optional_jsonl(&entries, PERMISSION_RULES_PATH)?.unwrap_or_default();
 
     // Give the import a fresh identity so it never collides with local rows.
     let workspace_id = WorkspaceId::random();
@@ -160,6 +167,22 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     for event in &audit {
         store.append_audit_event(event).await?;
     }
+    // Imported rules start disabled: the user reviews each one before it can
+    // affect a decision.
+    for rule in &permission_rules {
+        let imported = PermissionRule {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: workspace_id.clone(),
+            tool: rule.tool.clone(),
+            command: rule.command.clone(),
+            decision: rule.decision,
+            enabled: false,
+            source: RuleSource::Imported,
+            created_at: rule.created_at,
+            updated_at: Utc::now(),
+        };
+        store.upsert_permission_rule(&imported).await?;
+    }
 
     Ok(ImportSummary {
         workspace_id,
@@ -172,6 +195,7 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         audit_events: audit.len(),
         conversations: conversation_settings.len(),
         context_entries: context_entries.len(),
+        permission_rules: permission_rules.len(),
     })
 }
 
@@ -230,6 +254,7 @@ fn known_paths() -> &'static [&'static str] {
         TASKS_PATH,
         RUNS_PATH,
         AUDIT_PATH,
+        PERMISSION_RULES_PATH,
     ]
 }
 

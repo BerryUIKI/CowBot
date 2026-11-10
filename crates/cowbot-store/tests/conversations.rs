@@ -110,7 +110,12 @@ async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
     let agent_id = AgentId::new("agent-coder");
     let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
     store
-        .create_conversation(&workspace.id, &channel, &settings, &[agent_id.clone()])
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
         .await
         .unwrap();
 
@@ -196,7 +201,12 @@ async fn clearing_history_removes_context_entries() {
     let agent_id = AgentId::new("agent-coder");
     let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
     store
-        .create_conversation(&workspace.id, &channel, &settings, &[agent_id.clone()])
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
         .await
         .unwrap();
     store
@@ -227,7 +237,12 @@ async fn channel_usage_sums_all_calls_and_the_latest_run() {
     let agent_id = AgentId::new("agent-coder");
     let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
     store
-        .create_conversation(&workspace.id, &channel, &settings, &[agent_id.clone()])
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
         .await
         .unwrap();
 

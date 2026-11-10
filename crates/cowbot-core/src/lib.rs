@@ -8,6 +8,7 @@ pub mod error;
 pub mod event;
 pub mod identity;
 pub mod mention;
+pub mod permission;
 pub mod risk;
 pub mod run;
 pub mod task;
@@ -22,7 +23,7 @@ pub use assignment::{
     AssignmentId, AssignmentMode, AssignmentOrigin, AssignmentOutcome, AssignmentRequester,
     AssignmentStatus, ReplyMode, MAX_ASSIGNMENT_DEPTH,
 };
-pub use audit::AuditEvent;
+pub use audit::{AuditEvent, AuditSource};
 pub use channel::{Channel, ChannelId, ChannelMessage, Sender};
 pub use conversation::{
     compaction_split, context_usage_state, project_context, usable_window, CacheUsageSummary,
@@ -38,6 +39,9 @@ pub use identity::{
     ApiToken, Invite, Membership, Role, Session, User, UserId, Workspace, WorkspaceId,
 };
 pub use mention::{parse_mentions, resolve_mentions, MentionResolution};
+pub use permission::{
+    glob_matches, matching_rule, PermissionRule, PermissionRuleMatch, RuleDecision, RuleSource,
+};
 pub use risk::RiskLevel;
 pub use run::{Run, RunId, RunStatus, ToolCallRecord};
 pub use task::{Task, TaskId, TaskStatus};

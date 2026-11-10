@@ -10,8 +10,8 @@ use zip::write::SimpleFileOptions;
 use crate::manifest::{
     ExportedBy, Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH,
     CHANNELS_PATH, CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH,
-    MANIFEST_PATH, MESSAGES_PATH, PARTICIPANTS_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH,
-    WORKSPACE_PATH,
+    MANIFEST_PATH, MESSAGES_PATH, PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH,
+    TEMPLATES_PATH, WORKSPACE_PATH,
 };
 
 /// Upper bound for a package produced or read in one go.
@@ -72,6 +72,7 @@ pub async fn export_workspace(
     let audit = store
         .list_audit_events(workspace_id, AUDIT_EVENT_LIMIT)
         .await?;
+    let permission_rules = store.list_permission_rules(workspace_id).await?;
 
     let mut entries: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
     entries.insert(
@@ -92,6 +93,7 @@ pub async fn export_workspace(
     entries.insert(TASKS_PATH, to_bytes(&tasks)?);
     entries.insert(RUNS_PATH, to_jsonl(&runs)?);
     entries.insert(AUDIT_PATH, to_jsonl(&audit)?);
+    entries.insert(PERMISSION_RULES_PATH, to_jsonl(&permission_rules)?);
 
     let mut manifest = Manifest::new(
         PackageKind::Workspace,

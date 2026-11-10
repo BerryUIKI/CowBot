@@ -8,6 +8,7 @@ import type {
   ApprovalLevel,
   Assignment,
   AssignmentEvent,
+  AuditEvent,
   Channel,
   ChannelMessage,
   ClientSession,
@@ -17,7 +18,9 @@ import type {
   ModelMetadata,
   ModelSettings,
   OnboardingState,
+  PermissionRule,
   ProviderProtocol,
+  RuleDecision,
   Run,
   SessionDecisionEntry,
   Task,
@@ -234,6 +237,43 @@ export function getSessionDecisions(): Promise<SessionDecisionEntry[]> {
 
 export function clearSessionDecisions(): Promise<void> {
   return invoke<void>("clear_session_decisions");
+}
+
+export function listPermissionRules(): Promise<PermissionRule[]> {
+  return invoke<PermissionRule[]>("list_permission_rules");
+}
+
+export function createPermissionRule(
+  tool: string,
+  command: string | null,
+  decision: RuleDecision,
+): Promise<PermissionRule> {
+  return invoke<PermissionRule>("create_permission_rule", {
+    tool,
+    command,
+    decision,
+  });
+}
+
+export function setPermissionRuleEnabled(
+  ruleId: string,
+  enabled: boolean,
+): Promise<PermissionRule> {
+  return invoke<PermissionRule>("set_permission_rule_enabled", {
+    ruleId,
+    enabled,
+  });
+}
+
+export function deletePermissionRule(ruleId: string): Promise<void> {
+  return invoke<void>("delete_permission_rule", { ruleId });
+}
+
+export function getAuditEvents(
+  limit = 200,
+  source: string | null = null,
+): Promise<AuditEvent[]> {
+  return invoke<AuditEvent[]>("list_audit_events", { limit, source });
 }
 
 export function getModelSettings(): Promise<ModelSettings> {

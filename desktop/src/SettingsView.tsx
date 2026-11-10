@@ -9,17 +9,25 @@ import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
 import {
   clearSessionDecisions,
+  createPermissionRule,
   createWorkspace,
+  deletePermissionRule,
   exportWorkspace,
+  getAuditEvents,
   getSessionDecisions,
   importWorkspace,
+  listPermissionRules,
   listWorkspaces,
+  setPermissionRuleEnabled,
   switchWorkspace,
   updateUserProfile,
 } from "./api";
 import type {
   AgentProfile,
+  AuditEvent,
   ClientSession,
+  PermissionRule,
+  RuleDecision,
   SessionDecisionEntry,
   TemplateDocument,
   WorkspaceSummary,
@@ -45,6 +53,7 @@ export type SettingsSection =
   | "model"
   | "team"
   | "approvals"
+  | "audit"
   | "workspace"
   | "about";
 
@@ -52,6 +61,7 @@ export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "team", label: "Team" },
   { id: "approvals", label: "Approvals" },
+  { id: "audit", label: "Audit" },
   { id: "workspace", label: "Workspace" },
   { id: "about", label: "About" },
 ];
@@ -117,6 +127,16 @@ export default function SettingsView({
   >([]);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [rules, setRules] = useState<PermissionRule[]>([]);
+  const [ruleTool, setRuleTool] = useState("execute_code");
+  const [ruleCommand, setRuleCommand] = useState("");
+  const [ruleDecision, setRuleDecision] = useState<RuleDecision>("ask");
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [ruleError, setRuleError] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditSource, setAuditSource] = useState("all");
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +170,42 @@ export default function SettingsView({
     };
   }, [section]);
 
+  useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setRuleError(null);
+    listPermissionRules()
+      .then((next) => {
+        if (!cancelled) setRules(next);
+      })
+      .catch((error) => {
+        if (!cancelled) setRuleError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "audit") return;
+    let cancelled = false;
+    setAuditBusy(true);
+    setAuditError(null);
+    getAuditEvents(200, auditSource === "all" ? null : auditSource)
+      .then((events) => {
+        if (!cancelled) setAuditEvents(events);
+      })
+      .catch((error) => {
+        if (!cancelled) setAuditError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setAuditBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, auditSource]);
+
   async function handleClearSessionDecisions() {
     setSessionBusy(true);
     setSessionError(null);
@@ -160,6 +216,59 @@ export default function SettingsView({
       setSessionError(errorMessage(error));
     } finally {
       setSessionBusy(false);
+    }
+  }
+
+  async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const tool = ruleTool.trim();
+    if (!tool) return;
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      const rule = await createPermissionRule(
+        tool,
+        ruleCommand.trim() || null,
+        ruleDecision,
+      );
+      setRules((current) => [...current, rule]);
+      setRuleCommand("");
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function handleToggleRule(rule: PermissionRule) {
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      const updated = await setPermissionRuleEnabled(rule.id, !rule.enabled);
+      setRules((current) =>
+        current.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      );
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function handleDeleteRule(rule: PermissionRule) {
+    const label = rule.command ? `${rule.tool}: ${rule.command}` : rule.tool;
+    if (!window.confirm(`Delete the workspace rule "${label}"?`)) return;
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      await deletePermissionRule(rule.id);
+      setRules((current) => current.filter((candidate) => candidate.id !== rule.id));
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
     }
   }
 
@@ -440,6 +549,179 @@ export default function SettingsView({
                   {sessionBusy ? "Resetting…" : "Reset session decisions"}
                 </button>
               </div>
+
+              <div className="settings-section-head settings-subsection">
+                <h3>Workspace rules</h3>
+                <p className="settings-hint">
+                  Allow, ask, or deny rules evaluated before the model
+                  evaluator. Deny wins over ask, and ask over allow. Rules are
+                  stored with this workspace and exported with it; imported
+                  rules start disabled until reviewed.
+                </p>
+              </div>
+
+              {ruleError ? (
+                <p className="settings-status is-error" role="alert">
+                  {ruleError}
+                </p>
+              ) : null}
+
+              <form className="settings-rule-form" onSubmit={handleCreateRule}>
+                <label className="field">
+                  <span>Tool</span>
+                  <input
+                    value={ruleTool}
+                    onChange={(event) => setRuleTool(event.target.value)}
+                    placeholder="execute_code or *"
+                    aria-label="Rule tool"
+                  />
+                </label>
+                <label className="field">
+                  <span>Command pattern</span>
+                  <input
+                    value={ruleCommand}
+                    onChange={(event) => setRuleCommand(event.target.value)}
+                    placeholder="git * (optional)"
+                    aria-label="Rule command pattern"
+                  />
+                </label>
+                <label className="field">
+                  <span>Decision</span>
+                  <select
+                    value={ruleDecision}
+                    onChange={(event) =>
+                      setRuleDecision(event.target.value as RuleDecision)
+                    }
+                    aria-label="Rule decision"
+                  >
+                    <option value="allow">Allow</option>
+                    <option value="ask">Ask</option>
+                    <option value="deny">Deny</option>
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={ruleBusy}
+                >
+                  {ruleBusy ? "Adding…" : "Add rule"}
+                </button>
+              </form>
+
+              {rules.length === 0 ? (
+                <p className="settings-empty">
+                  No workspace rules yet. Rules apply to every agent in this
+                  workspace.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {rules.map((rule) => (
+                    <li key={rule.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">
+                          {rule.tool === "*" ? "all tools" : rule.tool}
+                          {rule.command ? `: ${rule.command}` : ""}
+                        </span>
+                        <span className={`settings-badge rule-${rule.decision}`}>
+                          {rule.decision}
+                        </span>
+                      </div>
+                      <div className="settings-card-actions">
+                        <span className="settings-meta-inline">
+                          {rule.source === "imported"
+                            ? "imported — review before enabling"
+                            : rule.enabled
+                              ? "enabled"
+                              : "disabled"}
+                        </span>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={ruleBusy}
+                          onClick={() => void handleToggleRule(rule)}
+                        >
+                          {rule.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button danger-text"
+                          disabled={ruleBusy}
+                          onClick={() => void handleDeleteRule(rule)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
+          {section === "audit" ? (
+            <section
+              className="settings-section"
+              aria-labelledby="settings-audit"
+            >
+              <div className="settings-section-head">
+                <h3 id="settings-audit">Audit</h3>
+                <p className="settings-hint">
+                  Every tool decision records its source: a workspace rule, the
+                  model evaluator, a session decision, a human approval, the
+                  active approval policy, or the runtime.
+                </p>
+              </div>
+
+              <label className="field settings-audit-filter">
+                <span>Source</span>
+                <select
+                  value={auditSource}
+                  onChange={(event) => setAuditSource(event.target.value)}
+                  aria-label="Audit source filter"
+                >
+                  <option value="all">All sources</option>
+                  <option value="rule">Rule</option>
+                  <option value="model">Model</option>
+                  <option value="session">Session</option>
+                  <option value="human">Human</option>
+                  <option value="policy">Policy</option>
+                  <option value="system">System</option>
+                </select>
+              </label>
+
+              {auditError ? (
+                <p className="settings-status is-error" role="alert">
+                  {auditError}
+                </p>
+              ) : null}
+              {auditBusy ? (
+                <p className="settings-empty">Loading audit events…</p>
+              ) : auditEvents.length === 0 ? (
+                <p className="settings-empty">No audit events for this source.</p>
+              ) : (
+                <ul className="settings-list">
+                  {auditEvents.map((event) => (
+                    <li key={event.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">
+                          {event.action}
+                        </span>
+                        <span
+                          className={`settings-badge audit-${
+                            event.source ?? "none"
+                          }`}
+                        >
+                          {event.source ?? "unknown"}
+                        </span>
+                      </div>
+                      <p className="settings-meta-inline">
+                        {event.actor} · {formatDateTime(event.created_at)}
+                      </p>
+                      <p className="audit-target">{event.target}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           ) : null}
 

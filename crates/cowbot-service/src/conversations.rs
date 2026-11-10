@@ -645,8 +645,8 @@ mod tests {
             entry(ContextRole::User, "latest question"),
         ];
 
-        let first = assemble_conversation_messages(&agent, &[agent.clone()], &entries);
-        let second = assemble_conversation_messages(&agent, &[agent.clone()], &entries);
+        let first = assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries);
+        let second = assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries);
 
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(second.iter()) {
@@ -674,7 +674,11 @@ mod tests {
         tool.tool_call_id = Some("call-1".into());
         tool.recount();
 
-        let messages = assemble_conversation_messages(&agent, &[agent.clone()], &[assistant, tool]);
+        let messages = assemble_conversation_messages(
+            &agent,
+            std::slice::from_ref(&agent),
+            &[assistant, tool],
+        );
         assert_eq!(
             messages[1].tool_calls.as_ref().unwrap()[0].name,
             "read_file"

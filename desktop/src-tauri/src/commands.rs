@@ -3,12 +3,14 @@ use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
+use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, CompactionOutcome, ContextUsageState,
     ConversationContext, ConversationSettingsUpdate,
 };
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -594,6 +596,69 @@ pub async fn clear_session_decisions(state: State<'_, AppState>) -> Result<(), S
     state
         .client
         .clear_session_decisions()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_permission_rules(
+    state: State<'_, AppState>,
+) -> Result<Vec<PermissionRule>, String> {
+    state
+        .client
+        .list_permission_rules()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_permission_rule(
+    state: State<'_, AppState>,
+    tool: String,
+    command: Option<String>,
+    decision: RuleDecision,
+) -> Result<PermissionRule, String> {
+    state
+        .client
+        .create_permission_rule(&tool, command.as_deref(), decision)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_permission_rule_enabled(
+    state: State<'_, AppState>,
+    rule_id: String,
+    enabled: bool,
+) -> Result<PermissionRule, String> {
+    state
+        .client
+        .set_permission_rule_enabled(&rule_id, enabled)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_permission_rule(
+    state: State<'_, AppState>,
+    rule_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .delete_permission_rule(&rule_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_audit_events(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+    source: Option<String>,
+) -> Result<Vec<AuditEvent>, String> {
+    state
+        .client
+        .list_audit_events(limit.unwrap_or(200).min(1_000), source.as_deref())
         .await
         .map_err(|error| error.to_string())
 }
