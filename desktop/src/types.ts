@@ -160,6 +160,8 @@ export interface Task {
   context_tasks: string[];
   status: TaskStatus;
   archived: boolean;
+  plan?: string | null;
+  plan_approved?: boolean;
 }
 
 export type AssignmentStatus =

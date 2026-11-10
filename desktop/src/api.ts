@@ -203,6 +203,10 @@ export function unarchiveTask(taskId: string): Promise<Task> {
   return invoke<Task>("unarchive_task", { taskId });
 }
 
+export function approveTaskPlan(taskId: string): Promise<Task> {
+  return invoke<Task>("approve_task_plan", { taskId });
+}
+
 export function listAssignments(taskId: string): Promise<Assignment[]> {
   return invoke<Assignment[]>("list_assignments", { taskId });
 }

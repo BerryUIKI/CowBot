@@ -2183,6 +2183,39 @@ button {
   white-space: pre-wrap;
 }
 
+.task-plan {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border: 1px solid var(--brass);
+  border-radius: 8px;
+  background: var(--brass-soft);
+}
+
+.task-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-plan-head h3 {
+  margin: 0;
+  color: var(--brass);
+  font-family: var(--serif);
+  font-size: 16px;
+}
+
+.task-plan-body {
+  margin-top: 10px;
+  color: var(--paper-dim);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.task-plan .form-actions {
+  margin-top: 14px;
+}
+
 .task-filter {
   display: flex;
   gap: 4px;

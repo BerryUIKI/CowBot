@@ -28,6 +28,8 @@ interface TaskDetailProps {
   onCancel: () => void;
   running: boolean;
   onRun: () => void;
+  onApprovePlan: () => void;
+  approvingPlan: boolean;
   onToggleArchive: () => void;
   archiveBusy: boolean;
 }
@@ -59,6 +61,8 @@ export default function TaskDetail({
   onCancel,
   running,
   onRun,
+  onApprovePlan,
+  approvingPlan,
   onToggleArchive,
   archiveBusy,
 }: TaskDetailProps) {
@@ -128,6 +132,40 @@ export default function TaskDetail({
         <h3 className="task-prompt-label">Task prompt</h3>
         <p className="task-prompt-text">{task.description}</p>
       </section>
+
+      {task.plan ? (
+        <section className="task-plan" aria-label="Task plan">
+          <div className="task-plan-head">
+            <h3>Plan</h3>
+            {task.plan_approved ? (
+              <span className="settings-badge settings-badge-active">
+                Approved
+              </span>
+            ) : (
+              <span className="status-badge status-pending">
+                Awaiting approval
+              </span>
+            )}
+          </div>
+          <div className="task-plan-body">
+            <RichText content={task.plan} />
+          </div>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={onApprovePlan}
+              disabled={approvingPlan || running}
+            >
+              {approvingPlan || running
+                ? "Starting…"
+                : task.plan_approved
+                  ? "Continue task"
+                  : "Approve plan and continue"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <dl className="task-meta">
         <div>
