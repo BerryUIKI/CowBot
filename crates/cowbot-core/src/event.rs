@@ -1,6 +1,7 @@
 use crate::agent::{AgentId, AgentProfile};
 use crate::approval::Approval;
 use crate::channel::{Channel, ChannelId, ChannelMessage};
+use crate::permission::PermissionRuleMatch;
 use crate::risk::RiskLevel;
 use crate::task::{Task, TaskId};
 use crate::tool::{ToolCall, ToolResult};
@@ -44,6 +45,9 @@ pub enum EventPayload {
         approval: Approval,
         risk: RiskLevel,
         reason: String,
+        /// The workspace rule that required approval, when one matched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<PermissionRuleMatch>,
     },
     /// A pending approval was approved or rejected
     ApprovalDecided { approval: Approval },
