@@ -16,7 +16,7 @@ use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
 use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
-use cowbot_core::worktree::{TaskWorktree, WorktreeStatus};
+use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
@@ -594,6 +594,42 @@ pub async fn list_run_tasks(
     state
         .client
         .list_run_tasks(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_task_worktree(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Option<TaskWorktree>, String> {
+    state
+        .client
+        .task_worktree(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn task_worktree_diff(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<TaskWorktreeDiff, String> {
+    state
+        .client
+        .worktree_diff(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn discard_task_worktree(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<TaskWorktree, String> {
+    state
+        .client
+        .discard_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
 }

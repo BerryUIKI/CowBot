@@ -391,6 +391,27 @@ export interface ProjectBranches {
   branches: string[];
 }
 
+export type WorktreeStatus = "requested" | "ready" | "removed" | "missing";
+
+export interface TaskWorktree {
+  task_id: string;
+  project_id: string;
+  project_path: string;
+  base_branch: string;
+  branch: string;
+  worktree_path: string;
+  status: WorktreeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskWorktreeDiff {
+  status: string;
+  stat: string;
+  patch: string;
+  truncated: boolean;
+}
+
 export interface AppInfo {
   version: string;
   autoCheckUpdates: boolean;

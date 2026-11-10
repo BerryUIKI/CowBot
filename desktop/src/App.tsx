@@ -34,10 +34,12 @@ import {
   createTask,
   decideApproval,
   deleteChannel,
+  discardTaskWorktree,
   ensureAgentChannels,
   getConversationContext,
   getOnboardingState,
   getSession,
+  getTaskWorktree,
   instantiateAgents,
   listAgents,
   listAssignmentEvents,
@@ -84,6 +86,7 @@ import type {
   Project,
   ProjectBranches,
   Task,
+  TaskWorktree,
   TemplateDocument,
   ToolCallDetail,
   ToolDefinition,
@@ -264,6 +267,7 @@ export default function App() {
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
   const [taskRunTasks, setTaskRunTasks] = useState<Task[]>([]);
+  const [taskWorktree, setTaskWorktree] = useState<TaskWorktree | null>(null);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [templates, setTemplates] = useState<TemplateDocument[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
@@ -411,13 +415,15 @@ export default function App() {
       setTaskAssignments([]);
       setTaskRuns([]);
       setTaskRunTasks([]);
+      setTaskWorktree(null);
       return;
     }
 
-    const [assignments, runs, runTasks] = await Promise.all([
+    const [assignments, runs, runTasks, worktree] = await Promise.all([
       listAssignments(taskId),
       listRuns(taskId),
       listRunTasks(taskId),
+      getTaskWorktree(taskId),
     ]);
     const [assignmentsWithEvents, runsWithCalls] = await Promise.all([
       Promise.all(
@@ -436,6 +442,7 @@ export default function App() {
     setTaskAssignments(assignmentsWithEvents);
     setTaskRuns(runsWithCalls);
     setTaskRunTasks(runTasks);
+    setTaskWorktree(worktree);
   }, []);
 
   const refreshApprovals = useCallback(async () => {
@@ -1360,6 +1367,23 @@ export default function App() {
     setError(null);
     try {
       await cancelTask(selectedTaskId, "Cancelled in desktop");
+      await refreshTasks();
+      await refreshTaskDetail(selectedTaskId);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleDiscardWorktree() {
+    if (!selectedTaskId) return;
+
+    setBusy("discard-worktree");
+    setError(null);
+    try {
+      await discardTaskWorktree(selectedTaskId);
+      setNotice("Worktree discarded.");
       await refreshTasks();
       await refreshTaskDetail(selectedTaskId);
     } catch (err) {
@@ -2648,6 +2672,9 @@ export default function App() {
               assignments={taskAssignments}
               runs={taskRuns}
               runTasks={taskRunTasks}
+              worktree={taskWorktree}
+              discardingWorktree={busy === "discard-worktree"}
+              onDiscardWorktree={() => void handleDiscardWorktree()}
               onOpenTask={openTask}
               cancelling={busy === "cancel-task"}
               onCancel={handleCancelTask}

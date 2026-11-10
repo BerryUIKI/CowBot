@@ -2403,6 +2403,119 @@ button {
   max-width: 160px;
 }
 
+.worktree-card {
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: rgba(46, 44, 39, 0.35);
+}
+
+.worktree-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.worktree-card-head h3 {
+  margin: 0;
+}
+
+.worktree-status-ready {
+  color: var(--sage);
+  border-color: rgba(154, 168, 143, 0.4);
+}
+
+.worktree-status-requested {
+  color: var(--brass);
+  border-color: rgba(201, 166, 107, 0.4);
+}
+
+.worktree-status-missing {
+  color: var(--danger);
+  border-color: rgba(208, 144, 127, 0.4);
+}
+
+.worktree-status-removed {
+  color: var(--paper-faint);
+}
+
+.worktree-meta {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.worktree-meta > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.worktree-meta dt {
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.worktree-meta dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--paper-dim);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.worktree-meta code {
+  color: var(--brass);
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.worktree-copy {
+  font-size: 11px;
+}
+
+.worktree-note {
+  margin: 12px 0 0;
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.worktree-note-error {
+  color: var(--danger);
+}
+
+.worktree-diff h4 {
+  margin: 16px 0 8px;
+  color: var(--paper);
+  font-family: var(--serif);
+  font-size: 15px;
+}
+
+.worktree-diff h4:first-child {
+  margin-top: 0;
+}
+
+.worktree-patch {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--ink-panel);
+  color: var(--paper-dim);
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .assignment,
 .run {
   margin-bottom: 10px;
