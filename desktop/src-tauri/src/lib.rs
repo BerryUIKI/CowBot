@@ -216,6 +216,7 @@ pub fn run() {
             commands::cancel_task,
             commands::archive_task,
             commands::unarchive_task,
+            commands::approve_task_plan,
             commands::list_assignments,
             commands::list_assignment_events,
             commands::list_runs,
