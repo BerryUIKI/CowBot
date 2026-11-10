@@ -251,7 +251,10 @@ compacting the context never deletes messages.
 - **Plan** — run only read-only tools and deny everything else. The agent is
   asked to answer with a plan; it is stored with the task, and **Approve plan
   and continue** switches the next run to Manual.
-- **Bypass permissions** — run every tool call except critical actions.
+- **Bypass permissions** — run every tool call. Critical-risk calls follow
+  **Settings → Approvals → Critical calls under Bypass**: Allow (default), Ask
+  with a red approval card, or Block. Selecting Bypass warns every time, and
+  the mode control stays red while it is active.
 
 Approvals appear in **Approvals**. Workspace rules in Settings → Approvals are
 evaluated before the model evaluator: Deny wins over Ask, and Ask over Allow.

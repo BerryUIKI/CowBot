@@ -27,6 +27,7 @@ import type {
   TemplateDocument,
   ToolCallRecord,
   ToolDefinition,
+  WorkspacePolicy,
   WorkspaceSummary,
 } from "./types";
 
@@ -271,6 +272,16 @@ export function setPermissionRuleEnabled(
 
 export function deletePermissionRule(ruleId: string): Promise<void> {
   return invoke<void>("delete_permission_rule", { ruleId });
+}
+
+export function getWorkspacePolicy(): Promise<WorkspacePolicy> {
+  return invoke<WorkspacePolicy>("get_workspace_policy");
+}
+
+export function setBypassCritical(
+  bypassCritical: WorkspacePolicy["bypass_critical"],
+): Promise<WorkspacePolicy> {
+  return invoke<WorkspacePolicy>("set_bypass_critical", { bypassCritical });
 }
 
 export function getAuditEvents(

@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::identity::WorkspaceId;
 use crate::task::TaskId;
 
 /// Unique identifier for an approval request.
@@ -32,6 +33,51 @@ pub enum ApprovalStatus {
     Approved,
     Rejected,
     Expired,
+}
+
+/// What Bypass permissions does with a Critical-risk tool call.
+///
+/// Every other approval mode blocks Critical calls regardless of this
+/// setting. `Allow` is the workspace default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BypassCritical {
+    #[default]
+    Allow,
+    Ask,
+    Block,
+}
+
+impl BypassCritical {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BypassCritical::Allow => "allow",
+            BypassCritical::Ask => "ask",
+            BypassCritical::Block => "block",
+        }
+    }
+}
+
+impl std::fmt::Display for BypassCritical {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Per-workspace approval settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePolicy {
+    pub workspace_id: WorkspaceId,
+    pub bypass_critical: BypassCritical,
+}
+
+impl WorkspacePolicy {
+    pub fn new(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            bypass_critical: BypassCritical::default(),
+        }
+    }
 }
 
 /// Effective approval level for an assignment.

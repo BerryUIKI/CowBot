@@ -108,6 +108,13 @@ export type ApprovalLevel =
   | "plan_only"
   | "trusted";
 
+export type BypassCritical = "allow" | "ask" | "block";
+
+export interface WorkspacePolicy {
+  workspace_id: string;
+  bypass_critical: BypassCritical;
+}
+
 export interface ApprovalMode {
   value: ApprovalLevel;
   label: string;
@@ -139,7 +146,8 @@ export const approvalModes: ApprovalMode[] = [
   {
     value: "trusted",
     label: "Bypass permissions",
-    description: "Every tool call runs; critical-risk calls remain blocked.",
+    description:
+      "Every tool call runs; critical-risk calls follow the Bypass setting in Settings → Approvals.",
   },
 ];
 

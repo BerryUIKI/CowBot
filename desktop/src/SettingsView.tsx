@@ -15,9 +15,11 @@ import {
   exportWorkspace,
   getAuditEvents,
   getSessionDecisions,
+  getWorkspacePolicy,
   importWorkspace,
   listPermissionRules,
   listWorkspaces,
+  setBypassCritical as saveBypassCritical,
   setPermissionRuleEnabled,
   switchWorkspace,
   updateUserProfile,
@@ -25,6 +27,7 @@ import {
 import type {
   AgentProfile,
   AuditEvent,
+  BypassCritical,
   ClientSession,
   PermissionRule,
   RuleDecision,
@@ -133,6 +136,9 @@ export default function SettingsView({
   const [ruleDecision, setRuleDecision] = useState<RuleDecision>("ask");
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleError, setRuleError] = useState<string | null>(null);
+  const [bypassCritical, setBypassCritical] = useState<BypassCritical>("allow");
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditSource, setAuditSource] = useState("all");
   const [auditBusy, setAuditBusy] = useState(false);
@@ -187,6 +193,22 @@ export default function SettingsView({
   }, [section]);
 
   useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setPolicyError(null);
+    getWorkspacePolicy()
+      .then((policy) => {
+        if (!cancelled) setBypassCritical(policy.bypass_critical);
+      })
+      .catch((error) => {
+        if (!cancelled) setPolicyError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  useEffect(() => {
     if (section !== "audit") return;
     let cancelled = false;
     setAuditBusy(true);
@@ -216,6 +238,19 @@ export default function SettingsView({
       setSessionError(errorMessage(error));
     } finally {
       setSessionBusy(false);
+    }
+  }
+
+  async function handleBypassCritical(value: BypassCritical) {
+    setPolicyBusy(true);
+    setPolicyError(null);
+    try {
+      const policy = await saveBypassCritical(value);
+      setBypassCritical(policy.bypass_critical);
+    } catch (error) {
+      setPolicyError(errorMessage(error));
+    } finally {
+      setPolicyBusy(false);
     }
   }
 
@@ -549,6 +584,40 @@ export default function SettingsView({
                   {sessionBusy ? "Resetting…" : "Reset session decisions"}
                 </button>
               </div>
+
+              <div className="settings-section-head settings-subsection">
+                <h3>Bypass permissions</h3>
+                <p className="settings-hint">
+                  Bypass permissions runs every tool call. Critical-risk calls
+                  under Bypass follow this setting; every other mode always
+                  blocks Critical calls. Selecting Bypass shows a warning each
+                  time and keeps a red marker while it is active.
+                </p>
+              </div>
+
+              {policyError ? (
+                <p className="settings-status is-error" role="alert">
+                  {policyError}
+                </p>
+              ) : null}
+
+              <label className="field settings-audit-filter">
+                <span>Critical calls under Bypass</span>
+                <select
+                  value={bypassCritical}
+                  onChange={(event) =>
+                    void handleBypassCritical(
+                      event.target.value as BypassCritical,
+                    )
+                  }
+                  disabled={policyBusy}
+                  aria-label="Critical calls under Bypass"
+                >
+                  <option value="allow">Allow (default)</option>
+                  <option value="ask">Ask with a red approval card</option>
+                  <option value="block">Block</option>
+                </select>
+              </label>
 
               <div className="settings-section-head settings-subsection">
                 <h3>Workspace rules</h3>

@@ -5,7 +5,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentId;
-use cowbot_core::approval::{Approval, ApprovalLevel, ApprovalStatus};
+use cowbot_core::approval::{
+    Approval, ApprovalLevel, ApprovalStatus, BypassCritical, WorkspacePolicy,
+};
 use cowbot_core::assignment::{
     Assignment, AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
 };
@@ -73,15 +75,23 @@ fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
 #[test]
 fn policy_decisions_are_distinct_per_mode() {
     assert_eq!(
-        decision_for(ApprovalLevel::Ask, RiskLevel::ReadOnly),
+        decision_for(
+            ApprovalLevel::Ask,
+            RiskLevel::ReadOnly,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::AutoApprove
     );
     assert_eq!(
-        decision_for(ApprovalLevel::Ask, RiskLevel::Low),
+        decision_for(ApprovalLevel::Ask, RiskLevel::Low, BypassCritical::Allow),
         ApprovalDecision::RequireApproval
     );
     assert_eq!(
-        decision_for(ApprovalLevel::AcceptEdits, RiskLevel::Low),
+        decision_for(
+            ApprovalLevel::AcceptEdits,
+            RiskLevel::Low,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::RequireApproval
     );
     assert_eq!(
@@ -89,7 +99,8 @@ fn policy_decisions_are_distinct_per_mode() {
             ApprovalLevel::AcceptEdits,
             RiskLevel::Medium,
             "write_file",
-            "write_file.workspace"
+            "write_file.workspace",
+            BypassCritical::Allow
         ),
         ApprovalDecision::AutoApprove
     );
@@ -98,7 +109,8 @@ fn policy_decisions_are_distinct_per_mode() {
             ApprovalLevel::AcceptEdits,
             RiskLevel::High,
             "write_file",
-            "write_file.outside_workspace"
+            "write_file.outside_workspace",
+            BypassCritical::Allow
         ),
         ApprovalDecision::RequireApproval
     );
@@ -107,12 +119,17 @@ fn policy_decisions_are_distinct_per_mode() {
             ApprovalLevel::AcceptEdits,
             RiskLevel::Low,
             "execute_code",
-            "execute_code.low_risk"
+            "execute_code.low_risk",
+            BypassCritical::Allow
         ),
         ApprovalDecision::RequireApproval
     );
     assert_eq!(
-        decision_for(ApprovalLevel::AcceptEdits, RiskLevel::Critical),
+        decision_for(
+            ApprovalLevel::AcceptEdits,
+            RiskLevel::Critical,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::Deny
     );
     assert_eq!(
@@ -120,37 +137,83 @@ fn policy_decisions_are_distinct_per_mode() {
             ApprovalLevel::Trusted,
             RiskLevel::High,
             "delete_channel",
-            "workspace.delete_channel"
+            "workspace.delete_channel",
+            BypassCritical::Allow
         ),
-        ApprovalDecision::RequireApproval
+        ApprovalDecision::AutoApprove
     );
     assert_eq!(
         decision_for_call(
             ApprovalLevel::PlanOnly,
             RiskLevel::High,
             "delete_channel",
-            "workspace.delete_channel"
+            "workspace.delete_channel",
+            BypassCritical::Allow
         ),
         ApprovalDecision::Deny
     );
     assert_eq!(
-        decision_for(ApprovalLevel::SafeAuto, RiskLevel::Low),
+        decision_for(
+            ApprovalLevel::SafeAuto,
+            RiskLevel::Low,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::AutoApprove
     );
     assert_eq!(
-        decision_for(ApprovalLevel::SafeAuto, RiskLevel::Medium),
+        decision_for(
+            ApprovalLevel::SafeAuto,
+            RiskLevel::Medium,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::RequireApproval
     );
     assert_eq!(
-        decision_for(ApprovalLevel::PlanOnly, RiskLevel::Low),
+        decision_for(
+            ApprovalLevel::PlanOnly,
+            RiskLevel::Low,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::Deny
     );
     assert_eq!(
-        decision_for(ApprovalLevel::Trusted, RiskLevel::High),
+        decision_for(
+            ApprovalLevel::Trusted,
+            RiskLevel::High,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::AutoApprove
     );
     assert_eq!(
-        decision_for(ApprovalLevel::Trusted, RiskLevel::Critical),
+        decision_for(
+            ApprovalLevel::Trusted,
+            RiskLevel::Critical,
+            BypassCritical::Allow
+        ),
+        ApprovalDecision::AutoApprove
+    );
+    assert_eq!(
+        decision_for(
+            ApprovalLevel::Trusted,
+            RiskLevel::Critical,
+            BypassCritical::Ask
+        ),
+        ApprovalDecision::RequireApproval
+    );
+    assert_eq!(
+        decision_for(
+            ApprovalLevel::Trusted,
+            RiskLevel::Critical,
+            BypassCritical::Block
+        ),
+        ApprovalDecision::Deny
+    );
+    assert_eq!(
+        decision_for(
+            ApprovalLevel::SafeAuto,
+            RiskLevel::Critical,
+            BypassCritical::Allow
+        ),
         ApprovalDecision::Deny
     );
 }
@@ -438,7 +501,7 @@ async fn plan_only_denies_writes_and_records_audit() {
 }
 
 #[tokio::test]
-async fn trusted_denies_critical_operations() {
+async fn trusted_allows_critical_by_default() {
     let (_store, service, assignment, agent, _workspace_id) =
         setup(ApprovalLevel::Trusted, Duration::from_secs(1)).await;
 
@@ -450,7 +513,69 @@ async fn trusted_denies_critical_operations() {
         )
         .await
         .unwrap();
+    assert_eq!(
+        authorization,
+        ToolAuthorization::Approved { approved_by: None }
+    );
+}
+
+#[tokio::test]
+async fn trusted_blocks_critical_when_the_policy_blocks() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::Trusted, Duration::from_secs(1)).await;
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace_id.clone(),
+            bypass_critical: BypassCritical::Block,
+        })
+        .await
+        .unwrap();
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call("execute_code", json!({ "command": "rm -rf /" })),
+        )
+        .await
+        .unwrap();
     assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    let events = store.list_audit_events(&workspace_id, 20).await.unwrap();
+    let event = events
+        .iter()
+        .find(|event| event.action == "tool.denied")
+        .expect("denial audit");
+    assert_eq!(event.source.as_deref(), Some("policy"));
+}
+
+#[tokio::test]
+async fn trusted_asks_for_critical_when_the_policy_asks() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::Trusted, Duration::from_millis(20)).await;
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace_id.clone(),
+            bypass_critical: BypassCritical::Ask,
+        })
+        .await
+        .unwrap();
+
+    let authorization = service
+        .authorize(
+            &assignment.id,
+            &agent,
+            &call("execute_code", json!({ "command": "rm -rf /" })),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
+    let events = store.list_audit_events(&workspace_id, 30).await.unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.action == "tool.approval_requested"));
+    assert!(events
+        .iter()
+        .any(|event| event.action == "tool.approval_expired"));
 }
 
 #[tokio::test]
