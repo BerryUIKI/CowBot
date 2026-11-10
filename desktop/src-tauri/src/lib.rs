@@ -247,6 +247,10 @@ pub fn run() {
             commands::list_workspaces,
             commands::switch_workspace,
             commands::create_workspace,
+            commands::list_projects,
+            commands::add_project,
+            commands::remove_project,
+            commands::list_project_branches,
             commands::export_workspace,
             commands::import_workspace,
         ])

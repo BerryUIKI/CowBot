@@ -377,6 +377,19 @@ export interface WorkspaceSummary {
   available: boolean;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  current_branch: string | null;
+  available: boolean;
+}
+
+export interface ProjectBranches {
+  current: string | null;
+  branches: string[];
+}
+
 export interface AppInfo {
   version: string;
   autoCheckUpdates: boolean;

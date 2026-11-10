@@ -30,6 +30,7 @@ import type {
   BypassCritical,
   ClientSession,
   PermissionRule,
+  Project,
   RuleDecision,
   SessionDecisionEntry,
   TemplateDocument,
@@ -46,10 +47,13 @@ interface SettingsViewProps {
   updater: Updater;
   tasksRunning: boolean;
   section: SettingsSection;
+  projects: Project[];
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
   onSessionChange: (session: ClientSession) => void;
+  onAddProject: (path: string) => Promise<void>;
+  onRemoveProject: (project: Project) => Promise<void>;
 }
 
 export type SettingsSection =
@@ -57,6 +61,7 @@ export type SettingsSection =
   | "team"
   | "approvals"
   | "audit"
+  | "projects"
   | "workspace"
   | "about";
 
@@ -65,6 +70,7 @@ export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "team", label: "Team" },
   { id: "approvals", label: "Approvals" },
   { id: "audit", label: "Audit" },
+  { id: "projects", label: "Projects" },
   { id: "workspace", label: "Workspace" },
   { id: "about", label: "About" },
 ];
@@ -109,10 +115,13 @@ export default function SettingsView({
   updater,
   tasksRunning,
   section,
+  projects,
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
   onSessionChange,
+  onAddProject,
+  onRemoveProject,
 }: SettingsViewProps) {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
@@ -388,6 +397,27 @@ export default function SettingsView({
     } catch (error) {
       setWorkspaceError(errorMessage(error));
       setWorkspaceBusy(null);
+    }
+  }
+
+  async function handleAddProject() {
+    const selection = await open({
+      directory: true,
+      multiple: false,
+      title: "Register a git repository",
+    });
+    if (typeof selection === "string" && selection.trim()) {
+      await onAddProject(selection);
+    }
+  }
+
+  function handleRemoveProject(project: Project) {
+    if (
+      window.confirm(
+        `Remove '${project.name}' from CowBot? The folder and its files are not touched.`,
+      )
+    ) {
+      void onRemoveProject(project);
     }
   }
 
@@ -787,6 +817,75 @@ export default function SettingsView({
                         {event.actor} · {formatDateTime(event.created_at)}
                       </p>
                       <p className="audit-target">{event.target}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
+          {section === "projects" ? (
+            <section className="settings-section" aria-labelledby="settings-projects">
+              <div className="settings-section-head">
+                <h3 id="settings-projects">Projects</h3>
+                <p className="settings-hint">
+                  Local git repositories that tasks can run in. CowBot creates an
+                  isolated worktree per task; registered paths stay on this
+                  machine and are not included in workspace packages.
+                </p>
+              </div>
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void handleAddProject()}
+                  disabled={busy === "add-project"}
+                >
+                  {busy === "add-project" ? "Adding…" : "Add folder"}
+                </button>
+              </div>
+
+              {projects.length === 0 ? (
+                <p className="settings-empty">
+                  No projects yet. Add a git repository to run tasks in an
+                  isolated worktree.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {projects.map((project) => (
+                    <li key={project.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">{project.name}</span>
+                        {project.available && project.current_branch ? (
+                          <span className="settings-badge">
+                            {project.current_branch}
+                          </span>
+                        ) : null}
+                        {!project.available ? (
+                          <span className="settings-badge">Missing</span>
+                        ) : null}
+                      </div>
+                      <p className="settings-card-body settings-path">
+                        {project.path}
+                      </p>
+                      <div className="settings-card-foot">
+                        <span className="settings-meta-inline">
+                          {project.available
+                            ? "Available"
+                            : "Folder not found on this machine"}
+                        </span>
+                        <div className="settings-card-actions">
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => handleRemoveProject(project)}
+                            disabled={busy === "remove-project"}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
                     </li>
                   ))}
                 </ul>

@@ -19,6 +19,8 @@ import type {
   ModelSettings,
   OnboardingState,
   PermissionRule,
+  Project,
+  ProjectBranches,
   ProviderProtocol,
   RuleDecision,
   Run,
@@ -392,6 +394,22 @@ export function importWorkspace(path: string): Promise<void> {
 
 export function createWorkspace(name: string): Promise<void> {
   return invoke<void>("create_workspace", { name });
+}
+
+export function listProjects(): Promise<Project[]> {
+  return invoke<Project[]>("list_projects");
+}
+
+export function addProject(path: string): Promise<Project[]> {
+  return invoke<Project[]>("add_project", { path });
+}
+
+export function removeProject(projectId: string): Promise<Project[]> {
+  return invoke<Project[]>("remove_project", { projectId });
+}
+
+export function listProjectBranches(projectId: string): Promise<ProjectBranches> {
+  return invoke<ProjectBranches>("list_project_branches", { projectId });
 }
 
 export function getAppInfo(): Promise<AppInfo> {

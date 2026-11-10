@@ -21,6 +21,7 @@ import TaskDetail from "./TaskDetail";
 import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
+  addProject,
   archiveTask,
   approveTaskPlan,
   cancelTask,
@@ -44,6 +45,7 @@ import {
   listAvailableTools,
   listChannels,
   listMessages,
+  listProjects,
   listRuns,
   listTasks,
   listTemplates,
@@ -54,6 +56,7 @@ import {
   onRunFinished,
   pendingApprovals,
   postMessage,
+  removeProject,
   renameChannel,
   runTask,
   setActiveModel,
@@ -76,6 +79,7 @@ import type {
   ConversationContext,
   ModelSettings,
   OnboardingState,
+  Project,
   Task,
   TemplateDocument,
   ToolCallDetail,
@@ -278,6 +282,7 @@ export default function App() {
   const [toolCallDetails, setToolCallDetails] = useState<Record<string, ToolCallDetail>>({});
   const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
@@ -419,6 +424,7 @@ export default function App() {
           nextAgents,
           nextTemplates,
           nextOnboarding,
+          nextProjects,
         ] = await Promise.all([
           getSession(),
           ensureAgentChannels(),
@@ -427,6 +433,7 @@ export default function App() {
           listAgents(),
           listTemplates(),
           getOnboardingState(),
+          listProjects(),
         ]);
         if (cancelled) return;
         setSession(nextSession);
@@ -437,6 +444,7 @@ export default function App() {
         setAgents(nextAgents);
         setTemplates(nextTemplates);
         setOnboarding(nextOnboarding);
+        setProjects(nextProjects);
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
       } finally {
@@ -1222,6 +1230,30 @@ export default function App() {
     setError(null);
     try {
       await instantiateTemplate(templateId);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleAddProject(path: string) {
+    setBusy("add-project");
+    setError(null);
+    try {
+      setProjects(await addProject(path));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemoveProject(project: Project) {
+    setBusy("remove-project");
+    setError(null);
+    try {
+      setProjects(await removeProject(project.id));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -2490,10 +2522,13 @@ export default function App() {
             updater={updater}
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
             section={settingsSection}
+            projects={projects}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
             onEditAgent={handleEditAgent}
             onSessionChange={setSession}
+            onAddProject={handleAddProject}
+            onRemoveProject={handleRemoveProject}
           />
         )}
       </main>
