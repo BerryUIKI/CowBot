@@ -10,6 +10,7 @@ import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
+import BackgroundTasksPanel from "./BackgroundTasksPanel";
 import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -323,6 +324,13 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [overview, setOverview] = useState<TaskOverviewEntry[]>([]);
   const [overviewNow, setOverviewNow] = useState(() => Date.now());
+  const [backgroundOpen, setBackgroundOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("cowbot.background-panel") === "open";
+    } catch {
+      return false;
+    }
+  });
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
@@ -493,6 +501,17 @@ export default function App() {
     );
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "cowbot.background-panel",
+        backgroundOpen ? "open" : "closed",
+      );
+    } catch {
+      // Storage can be unavailable in restricted webviews; the panel still works.
+    }
+  }, [backgroundOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -874,6 +893,11 @@ export default function App() {
       .map((channel) => ({ channel }))
       .sort((left, right) => byRecentActivity(left, right, previews));
   }, [channels, previews]);
+
+  const activeOverviewCount = useMemo(
+    () => overview.filter((entry) => isActiveOverviewStatus(entry.status)).length,
+    [overview],
+  );
 
   const activeOverviewByChannel = useMemo(() => {
     const byChannel = new Map<string, TaskOverviewEntry[]>();
@@ -1655,7 +1679,7 @@ export default function App() {
     : [];
 
   return (
-    <div className="app">
+    <div className={`app${backgroundOpen ? " with-background-panel" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
         <div className="sidebar-head">
           <img className="wordmark" src={wordmark} alt="CowBot" />
@@ -2151,6 +2175,17 @@ export default function App() {
             >
               Approvals
               {approvals.length > 0 ? <span className="nav-count">{approvals.length}</span> : null}
+            </button>
+            <button
+              type="button"
+              className="footer-nav-item"
+              aria-pressed={backgroundOpen}
+              onClick={() => setBackgroundOpen((open) => !open)}
+            >
+              Background
+              {activeOverviewCount > 0 ? (
+                <span className="nav-count">{activeOverviewCount}</span>
+              ) : null}
             </button>
             <button
               type="button"
@@ -2806,6 +2841,17 @@ export default function App() {
           />
         )}
       </main>
+
+      {backgroundOpen ? (
+        <BackgroundTasksPanel
+          overview={overview}
+          agents={agents}
+          now={overviewNow}
+          inert={onboardingOpen}
+          onClose={() => setBackgroundOpen(false)}
+          onOpenTask={openTask}
+        />
+      ) : null}
 
       {onboardingOpen ? (
         <Onboarding
