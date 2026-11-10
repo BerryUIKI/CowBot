@@ -34,7 +34,9 @@ export default function ApprovalCard({
 }: ApprovalCardProps) {
   const destructive = call?.name === "delete_channel";
   const channel = channelArgument(call);
-  const canRemember = risk?.risk !== "critical";
+  // Without live event metadata we cannot prove the call is non-critical, so
+  // a missing risk is treated like Critical for session approval.
+  const canRemember = risk !== undefined && risk.risk !== "critical";
 
   return (
     <div

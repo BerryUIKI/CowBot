@@ -140,7 +140,7 @@ fn policy_decisions_are_distinct_per_mode() {
             "workspace.delete_channel",
             BypassCritical::Allow
         ),
-        ApprovalDecision::AutoApprove
+        ApprovalDecision::RequireApproval
     );
     assert_eq!(
         decision_for_call(
@@ -995,4 +995,33 @@ async fn disabled_imported_rules_do_not_decide() {
 
     assert!(matches!(authorization, ToolAuthorization::Denied { .. }));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn session_rejection_does_not_mask_a_policy_denial() {
+    let (store, service, assignment, agent, workspace_id) =
+        setup(ApprovalLevel::PlanOnly, Duration::from_secs(1)).await;
+    let decisions = SessionDecisions::new();
+    let write = call("write_file", json!({"path": "src/main.rs", "content": "x"}));
+    decisions.remember(&write, ApprovalStatus::Rejected);
+    let service = service.with_session_decisions(Some(decisions));
+
+    let authorization = service
+        .authorize(&assignment.id, &agent, &write)
+        .await
+        .unwrap();
+    let ToolAuthorization::Denied { reason } = authorization else {
+        panic!("expected a denial");
+    };
+    assert!(reason.contains("approval policy denied"));
+
+    let events = store.list_audit_events(&workspace_id, 30).await.unwrap();
+    let event = events
+        .iter()
+        .find(|event| event.action == "tool.denied")
+        .expect("policy denial audit");
+    assert_eq!(event.source.as_deref(), Some("policy"));
+    assert!(!events
+        .iter()
+        .any(|event| event.action == "tool.session_denied"));
 }
