@@ -115,6 +115,14 @@ fn expected(
     risk: RiskLevel,
     bypass: BypassCritical,
 ) -> ApprovalDecision {
+    // Destructive channel deletion always needs a human, in every mode except
+    // Plan (which denies it). See issue #84.
+    if call.name == "delete_channel" {
+        return match level {
+            ApprovalLevel::PlanOnly => ApprovalDecision::Deny,
+            _ => ApprovalDecision::RequireApproval,
+        };
+    }
     match level {
         ApprovalLevel::Ask | ApprovalLevel::AcceptEdits => {
             let accept_edit = level == ApprovalLevel::AcceptEdits

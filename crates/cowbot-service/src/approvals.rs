@@ -71,8 +71,9 @@ pub fn decision_for(
 /// Apply the approval level with the tool call in hand.
 ///
 /// `AcceptEdits` auto-approves only `write_file` calls whose path is inside the
-/// workspace; all other calls follow the Manual policy. `delete_channel` stays
-/// behind an approval in every mode except Plan and Bypass.
+/// workspace; all other calls follow the Manual policy. `delete_channel` is a
+/// destructive workspace action and always requires a human decision, even
+/// under Bypass permissions (#84); Plan mode denies it.
 pub fn decision_for_call(
     level: ApprovalLevel,
     risk: RiskLevel,
@@ -83,7 +84,6 @@ pub fn decision_for_call(
     if tool_name == "delete_channel" {
         return match level {
             ApprovalLevel::PlanOnly => ApprovalDecision::Deny,
-            ApprovalLevel::Trusted => ApprovalDecision::AutoApprove,
             _ => ApprovalDecision::RequireApproval,
         };
     }
@@ -265,7 +265,9 @@ impl ApprovalService {
                 Ok(ToolAuthorization::Approved { approved_by: None })
             }
             ApprovalDecision::Deny => {
-                if session_decision == Some(ApprovalStatus::Rejected) {
+                if source == AuditSource::Session
+                    && session_decision == Some(ApprovalStatus::Rejected)
+                {
                     self.record_session_audit(&agent_id.0, "tool.session_denied", call)
                         .await?;
                     return Ok(ToolAuthorization::Denied {
