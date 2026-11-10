@@ -146,6 +146,25 @@ Delivered:
 
 Each workstream can ship independently; prioritization will be decided with users after Phase 2.
 
+### 6.2 Deferred Product Directions (Not Started)
+
+**Product structure and vertical kits (planned, not started).** Work and Code are project profiles rather than global modes; domain presets use starter kits, capability packs, and security policies. Finance is the first vertical, targeting small private funds and independent analysts; medical research is a later candidate. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the decision record and scope.
+
+**Project model (planned for internal M6; not started).** Projects become the unit of work inside a workspace, with channels and tasks optionally scoped to one; Home is the unscoped view. The model is settled at the decision level; implementation is not scheduled. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the locked decisions and work breakdown.
+
+Locked decisions:
+
+- A workspace remains the data, tenant, and scheduling boundary; projects are context boundaries, not permission boundaries.
+- Home is `project_id = NULL` for channels and tasks. No implicit "General" project is created, and existing rows are not backfilled.
+- Agents stay workspace-wide with one direct conversation each; `project_agents` records which agents a project uses, and projects own group channels only.
+- Channel names are unique per project; Home is a separate namespace.
+- Archiving makes a project read-only without cancelling running work; hard deletion is limited to projects with no tasks or messages.
+- Mentions and task assignment reject agents outside the project team; removing a member keeps history and blocks new assignments.
+- Code projects bind one local directory through a machine-local record excluded from `.cowpkg` export.
+- Workspace policy sets the enforced security floor; project settings may only tighten it.
+
+**Branded editions (deferred, not started).** Future distribution may build separate installers from the same codebase — for example CowBot Finance or CowBot Medical — each with its own application identity, data directory, update channel, compliance defaults, and support terms. This is deferred until a paying vertical customer requires a distinct procurement identity, update channel, or compliance package. Switching editions inside one installation is not planned; domain adaptation stays at runtime through project-level presets, capability packs, and security policies.
+
 ---
 
 ## 7. Cross-Cutting Workstreams

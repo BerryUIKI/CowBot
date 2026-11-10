@@ -14,6 +14,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 | Product contributors | [PRD](PRD.md) and [roadmap](ROADMAP.md) |
 | Architecture contributors | [Target architecture](ARCHITECTURE.md) and [decision records](ADR/README.md) |
 | Planned context management | [M1 usage accounting plan](plans/M1-usage-accounting.md) and [ADR-0029](ADR/0029-token-usage-accounting.md) |
+| Planned projects and product structure | [M6 project plan](plans/M6-projects-and-product-structure.md) |
 
 ## Reading design documents
 
