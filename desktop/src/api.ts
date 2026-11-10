@@ -26,6 +26,8 @@ import type {
   Run,
   SessionDecisionEntry,
   Task,
+  TaskWorktree,
+  TaskWorktreeDiff,
   TemplateDocument,
   ToolCallRecord,
   ToolDefinition,
@@ -172,6 +174,18 @@ export function listTasks(): Promise<Task[]> {
 
 export function listRunTasks(taskId: string): Promise<Task[]> {
   return invoke<Task[]>("list_run_tasks", { taskId });
+}
+
+export function getTaskWorktree(taskId: string): Promise<TaskWorktree | null> {
+  return invoke<TaskWorktree | null>("get_task_worktree", { taskId });
+}
+
+export function taskWorktreeDiff(taskId: string): Promise<TaskWorktreeDiff> {
+  return invoke<TaskWorktreeDiff>("task_worktree_diff", { taskId });
+}
+
+export function discardTaskWorktree(taskId: string): Promise<TaskWorktree> {
+  return invoke<TaskWorktree>("discard_task_worktree", { taskId });
 }
 
 export function runTask(taskId: string, approvalLevel: ApprovalLevel): Promise<void> {
