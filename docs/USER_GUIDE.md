@@ -42,7 +42,7 @@ The three-step setup guide covers:
 3. **Team** — add a starter team from a built-in template.
 
 You can skip setup at any point. Everything is available later in **Settings**
-(the gear in the sidebar footer).
+(the gear at the right of your name in the sidebar).
 
 ## Connect a model
 
@@ -124,6 +124,22 @@ app data directory:
 The default database is `cowbot.db`; imported or created workspaces live under
 `workspaces/`. Deleting a database file removes that workspace from the switcher
 on the next start.
+
+## Navigation
+
+Chat is the main surface. The left sidebar lists conversations, agent contacts,
+channels, and tasks. The header row switches back to Chat and starts a new
+channel; the local user row at the bottom holds Settings.
+
+Select a task to open its **Task** tab in the right inspector; the conversation
+stays visible. The chat header has an approval button and a background button,
+each with a count, and they open the **Approvals** and **Background** tabs of the
+same inspector. Task detail, approvals, and running work share one right-side
+panel instead of replacing Chat.
+
+The inspector remembers its last tab and closes with **×**. On windows narrower
+than about 1080 px the sidebar hides while the inspector is open so the chat and
+panel stay readable side by side; below 760 px the inspector overlays the chat.
 
 ## Projects and worktrees
 
@@ -240,7 +256,8 @@ from templates; a standalone agent editor is not part of this release.
   that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
   optional channel, an approval policy, and optionally a project worktree.
-  Select the task and choose **Run** to execute the Planner → Coder → Reviewer
+  Tasks are listed in the sidebar; select one to open its **Task** tab in the
+  right inspector and choose **Run** to execute the Planner → Coder → Reviewer
   crew. The submitted task becomes the run's owning task: its detail shows the
   run tasks, assignments, assignment events, runs, tool calls, and the worktree
   when one exists.
@@ -258,16 +275,16 @@ Running work is visible without opening Tasks.
   channel's active runs: status dot, title, latest activity (`Reading …`,
   `Running: …`, or the tool name), a worktree branch chip, and elapsed time.
   Select a card to open the owning task.
-- **Background panel** — the **Background** toggle in the sidebar footer shows
-  the active run count and opens a right-side panel. Each run shows its status,
-  elapsed time, an `x/y` progress bar, expandable assignment rows with the
-  responsible agent and latest detail, and an **Up next** line for queued
-  steps. **Finished** is collapsed by default and lists the last 20 runs with an
-  outcome snippet and duration; select one to open its task. The panel remembers
-  whether it was open.
-- Cards update from assignment, tool-call, task, and worktree events. Below a
-  window width of about 1180 px the panel opens as an overlay so the main pane
-  keeps its width.
+- **Background panel** — the **Background** button in the chat header shows the
+  active run count and opens the **Background** tab in the right inspector. Each
+  run shows its status, elapsed time, an `x/y` progress bar, expandable
+  assignment rows with the responsible agent and latest detail, and an **Up
+  next** line for queued steps. **Finished** is collapsed by default and lists
+  the last 20 runs with an outcome snippet and duration; select one to open its
+  task. The inspector remembers its last tab.
+- Cards update from assignment, tool-call, task, and worktree events. The
+  inspector shares its right-side panel with task detail and approvals; at
+  narrow window widths the sidebar hides while it is open.
 
 > Answers use the active model provider. With no provider configured the app
 > falls back to the offline mock model, which only echoes the prompt; with a
@@ -324,12 +341,14 @@ compacting the context never deletes messages.
   even under Bypass. Selecting Bypass warns every time, and the mode control
   stays red while it is active.
 
-Approvals appear in **Approvals**. Workspace rules in Settings → Approvals are
-evaluated before the model evaluator: Deny wins over Ask, and Ask over Allow.
-Each decision records its source in the audit log, and Settings → Audit filters
-by rule, model, session, human, policy, or system. Approval is a guardrail, not
-OS isolation: the subprocess sandbox runs commands with your user permissions,
-so treat model-generated commands as untrusted.
+Approvals appear in the **Approvals** tab of the right inspector, opened by the
+approval button in the chat header; pending inline approval cards remain in the
+conversation. Workspace rules in Settings → Approvals are evaluated before the
+model evaluator: Deny wins over Ask, and Ask over Allow. Each decision records
+its source in the audit log, and Settings → Audit filters by rule, model,
+session, human, policy, or system. Approval is a guardrail, not OS isolation:
+the subprocess sandbox runs commands with your user permissions, so treat
+model-generated commands as untrusted.
 
 ## Data and backups
 
