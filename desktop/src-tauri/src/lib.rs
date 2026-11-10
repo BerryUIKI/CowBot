@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 pub struct ModelRuntime {
     pub llm: Arc<dyn LlmProvider>,
     pub model: String,
+    pub remote: bool,
 }
 
 /// Shared state for Tauri commands.
@@ -44,26 +45,55 @@ impl AppState {
         (runtime.llm.clone(), runtime.model.clone())
     }
 
+    /// Whether the active model is a real remote provider.
+    pub fn uses_remote_model(&self) -> bool {
+        self.model.read().remote
+    }
+
     /// Rebuild the LLM client after the provider configuration changed.
     pub fn apply_config(&self, config: &config::AppConfig) {
         let resolved = config::resolve_active(config);
         let llm = config::build_provider(&resolved);
+        let remote = matches!(resolved.kind, config::ProviderKind::Remote(_));
         let mut runtime = self.model.write();
         runtime.model = resolved.model;
         runtime.llm = llm;
+        runtime.remote = remote;
     }
 
-    fn build_tools(workspace_dir: &std::path::Path, client: Arc<LocalClient>) -> ToolRegistry {
-        let sandbox = Arc::new(SubprocessSandbox::default());
-        let mut tools = ToolRegistry::new();
+    fn build_tools(
+        workspace_dir: &std::path::Path,
+        config_path: PathBuf,
+        client: Arc<LocalClient>,
+    ) -> ToolRegistry {
+        Self::rooted_tools(workspace_dir, config_path, client)
+    }
+
+    /// Build a registry whose file, code, and working directory tools are
+    /// rooted at `root`, plus the client-backed workspace tools.
+    ///
+    /// Worktree runs use this so agents edit the checkout instead of the
+    /// app-data workspace; channel turns and non-worktree runs keep the shared
+    /// registry.
+    pub fn rooted_tools(
+        root: &std::path::Path,
+        config_path: PathBuf,
+        client: Arc<LocalClient>,
+    ) -> ToolRegistry {
+        let sandbox = Arc::new(SubprocessSandbox::new(Some(root.to_path_buf())));
+        let mut tools = Self::workspace_tools(config_path, client);
         tools.register(Arc::new(CodeExecutionTool::new(sandbox)));
-        tools.register(Arc::new(ReadFileTool::new(Some(
-            workspace_dir.to_path_buf(),
-        ))));
-        tools.register(Arc::new(WriteFileTool::new(Some(
-            workspace_dir.to_path_buf(),
-        ))));
+        tools.register(Arc::new(ReadFileTool::new(Some(root.to_path_buf()))));
+        tools.register(Arc::new(WriteFileTool::new(Some(root.to_path_buf()))));
+        tools
+    }
+
+    fn workspace_tools(config_path: PathBuf, client: Arc<LocalClient>) -> ToolRegistry {
+        let mut tools = ToolRegistry::new();
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
+            client.clone(),
+        )));
+        tools.register(Arc::new(workspace_tools::ListChannelsTool::new(
             client.clone(),
         )));
         tools.register(Arc::new(workspace_tools::ListTemplatesTool::new(
@@ -73,6 +103,10 @@ impl AppState {
             client.clone(),
         )));
         tools.register(Arc::new(workspace_tools::CreateTaskTool::new(
+            client.clone(),
+            config_path,
+        )));
+        tools.register(Arc::new(workspace_tools::DeleteChannelTool::new(
             client.clone(),
         )));
         tools.register(Arc::new(workspace_tools::InstantiateTeamTool::new(client)));
@@ -124,6 +158,15 @@ pub fn run() {
             let client = Arc::new(tauri::async_runtime::block_on(LocalClient::open(&db_path))?);
             let session = tauri::async_runtime::block_on(client.session())?;
 
+            // Worktrees whose folders disappeared are reported as missing, and
+            // each registered project drops stale git worktree entries.
+            for project in &config.projects {
+                config::prune_project_worktrees(project);
+            }
+            if let Err(error) = tauri::async_runtime::block_on(client.reconcile_worktrees()) {
+                eprintln!("warning: failed to reconcile worktrees: {error}");
+            }
+
             // Keep the switcher registry in sync with the database in use and
             // drop entries whose files no longer exist.
             config.workspaces.retain(|entry| {
@@ -158,13 +201,14 @@ pub fn run() {
                 }
             });
 
-            let tools = AppState::build_tools(&data_dir, client.clone());
+            let tools = AppState::build_tools(&data_dir, config_path.clone(), client.clone());
             app.manage(AppState {
                 client,
                 tools,
                 model: RwLock::new(ModelRuntime {
                     llm: config::build_provider(&resolved),
                     model: resolved.model,
+                    remote: matches!(resolved.kind, config::ProviderKind::Remote(_)),
                 }),
                 config_path,
                 data_dir,
@@ -175,6 +219,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_session,
+            commands::update_user_profile,
             commands::list_channels,
             commands::ensure_agent_channels,
             commands::create_channel,
@@ -184,6 +229,11 @@ pub fn run() {
             commands::clear_channel_messages,
             commands::list_messages,
             commands::post_message,
+            commands::create_conversation,
+            commands::get_conversation_context,
+            commands::update_conversation_settings,
+            commands::compact_conversation,
+            commands::clear_conversation_context,
             commands::list_agents,
             commands::update_agent,
             commands::list_available_tools,
@@ -192,17 +242,35 @@ pub fn run() {
             commands::create_task,
             commands::run_task,
             commands::list_tasks,
+            commands::list_run_tasks,
+            commands::get_task_worktree,
+            commands::task_worktree_diff,
+            commands::discard_task_worktree,
+            commands::list_task_overview,
             commands::cancel_task,
+            commands::archive_task,
+            commands::unarchive_task,
+            commands::approve_task_plan,
             commands::list_assignments,
             commands::list_assignment_events,
             commands::list_runs,
             commands::list_tool_calls,
             commands::pending_approvals,
             commands::decide_approval,
+            commands::session_decisions,
+            commands::clear_session_decisions,
+            commands::list_permission_rules,
+            commands::create_permission_rule,
+            commands::set_permission_rule_enabled,
+            commands::delete_permission_rule,
+            commands::get_workspace_policy,
+            commands::set_bypass_critical,
+            commands::list_audit_events,
             commands::get_model_settings,
             commands::save_model_provider,
             commands::delete_model_provider,
             commands::activate_model_provider,
+            commands::set_active_model,
             commands::test_model_provider,
             commands::fetch_provider_models,
             commands::get_onboarding_state,
@@ -213,6 +281,10 @@ pub fn run() {
             commands::list_workspaces,
             commands::switch_workspace,
             commands::create_workspace,
+            commands::list_projects,
+            commands::add_project,
+            commands::remove_project,
+            commands::list_project_branches,
             commands::export_workspace,
             commands::import_workspace,
         ])

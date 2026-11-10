@@ -6,27 +6,42 @@ import type {
 } from "react";
 
 import ApprovalCards from "./ApprovalCards";
+import ApprovalCard from "./ApprovalCard";
+import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import BackgroundTaskCard from "./BackgroundTaskCard";
+import BackgroundTasksPanel from "./BackgroundTasksPanel";
+import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
 import RichText from "./RichText";
 import Onboarding from "./Onboarding";
-import SettingsView from "./SettingsView";
+import SettingsView, { settingsSections } from "./SettingsView";
+import type { SettingsSection } from "./SettingsView";
 import TaskDetail from "./TaskDetail";
 import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
+  addProject,
+  archiveTask,
+  approveTaskPlan,
   cancelTask,
   clearChannelMessages,
+  clearConversationContext,
+  compactConversation,
   completeOnboarding,
   createChannel,
+  createConversation,
   createTask,
   decideApproval,
   deleteChannel,
+  discardTaskWorktree,
   ensureAgentChannels,
+  getConversationContext,
   getOnboardingState,
   getSession,
+  getTaskWorktree,
   instantiateAgents,
   listAgents,
   listAssignmentEvents,
@@ -34,19 +49,28 @@ import {
   listAvailableTools,
   listChannels,
   listMessages,
+  listProjectBranches,
+  listProjects,
+  listRunTasks,
   listRuns,
+  listTaskOverview,
   listTasks,
   listTemplates,
   listToolCalls,
+  getModelSettings,
   onCowbotEvent,
   onChannelReply,
   onRunFinished,
   pendingApprovals,
   postMessage,
+  removeProject,
   renameChannel,
   runTask,
+  setActiveModel,
   setChannelPinned,
+  unarchiveTask,
   updateAgent,
+  updateConversationSettings,
 } from "./api";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
@@ -59,14 +83,24 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  ConversationContext,
+  ModelSettings,
   OnboardingState,
+  Project,
+  ProjectBranches,
   Task,
+  TaskOverviewEntry,
+  TaskWorktree,
   TemplateDocument,
   ToolCallDetail,
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import { approvalLevelLabel, taskStatusKind, taskStatusLabel } from "./types";
+import {
+  isActiveOverviewStatus,
+  taskStatusKind,
+  taskStatusLabel,
+} from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "approvals" | "settings";
@@ -78,9 +112,10 @@ interface PendingReply {
 }
 
 interface MenuState {
-  kind: "agent" | "channel";
-  channel: Channel;
+  kind: "agent" | "channel" | "conversation" | "task";
+  channel: Channel | null;
   agent: AgentProfile | null;
+  task: Task | null;
   x: number;
   y: number;
 }
@@ -91,8 +126,6 @@ type DialogState =
   | { kind: "clear-history"; channel: Channel; agent: AgentProfile }
   | { kind: "edit-agent"; agent: AgentProfile }
   | null;
-
-const approvalLevels: ApprovalLevel[] = ["ask", "safe_auto", "plan_only", "trusted"];
 
 const broadcastNames = ["team", "all", "everyone", "here"];
 
@@ -133,6 +166,24 @@ function plainTextPreview(content: string): string {
     .replace(/[*_~#>]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Preview of the branch a worktree task will create. */
+function worktreeBranchPreview(description: string): string {
+  let slug = "";
+  let pendingDash = false;
+  for (const character of description.toLowerCase()) {
+    if (/[a-z0-9]/.test(character)) {
+      if (pendingDash && slug) slug += "-";
+      pendingDash = false;
+      slug += character;
+      if (slug.length >= 32) break;
+    } else if (slug) {
+      pendingDash = true;
+    }
+  }
+  const trimmed = slug.replace(/-+$/, "") || "task";
+  return `cowbot/${trimmed}-xxxx`;
 }
 
 function mentionedNames(content: string): string[] {
@@ -209,6 +260,7 @@ function PinMark() {
 
 export default function App() {
   const [view, setView] = useState<View>("chat");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [session, setSession] = useState<ClientSession | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -216,9 +268,14 @@ export default function App() {
   const [previews, setPreviews] = useState<Record<string, ChannelMessage | null>>({});
   const [query, setQuery] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskFilter, setTaskFilter] = useState<"active" | "archived" | "all">(
+    "active",
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
+  const [taskRunTasks, setTaskRunTasks] = useState<Task[]>([]);
+  const [taskWorktree, setTaskWorktree] = useState<TaskWorktree | null>(null);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [templates, setTemplates] = useState<TemplateDocument[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
@@ -229,12 +286,25 @@ export default function App() {
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
+  const [creatingConversation, setCreatingConversation] = useState(false);
+  const [conversationTitle, setConversationTitle] = useState("");
+  const [conversationAgentId, setConversationAgentId] = useState("");
+  const [conversationContext, setConversationContext] =
+    useState<ConversationContext | null>(null);
+  const [contextBusy, setContextBusy] = useState(false);
+  const [contextVersion, setContextVersion] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskDescription, setTaskDescription] = useState("");
   const [taskOutput, setTaskOutput] = useState("");
   const [taskAssignee, setTaskAssignee] = useState("");
   const [taskChannel, setTaskChannel] = useState("");
   const [taskApproval, setTaskApproval] = useState<ApprovalLevel>("ask");
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [taskProject, setTaskProject] = useState("");
+  const [taskBaseBranch, setTaskBaseBranch] = useState("");
+  const [projectBranches, setProjectBranches] = useState<ProjectBranches | null>(null);
+  const [projectBranchesBusy, setProjectBranchesBusy] = useState(false);
   const [channelApproval, setChannelApproval] = useState<ApprovalLevel>("ask");
   const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -250,12 +320,25 @@ export default function App() {
   const [availableTools, setAvailableTools] = useState<ToolDefinition[]>([]);
   const [toolCallDetails, setToolCallDetails] = useState<Record<string, ToolCallDetail>>({});
   const [approvalDetails, setApprovalDetails] = useState<Record<string, ApprovalRisk>>({});
+  const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [overview, setOverview] = useState<TaskOverviewEntry[]>([]);
+  const [overviewNow, setOverviewNow] = useState(() => Date.now());
+  const [backgroundOpen, setBackgroundOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("cowbot.background-panel") === "open";
+    } catch {
+      return false;
+    }
+  });
+  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const overviewTimer = useRef<number | null>(null);
   const updater = useUpdater();
 
   const selectedChannel = useMemo(
@@ -263,17 +346,23 @@ export default function App() {
     [channels, selectedId],
   );
 
-  const selectedAgent = useMemo(
-    () =>
-      selectedChannel?.agent_id
-        ? agents.find((agent) => agent.id === selectedChannel.agent_id) ?? null
-        : null,
-    [agents, selectedChannel],
-  );
+  const selectedAgent = useMemo(() => {
+    if (!selectedChannel) return null;
+    const agentId =
+      selectedChannel.kind === "conversation"
+        ? conversationContext?.agent_id ?? null
+        : selectedChannel.agent_id;
+    return agentId ? agents.find((agent) => agent.id === agentId) ?? null : null;
+  }, [agents, conversationContext, selectedChannel]);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
+  );
+
+  const availableProjects = useMemo(
+    () => projects.filter((project) => project.available),
+    [projects],
   );
 
   const onboardingOpen = onboarding !== null && !onboarding.completed;
@@ -302,7 +391,7 @@ export default function App() {
         if (current && next.some((channel) => channel.id === current)) {
           return current;
         }
-        const firstDirect = next.find((channel) => channel.agent_id);
+        const firstDirect = next.find((channel) => channel.kind === "direct");
         return (firstDirect ?? next[0])?.id ?? null;
       });
       void refreshPreviews(next);
@@ -343,12 +432,16 @@ export default function App() {
     if (!taskId) {
       setTaskAssignments([]);
       setTaskRuns([]);
+      setTaskRunTasks([]);
+      setTaskWorktree(null);
       return;
     }
 
-    const [assignments, runs] = await Promise.all([
+    const [assignments, runs, runTasks, worktree] = await Promise.all([
       listAssignments(taskId),
       listRuns(taskId),
+      listRunTasks(taskId),
+      getTaskWorktree(taskId),
     ]);
     const [assignmentsWithEvents, runsWithCalls] = await Promise.all([
       Promise.all(
@@ -366,6 +459,8 @@ export default function App() {
     ]);
     setTaskAssignments(assignmentsWithEvents);
     setTaskRuns(runsWithCalls);
+    setTaskRunTasks(runTasks);
+    setTaskWorktree(worktree);
   }, []);
 
   const refreshApprovals = useCallback(async () => {
@@ -375,6 +470,48 @@ export default function App() {
   const refreshAgents = useCallback(async () => {
     setAgents(await listAgents());
   }, []);
+
+  const refreshOverview = useCallback(async () => {
+    setOverview(await listTaskOverview());
+  }, []);
+
+  const scheduleOverviewRefresh = useCallback(() => {
+    if (overviewTimer.current !== null) {
+      window.clearTimeout(overviewTimer.current);
+    }
+    overviewTimer.current = window.setTimeout(() => {
+      overviewTimer.current = null;
+      refreshOverview().catch((err) => setError(errorMessage(err)));
+    }, 250);
+  }, [refreshOverview]);
+
+  useEffect(
+    () => () => {
+      if (overviewTimer.current !== null) {
+        window.clearTimeout(overviewTimer.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setOverviewNow(Date.now()),
+      30_000,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "cowbot.background-panel",
+        backgroundOpen ? "open" : "closed",
+      );
+    } catch {
+      // Storage can be unavailable in restricted webviews; the panel still works.
+    }
+  }, [backgroundOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -389,6 +526,8 @@ export default function App() {
           nextAgents,
           nextTemplates,
           nextOnboarding,
+          nextProjects,
+          nextOverview,
         ] = await Promise.all([
           getSession(),
           ensureAgentChannels(),
@@ -397,6 +536,8 @@ export default function App() {
           listAgents(),
           listTemplates(),
           getOnboardingState(),
+          listProjects(),
+          listTaskOverview(),
         ]);
         if (cancelled) return;
         setSession(nextSession);
@@ -407,6 +548,8 @@ export default function App() {
         setAgents(nextAgents);
         setTemplates(nextTemplates);
         setOnboarding(nextOnboarding);
+        setProjects(nextProjects);
+        setOverview(nextOverview);
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
       } finally {
@@ -424,6 +567,24 @@ export default function App() {
   }, [refreshMessages, selectedId]);
 
   useEffect(() => {
+    if (!selectedChannel || selectedChannel.kind !== "conversation") {
+      setConversationContext(null);
+      return;
+    }
+    let cancelled = false;
+    getConversationContext(selectedChannel.id)
+      .then((context) => {
+        if (!cancelled) setConversationContext(context);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contextVersion, selectedChannel]);
+
+  useEffect(() => {
     refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
   }, [refreshTaskDetail, selectedTaskId]);
 
@@ -436,6 +597,41 @@ export default function App() {
   }, [templates, templateId]);
 
   useEffect(() => {
+    if (!creatingTask || !worktreeEnabled) return;
+    if (!taskProject && availableProjects.length > 0) {
+      setTaskProject(availableProjects[0].id);
+    }
+  }, [availableProjects, creatingTask, taskProject, worktreeEnabled]);
+
+  useEffect(() => {
+    if (!worktreeEnabled || !taskProject) {
+      setProjectBranches(null);
+      return;
+    }
+    let cancelled = false;
+    setProjectBranchesBusy(true);
+    listProjectBranches(taskProject)
+      .then((listing) => {
+        if (cancelled) return;
+        setProjectBranches(listing);
+        setTaskBaseBranch((current) =>
+          listing.branches.includes(current)
+            ? current
+            : listing.current ?? listing.branches[0] ?? "",
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setProjectBranchesBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskProject, worktreeEnabled]);
+
+  useEffect(() => {
     listAvailableTools()
       .then((tools) =>
         setAvailableTools(
@@ -446,11 +642,39 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (view !== "chat") return;
+    let cancelled = false;
+    getModelSettings()
+      .then((settings) => {
+        if (!cancelled) setModelSettings(settings);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
+      if (
+        type === "TaskCreated" ||
+        type === "TaskUpdated" ||
+        type === "TaskAssigned" ||
+        type === "TaskCompleted" ||
+        type === "TaskFailed" ||
+        type === "AssignmentUpdated" ||
+        type === "WorktreeUpdated" ||
+        type === "ToolCallRequested" ||
+        type === "ToolCallExecuted"
+      ) {
+        scheduleOverviewRefresh();
+      }
       if (type === "ChannelCreated") {
         const channel = event.payload.payload as Channel | undefined;
         if (channel?.agent_id) {
@@ -479,7 +703,12 @@ export default function App() {
       }
       if (type === "ApprovalRequested") {
         const payload = event.payload.payload as
-          | { approval?: { id?: string }; risk?: string; reason?: string }
+          | {
+              approval?: { id?: string };
+              risk?: string;
+              reason?: string;
+              rule?: { rule_id?: string; description?: string; decision?: string } | null;
+            }
           | undefined;
         const approval = payload?.approval;
         if (approval?.id) {
@@ -488,6 +717,18 @@ export default function App() {
             [approval.id as string]: {
               risk: payload?.risk ?? "unknown",
               reason: payload?.reason ?? "",
+              rule:
+                payload?.rule && payload.rule.description
+                  ? {
+                      rule_id: payload.rule.rule_id ?? "",
+                      description: payload.rule.description,
+                      decision:
+                        (payload.rule.decision as
+                          | "allow"
+                          | "ask"
+                          | "deny") ?? "ask",
+                    }
+                  : null,
             },
           }));
         }
@@ -497,13 +738,17 @@ export default function App() {
         if (message && typeof message.channel_id === "string") {
           setPreviews((current) => ({ ...current, [message.channel_id]: message }));
         }
+        setContextVersion((version) => version + 1);
         refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
       }
       if (
         type === "TaskCreated" ||
+        type === "TaskUpdated" ||
         type === "TaskAssigned" ||
         type === "TaskCompleted" ||
-        type === "TaskFailed"
+        type === "TaskFailed" ||
+        type === "AssignmentUpdated" ||
+        type === "WorktreeUpdated"
       ) {
         refreshTasks().catch((err) => setError(errorMessage(err)));
         if (selectedTaskId) {
@@ -534,6 +779,7 @@ export default function App() {
     refreshMessages,
     refreshTaskDetail,
     refreshTasks,
+    scheduleOverviewRefresh,
     selectedId,
     selectedTaskId,
   ]);
@@ -582,6 +828,7 @@ export default function App() {
       if (event.error) {
         setError(event.error);
       }
+      setContextVersion((version) => version + 1);
       refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
     })
       .then((stop) => {
@@ -622,7 +869,10 @@ export default function App() {
     const rows = agents
       .map((agent) => ({
         agent,
-        channel: channels.find((channel) => channel.agent_id === agent.id) ?? null,
+        channel:
+          channels.find(
+            (channel) => channel.kind === "direct" && channel.agent_id === agent.id,
+          ) ?? null,
       }))
       .filter(
         (row): row is { agent: AgentProfile; channel: Channel } => row.channel !== null,
@@ -630,12 +880,35 @@ export default function App() {
     return rows.sort((left, right) => byRecentActivity(left, right, previews));
   }, [agents, channels, previews]);
 
-  const groupChannels = useMemo(() => {
+  const conversationRows = useMemo(() => {
     return channels
-      .filter((channel) => !channel.agent_id)
+      .filter((channel) => channel.kind === "conversation")
       .map((channel) => ({ channel }))
       .sort((left, right) => byRecentActivity(left, right, previews));
   }, [channels, previews]);
+
+  const groupChannels = useMemo(() => {
+    return channels
+      .filter((channel) => channel.kind === "channel")
+      .map((channel) => ({ channel }))
+      .sort((left, right) => byRecentActivity(left, right, previews));
+  }, [channels, previews]);
+
+  const activeOverviewCount = useMemo(
+    () => overview.filter((entry) => isActiveOverviewStatus(entry.status)).length,
+    [overview],
+  );
+
+  const activeOverviewByChannel = useMemo(() => {
+    const byChannel = new Map<string, TaskOverviewEntry[]>();
+    for (const entry of overview) {
+      if (!entry.channel_id || !isActiveOverviewStatus(entry.status)) continue;
+      const entries = byChannel.get(entry.channel_id) ?? [];
+      if (entries.length < 2) entries.push(entry);
+      byChannel.set(entry.channel_id, entries);
+    }
+    return byChannel;
+  }, [overview]);
 
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -655,17 +928,32 @@ export default function App() {
     [groupChannels, normalizedQuery],
   );
 
-  const visibleTasks = useMemo(
+  const visibleConversations = useMemo(
     () =>
       normalizedQuery
-        ? tasks.filter(
-            (task) =>
-              task.description.toLowerCase().includes(normalizedQuery) ||
-              agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
+        ? conversationRows.filter((row) =>
+            row.channel.name.toLowerCase().includes(normalizedQuery),
           )
-        : tasks,
-    [agents, normalizedQuery, tasks],
+        : conversationRows,
+    [conversationRows, normalizedQuery],
   );
+
+  const visibleTasks = useMemo(() => {
+    const filtered = tasks.filter((task) =>
+      taskFilter === "all"
+        ? true
+        : taskFilter === "archived"
+          ? task.archived
+          : !task.archived,
+    );
+    if (!normalizedQuery) return filtered;
+    return filtered.filter(
+      (task) =>
+        (task.title || task.description).toLowerCase().includes(normalizedQuery) ||
+        task.description.toLowerCase().includes(normalizedQuery) ||
+        agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
+    );
+  }, [agents, normalizedQuery, taskFilter, tasks]);
 
   const channelMentionNames = useMemo(() => {
     const seen = new Set<string>();
@@ -678,6 +966,22 @@ export default function App() {
   }, [agents]);
 
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+  const conversationFull =
+    selectedChannel?.kind === "conversation" && conversationContext?.state === "full";
+
+  const inlineApprovals = useMemo(
+    () =>
+      approvals.filter(
+        (approval) =>
+          tasks.find((task) => task.id === approval.task_id)?.channel_id ===
+          selectedId,
+      ),
+    [approvals, selectedId, tasks],
+  );
+  const inlineApprovalTool =
+    inlineApprovals.length > 0
+      ? toolCallDetails[inlineApprovals[0].tool_call_id]?.name
+      : null;
 
   async function handleCreateChannel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -698,39 +1002,149 @@ export default function App() {
     }
   }
 
+  function openNewConversation() {
+    setView("chat");
+    setCreatingConversation(true);
+    setError(null);
+    setConversationAgentId((current) => current || agents[0]?.id || "");
+  }
+
+  async function handleCreateConversation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!conversationAgentId) return;
+
+    setBusy("create-conversation");
+    setError(null);
+    try {
+      const channel = await createConversation(
+        conversationTitle.trim() || null,
+        conversationAgentId,
+      );
+      setCreatingConversation(false);
+      setConversationTitle("");
+      await refreshChannels(channel.id);
+      setContextVersion((version) => version + 1);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function compactChannel(channel: Channel) {
+    setContextBusy(true);
+    setError(null);
+    try {
+      const outcome = await compactConversation(channel.id);
+      setNotice(
+        outcome.compacted
+          ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
+          : "Nothing to compact yet.",
+      );
+      setContextVersion((version) => version + 1);
+      await refreshMessages(channel.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function clearContextForChannel(channel: Channel) {
+    if (
+      !window.confirm(
+        "Clear this conversation's context? Messages stay visible, but the model will no longer see them.",
+      )
+    ) {
+      return;
+    }
+
+    setContextBusy(true);
+    setError(null);
+    try {
+      const cleared = await clearConversationContext(channel.id);
+      setNotice(
+        cleared > 0
+          ? `Cleared ${cleared} context entries.`
+          : "The context was already empty.",
+      );
+      setContextVersion((version) => version + 1);
+      await refreshMessages(channel.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function updateConversationOptions(
+    channel: Channel,
+    autoCompact: boolean,
+    threshold: number,
+  ) {
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        channel.id,
+        autoCompact,
+        threshold,
+      );
+      setConversationContext(context);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   function openMenu(
     event: ReactMouseEvent,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
     event.preventDefault();
     event.stopPropagation();
-    setMenu({ kind, channel, agent, x: event.clientX, y: event.clientY });
+    setMenu({ kind, channel, agent, task: null, x: event.clientX, y: event.clientY });
   }
 
   function openMenuFromButton(
     event: ReactMouseEvent<HTMLButtonElement>,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({ kind, channel, agent, x: rect.right - 4, y: rect.bottom + 4 });
+    setMenu({ kind, channel, agent, task: null, x: rect.right - 4, y: rect.bottom + 4 });
   }
 
   function openMenuFromKey(
     event: ReactKeyboardEvent<HTMLButtonElement>,
-    kind: "agent" | "channel",
+    kind: "agent" | "channel" | "conversation",
     channel: Channel,
     agent: AgentProfile | null = null,
   ) {
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({ kind, channel, agent, x: rect.left + 24, y: rect.bottom + 4 });
+    setMenu({ kind, channel, agent, task: null, x: rect.left + 24, y: rect.bottom + 4 });
+  }
+
+  function openTaskMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    task: Task,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setMenu({
+      kind: "task",
+      channel: null,
+      agent: null,
+      task,
+      x: rect.right - 4,
+      y: rect.bottom + 4,
+    });
   }
 
   async function togglePin(channel: Channel) {
@@ -738,6 +1152,43 @@ export default function App() {
     try {
       await setChannelPinned(channel.id, !channel.pinned);
       await refreshChannels();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function handleToggleArchive(task: Task) {
+    setError(null);
+    setBusy("archive-task");
+    try {
+      const updated = task.archived
+        ? await unarchiveTask(task.id)
+        : await archiveTask(task.id);
+      await refreshTasks(updated.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openModelMenu(event: ReactMouseEvent<HTMLButtonElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const modelCount =
+      modelSettings?.providers.find((provider) => provider.active)?.models
+        .length ?? 1;
+    setModelMenu({
+      x: rect.left,
+      y: Math.max(8, rect.top - 12 - (modelCount + 1) * 34),
+    });
+  }
+
+  async function handleComposerModel(model: string) {
+    const provider = modelSettings?.providers.find((candidate) => candidate.active);
+    if (!provider) return;
+    setError(null);
+    try {
+      setModelSettings(await setActiveModel(provider.id, model));
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -854,7 +1305,7 @@ export default function App() {
 
   async function sendMessage() {
     const content = draft.trim();
-    if (!content || !selectedChannel || sending) return;
+    if (!content || !selectedChannel || sending || conversationFull) return;
 
     setSending(true);
     setError(null);
@@ -881,7 +1332,7 @@ export default function App() {
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      void sendMessage();
+      if (!conversationFull) void sendMessage();
     }
   }
 
@@ -889,6 +1340,12 @@ export default function App() {
     setView("chat");
     setCreatingChannel(true);
     setError(null);
+  }
+
+  function openTask(taskId: string) {
+    setView("tasks");
+    setCreatingTask(false);
+    setSelectedTaskId(taskId);
   }
 
   function startCreatingTask() {
@@ -919,11 +1376,19 @@ export default function App() {
         assignee: taskAssignee,
         channelId: taskChannel || null,
         approvalLevel: taskApproval,
+        worktree:
+          worktreeEnabled && taskProject && taskBaseBranch
+            ? { projectId: taskProject, baseBranch: taskBaseBranch }
+            : null,
       });
       setCreatingTask(false);
       setTaskDescription("");
       setTaskOutput("");
       setTaskChannel("");
+      setWorktreeEnabled(false);
+      setTaskProject("");
+      setTaskBaseBranch("");
+      setProjectBranches(null);
       await refreshTasks(task.id);
       setSelectedTaskId(task.id);
     } catch (err) {
@@ -958,6 +1423,30 @@ export default function App() {
     }
   }
 
+  async function handleAddProject(path: string) {
+    setBusy("add-project");
+    setError(null);
+    try {
+      setProjects(await addProject(path));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemoveProject(project: Project) {
+    setBusy("remove-project");
+    setError(null);
+    try {
+      setProjects(await removeProject(project.id));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleCompleteOnboarding() {
     const next = await completeOnboarding();
     setOnboarding(next);
@@ -980,11 +1469,31 @@ export default function App() {
     }
   }
 
-  async function handleRunTask(taskId: string) {
+  async function handleDiscardWorktree() {
+    if (!selectedTaskId) return;
+
+    setBusy("discard-worktree");
+    setError(null);
+    try {
+      await discardTaskWorktree(selectedTaskId);
+      setNotice("Worktree discarded.");
+      await refreshTasks();
+      await refreshTaskDetail(selectedTaskId);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRunTask(
+    taskId: string,
+    approvalLevel: ApprovalLevel = taskApproval,
+  ) {
     setError(null);
     setRunningTasks((current) => new Set(current).add(taskId));
     try {
-      await runTask(taskId, taskApproval);
+      await runTask(taskId, approvalLevel);
       await refreshTasks();
     } catch (err) {
       setRunningTasks((current) => {
@@ -996,11 +1505,32 @@ export default function App() {
     }
   }
 
-  async function handleDecideApproval(approval: Approval, approved: boolean) {
+  async function handleApprovePlan(taskId: string) {
+    setBusy("approve-plan");
+    setError(null);
+    try {
+      await approveTaskPlan(taskId);
+      setTaskApproval("ask");
+      setChannelApproval("ask");
+      await handleRunTask(taskId, "ask");
+      await refreshTasks();
+      if (selectedTaskId) await refreshTaskDetail(selectedTaskId);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleDecideApproval(
+    approval: Approval,
+    approved: boolean,
+    forSession = false,
+  ) {
     setBusy(approval.id);
     setError(null);
     try {
-      await decideApproval(approval.id, approved);
+      await decideApproval(approval.id, approved, forSession);
       await refreshApprovals();
       await refreshTasks();
       if (selectedTaskId) await refreshTaskDetail(selectedTaskId);
@@ -1038,9 +1568,26 @@ export default function App() {
     });
   }, [messages]);
 
-  const menuAgent = menu?.agent ?? null;
-  const menuItems: ContextMenuItem[] = menu
-    ? menu.kind === "agent"
+  const menuItems: ContextMenuItem[] = (() => {
+    if (!menu) return [];
+    if (menu.kind === "task" && menu.task) {
+      const task = menu.task;
+      const kind = taskStatusKind(task.status);
+      const terminal =
+        kind === "completed" || kind === "failed" || kind === "cancelled";
+      if (!terminal) return [];
+      return [
+        {
+          label: task.archived ? "Unarchive task" : "Archive task",
+          onSelect: () => void handleToggleArchive(task),
+        },
+      ];
+    }
+
+    const channel = menu.channel;
+    if (!channel) return [];
+    const menuAgent = menu.agent;
+    return menu.kind === "agent"
       ? [
           ...(menuAgent
             ? [
@@ -1051,38 +1598,89 @@ export default function App() {
               ]
             : []),
           {
-            label: menu.channel.pinned ? "Unpin" : "Pin to top",
-            onSelect: () => void togglePin(menu.channel),
+            label: channel.pinned ? "Unpin" : "Pin to top",
+            onSelect: () => void togglePin(channel),
           },
           ...(menuAgent
             ? [
                 {
                   label: "Clear history…",
                   danger: true,
-                  onSelect: () => openClearDialog(menu.channel, menuAgent),
+                  onSelect: () => openClearDialog(channel, menuAgent),
                 },
               ]
             : []),
         ]
-      : [
-          {
-            label: "Rename channel…",
-            onSelect: () => openRenameDialog(menu.channel),
+      : menu.kind === "conversation"
+        ? [
+            {
+              label: "Rename conversation…",
+              onSelect: () => openRenameDialog(channel),
+            },
+            {
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
+            },
+            {
+              label: "Compact context",
+              onSelect: () => void compactChannel(channel),
+            },
+            {
+              label: "Clear context…",
+              onSelect: () => void clearContextForChannel(channel),
+            },
+            {
+              label: "Delete conversation…",
+              danger: true,
+              onSelect: () => openDeleteDialog(channel),
+            },
+          ]
+        : [
+            {
+              label: "Rename channel…",
+              onSelect: () => openRenameDialog(channel),
+            },
+            {
+              label: channel.pinned ? "Unpin" : "Pin to top",
+              onSelect: () => void togglePin(channel),
+            },
+            {
+              label: "Delete channel…",
+              danger: true,
+              onSelect: () => openDeleteDialog(channel),
+            },
+          ];
+  })();
+
+  const activeModelProvider =
+    modelSettings?.providers.find((provider) => provider.active) ?? null;
+  const activeModelLabel = activeModelProvider?.model ?? "Mock model";
+  const modelMenuItems: ContextMenuItem[] = modelMenu
+    ? [
+        ...(activeModelProvider
+          ? activeModelProvider.models.map((model) => ({
+              label: `${model === activeModelProvider.model ? "✓ " : ""}${model}`,
+              onSelect: () => void handleComposerModel(model),
+            }))
+          : [
+              {
+                label: "Mock model (offline)",
+                onSelect: () => undefined,
+              },
+            ]),
+        {
+          label: "Manage models…",
+          onSelect: () => {
+            setModelMenu(null);
+            setSettingsSection("model");
+            setView("settings");
           },
-          {
-            label: menu.channel.pinned ? "Unpin" : "Pin to top",
-            onSelect: () => void togglePin(menu.channel),
-          },
-          {
-            label: "Delete channel…",
-            danger: true,
-            onSelect: () => openDeleteDialog(menu.channel),
-          },
-        ]
+        },
+      ]
     : [];
 
   return (
-    <div className="app">
+    <div className={`app${backgroundOpen ? " with-background-panel" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
         <div className="sidebar-head">
           <img className="wordmark" src={wordmark} alt="CowBot" />
@@ -1122,6 +1720,126 @@ export default function App() {
         <div className="sidebar-scroll">
           {view === "chat" ? (
             <>
+              <section className="sidebar-section" aria-label="Conversations">
+                <div className="nav-heading">
+                  <span>Conversations</span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={openNewConversation}
+                    disabled={agents.length === 0}
+                  >
+                    New
+                  </button>
+                </div>
+                {visibleConversations.length > 0 ? (
+                  <ul className="contact-list">
+                    {visibleConversations.map(({ channel }) => {
+                      const preview = previews[channel.id] ?? null;
+                      return (
+                        <li key={channel.id} className="contact-item">
+                          <button
+                            type="button"
+                            className="contact-row"
+                            aria-current={channel.id === selectedId ? "page" : undefined}
+                            onClick={() => setSelectedId(channel.id)}
+                            onContextMenu={(event) =>
+                              openMenu(event, "conversation", channel)
+                            }
+                            onKeyDown={(event) =>
+                              openMenuFromKey(event, "conversation", channel)
+                            }
+                          >
+                            <Avatar name={channel.name} kind="channel" />
+                            <span className="contact-text">
+                              <span className="contact-top">
+                                <span className="contact-name">
+                                  {channel.pinned ? <PinMark /> : null}
+                                  {channel.name}
+                                </span>
+                                <time className="contact-time">
+                                  {preview ? formatListTime(preview.created_at) : ""}
+                                </time>
+                              </span>
+                              <span className="contact-snippet">
+                                {preview
+                                  ? previewSnippet(preview, channel)
+                                  : channel.topic || "New conversation"}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="contact-more"
+                            title="Conversation actions"
+                            aria-label={`Actions for ${channel.name}`}
+                            onClick={(event) =>
+                              openMenuFromButton(event, "conversation", channel)
+                            }
+                          >
+                            ⋯
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : normalizedQuery && conversationRows.length > 0 ? (
+                  <p className="nav-note">No conversations match.</p>
+                ) : null}
+
+                {creatingConversation ? (
+                  <form className="new-channel" onSubmit={handleCreateConversation}>
+                    <label className="field">
+                      <span>Title</span>
+                      <input
+                        value={conversationTitle}
+                        onChange={(event) => setConversationTitle(event.target.value)}
+                        placeholder="Design review"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Agent</span>
+                      <select
+                        value={conversationAgentId}
+                        onChange={(event) => setConversationAgentId(event.target.value)}
+                      >
+                        {agents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={busy === "create-conversation" || !conversationAgentId}
+                      >
+                        {busy === "create-conversation" ? "Creating…" : "Create"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setCreatingConversation(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    className="new-channel-button"
+                    onClick={openNewConversation}
+                    disabled={agents.length === 0}
+                  >
+                    <span aria-hidden="true">+</span> New conversation
+                  </button>
+                )}
+              </section>
+
               <section className="sidebar-section" aria-label="Agents">
                 <div className="nav-heading">
                   <span>Agents</span>
@@ -1238,6 +1956,20 @@ export default function App() {
                             >
                               ⋯
                             </button>
+                            {(activeOverviewByChannel.get(channel.id) ?? []).length > 0 ? (
+                              <div className="background-cards">
+                                {(activeOverviewByChannel.get(channel.id) ?? []).map(
+                                  (entry) => (
+                                    <BackgroundTaskCard
+                                      key={entry.run_id}
+                                      entry={entry}
+                                      now={overviewNow}
+                                      onOpen={() => openTask(entry.run_id)}
+                                    />
+                                  ),
+                                )}
+                              </div>
+                            ) : null}
                           </li>
                         );
                       })}
@@ -1304,11 +2036,28 @@ export default function App() {
                   New
                 </button>
               </div>
+              <div className="task-filter" role="group" aria-label="Task filter">
+                {(["active", "archived", "all"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className="task-filter-item"
+                    aria-pressed={taskFilter === filter}
+                    onClick={() => setTaskFilter(filter)}
+                  >
+                    {filter === "active"
+                      ? "Active"
+                      : filter === "archived"
+                        ? "Archived"
+                        : "All"}
+                  </button>
+                ))}
+              </div>
               <ul className="contact-list">
                 {visibleTasks.map((task) => {
                   const kind = taskStatusKind(task.status);
                   return (
-                    <li key={task.id}>
+                    <li key={task.id} className="task-row">
                       <button
                         type="button"
                         className="contact-row"
@@ -1327,14 +2076,26 @@ export default function App() {
                         />
                         <span className="contact-text">
                           <span className="contact-top">
-                            <span className="contact-name">{task.description}</span>
+                            <span className="contact-name">
+                              {task.title || task.description}
+                            </span>
                           </span>
                           <span className="contact-snippet">
                             <span className={`status-dot status-${kind}`} />{" "}
                             {taskStatusLabel(task.status)} ·{" "}
                             {agentName(agents, task.assigned_agent)}
+                            {task.archived ? " · Archived" : ""}
                           </span>
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="contact-more"
+                        title="Task actions"
+                        aria-label={`Actions for ${task.title || task.description}`}
+                        onClick={(event) => openTaskMenu(event, task)}
+                      >
+                        ⋯
                       </button>
                     </li>
                   );
@@ -1360,11 +2121,45 @@ export default function App() {
                 runs.
               </p>
             </section>
+          ) : view === "settings" ? (
+            <section className="sidebar-section" aria-label="Settings sections">
+              <div className="nav-heading">
+                <span>Settings</span>
+              </div>
+              <ul className="contact-list">
+                {settingsSections.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="contact-row"
+                      aria-current={
+                        settingsSection === item.id ? "page" : undefined
+                      }
+                      onClick={() => setSettingsSection(item.id)}
+                    >
+                      <span className="contact-text">
+                        <span className="contact-top">
+                          <span className="contact-name">{item.label}</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
         </div>
 
         <div className="sidebar-footer">
           <nav className="footer-nav" aria-label="Views">
+            <button
+              type="button"
+              className="footer-nav-item"
+              aria-current={view === "chat" ? "page" : undefined}
+              onClick={() => setView("chat")}
+            >
+              Chat
+            </button>
             <button
               type="button"
               className="footer-nav-item"
@@ -1381,6 +2176,17 @@ export default function App() {
             >
               Approvals
               {approvals.length > 0 ? <span className="nav-count">{approvals.length}</span> : null}
+            </button>
+            <button
+              type="button"
+              className="footer-nav-item"
+              aria-pressed={backgroundOpen}
+              onClick={() => setBackgroundOpen((open) => !open)}
+            >
+              Background
+              {activeOverviewCount > 0 ? (
+                <span className="nav-count">{activeOverviewCount}</span>
+              ) : null}
             </button>
             <button
               type="button"
@@ -1426,6 +2232,15 @@ export default function App() {
           </div>
         ) : null}
 
+        {notice ? (
+          <div className="notice-banner" role="status">
+            <span>{notice}</span>
+            <button type="button" className="text-button" onClick={() => setNotice(null)}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="loading-state">
             <p>Opening your workspace…</p>
@@ -1442,7 +2257,11 @@ export default function App() {
                   />
                   <div className="chat-heading">
                     <h2 className="chat-title">
-                      {selectedAgent?.name ?? (
+                      {selectedChannel.kind === "conversation" ? (
+                        selectedChannel.name
+                      ) : selectedAgent ? (
+                        selectedAgent.name
+                      ) : (
                         <>
                           <span className="channel-hash" aria-hidden="true">
                             #
@@ -1452,11 +2271,15 @@ export default function App() {
                       )}
                     </h2>
                     <p className="chat-subtitle">
-                      {selectedAgent
-                        ? selectedAgent.role
-                        : selectedChannel.topic.trim() || "No topic yet."}
+                      {selectedChannel.kind === "conversation"
+                        ? selectedAgent
+                          ? `${selectedAgent.name} · ${selectedAgent.role}`
+                          : "Private conversation"
+                        : selectedAgent
+                          ? selectedAgent.role
+                          : selectedChannel.topic.trim() || "No topic yet."}
                     </p>
-                    {!selectedAgent && channelMentionNames.length > 0 ? (
+                    {selectedChannel.kind === "channel" && channelMentionNames.length > 0 ? (
                       <p className="chat-members">
                         Mention{" "}
                         {channelMentionNames.map((agent) => `@${agent.name}`).join(" · ")}
@@ -1465,24 +2288,36 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {agents.length > 0 ? (
-                    <label className="channel-approval">
-                      <span>Approval</span>
-                      <select
-                        value={channelApproval}
-                        onChange={(event) =>
-                          setChannelApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                  {selectedChannel.kind === "conversation" ? (
+                    <>
+                      {conversationContext ? (
+                        <ContextMeter
+                          context={conversationContext}
+                          busy={contextBusy}
+                          onCompact={() => void compactChannel(selectedChannel)}
+                          onClear={() => void clearContextForChannel(selectedChannel)}
+                          onAutoCompactChange={(enabled) =>
+                            void updateConversationOptions(
+                              selectedChannel,
+                              enabled,
+                              conversationContext.compact_threshold,
+                            )
+                          }
+                          onThresholdChange={(threshold) =>
+                            void updateConversationOptions(
+                              selectedChannel,
+                              conversationContext.auto_compact,
+                              threshold,
+                            )
+                          }
+                          onNewConversation={openNewConversation}
+                        />
+                      ) : null}
+                      <span className="chat-kind">Conversation</span>
+                    </>
+                  ) : selectedAgent ? (
+                    <span className="chat-kind">Direct</span>
                   ) : null}
-                  {selectedAgent ? <span className="chat-kind">Direct</span> : null}
                 </div>
               </header>
 
@@ -1499,12 +2334,20 @@ export default function App() {
                       size="large"
                     />
                     <p className="empty-title">
-                      {selectedAgent ? `Say hello to ${selectedAgent.name}.` : "No messages yet."}
+                      {selectedChannel.kind === "conversation"
+                        ? selectedAgent
+                          ? `Start a conversation with ${selectedAgent.name}.`
+                          : "Start a conversation."
+                        : selectedAgent
+                          ? `Say hello to ${selectedAgent.name}.`
+                          : "No messages yet."}
                     </p>
                     <p>
-                      {selectedAgent
-                        ? "Every message here goes straight to this agent."
-                        : `Write the first message to #${selectedChannel.name}.`}
+                      {selectedChannel.kind === "conversation"
+                        ? "Each conversation keeps its own context branch; the header meter shows how full it is."
+                        : selectedAgent
+                          ? "Every message here goes straight to this agent."
+                          : `Write the first message to #${selectedChannel.name}.`}
                     </p>
                   </div>
                 ) : (
@@ -1559,27 +2402,108 @@ export default function App() {
                         )}
                       </Fragment>
                     ))}
-                    {replyingHere
-                      ? pendingReply.agents.map((agent) => (
-                          <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
-                            <Avatar name={agent.name} kind="agent" size="small" />
-                            <div className="chat-bubble-wrap">
-                              <span className="chat-sender">{agent.name}</span>
-                              <div className="chat-bubble chat-bubble-agent">
-                                <span className="typing-dots" aria-label="Working">
-                                  <span />
-                                  <span />
-                                  <span />
-                                </span>
-                              </div>
+                    {inlineApprovals.map((approval) => {
+                      const task = tasks.find(
+                        (candidate) => candidate.id === approval.task_id,
+                      );
+                      const agent = task?.assigned_agent
+                        ? agents.find(
+                            (candidate) => candidate.id === task.assigned_agent,
+                          )
+                        : undefined;
+                      return (
+                        <li
+                          className="chat-approval-row"
+                          key={`approval-${approval.id}`}
+                        >
+                          {agent ? (
+                            <Avatar
+                              name={agent.name}
+                              kind="agent"
+                              size="small"
+                            />
+                          ) : null}
+                          <div className="chat-approval-body">
+                            <span className="chat-sender">
+                              {agent?.name ?? "Approval"}
+                            </span>
+                            <ApprovalCard
+                              approval={approval}
+                              task={task}
+                              call={toolCallDetails[approval.tool_call_id]}
+                              risk={approvalDetails[approval.id]}
+                              deciding={busy === approval.id}
+                              compact
+                              onDecide={handleDecideApproval}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                    {inlineApprovals.length > 0 ? (
+                      <li className="chat-row chat-row-agent" key="approval-waiting">
+                        <div className="chat-bubble-wrap">
+                          <div className="chat-bubble chat-bubble-agent chat-bubble-waiting">
+                            Waiting for approval
+                            {inlineApprovalTool ? `: ${inlineApprovalTool}` : ""}…
+                          </div>
+                        </div>
+                      </li>
+                    ) : replyingHere ? (
+                      pendingReply.agents.map((agent) => (
+                        <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
+                          <Avatar name={agent.name} kind="agent" size="small" />
+                          <div className="chat-bubble-wrap">
+                            <span className="chat-sender">{agent.name}</span>
+                            <div className="chat-bubble chat-bubble-agent">
+                              <span className="typing-dots" aria-label="Working">
+                                <span />
+                                <span />
+                                <span />
+                              </span>
                             </div>
-                          </li>
-                        ))
-                      : null}
+                          </div>
+                        </li>
+                      ))
+                    ) : null}
                   </ol>
                 )}
                 <div ref={endRef} />
               </section>
+
+              {conversationFull && selectedChannel.kind === "conversation" ? (
+                <div className="context-full-banner" role="alert">
+                  <span>
+                    This conversation's context is full. Compact it, clear it, or start a
+                    new conversation before sending.
+                  </span>
+                  <div className="context-full-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={contextBusy}
+                      onClick={() => void compactChannel(selectedChannel)}
+                    >
+                      Compact
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={contextBusy}
+                      onClick={() => void clearContextForChannel(selectedChannel)}
+                    >
+                      Clear context
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={openNewConversation}
+                    >
+                      New conversation
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <form
                 className="composer-bar"
@@ -1588,42 +2512,72 @@ export default function App() {
                   void sendMessage();
                 }}
               >
-                <button
-                  type="button"
-                  className="composer-add"
-                  title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
-                  aria-label="New task"
-                  onClick={startTaskForCurrentChannel}
-                >
-                  +
-                </button>
-                <textarea
-                  ref={composerRef}
-                  className="composer-input"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={handleComposerKeyDown}
-                  placeholder={`Message ${composerTarget}`}
-                  aria-label={`Message ${composerTarget}`}
-                  rows={1}
-                />
-                <button
-                  type="submit"
-                  className="composer-send"
-                  disabled={!draft.trim() || sending}
-                  aria-label="Send message"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    aria-hidden="true"
+                <div className="composer-main">
+                  <button
+                    type="button"
+                    className="composer-add"
+                    title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
+                    aria-label="New task"
+                    onClick={startTaskForCurrentChannel}
                   >
-                    <path d="M12 19V5" />
-                    <path d="m6 11 6-6 6 6" />
-                  </svg>
-                </button>
+                    +
+                  </button>
+                  <textarea
+                    ref={composerRef}
+                    className="composer-input"
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={handleComposerKeyDown}
+                    placeholder={
+                      conversationFull
+                        ? "Context full — compact or start a new conversation"
+                        : `Message ${composerTarget}`
+                    }
+                    aria-label={`Message ${composerTarget}`}
+                    disabled={conversationFull}
+                    rows={1}
+                  />
+                  <button
+                    type="submit"
+                    className="composer-send"
+                    disabled={!draft.trim() || sending || conversationFull}
+                    aria-label="Send message"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 19V5" />
+                      <path d="m6 11 6-6 6 6" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="composer-footer">
+                  <span className="composer-footer-spacer" />
+                  {agents.length > 0 ? (
+                    <ApprovalModeMenu
+                      value={channelApproval}
+                      onChange={setChannelApproval}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    className="composer-model"
+                    aria-haspopup="menu"
+                    aria-expanded={modelMenu !== null}
+                    title={
+                      activeModelProvider
+                        ? `${activeModelProvider.name} · ${activeModelProvider.model}`
+                        : "Offline mock model"
+                    }
+                    onClick={openModelMenu}
+                  >
+                    {activeModelLabel}
+                  </button>
+                </div>
               </form>
             </>
           ) : (
@@ -1723,22 +2677,86 @@ export default function App() {
                         ))}
                       </select>
                     </label>
-                    <label className="field">
+                    <div className="field">
                       <span>Approval</span>
-                      <select
+                      <ApprovalModeMenu
                         value={taskApproval}
-                        onChange={(event) =>
-                          setTaskApproval(event.target.value as ApprovalLevel)
-                        }
-                      >
-                        {approvalLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {approvalLevelLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={setTaskApproval}
+                      />
+                    </div>
                   </div>
+                  {availableProjects.length > 0 ? (
+                    <section
+                      className="task-worktree"
+                      aria-label="Run in a git worktree"
+                    >
+                      <label className="worktree-toggle">
+                        <input
+                          type="checkbox"
+                          checked={worktreeEnabled}
+                          onChange={(event) =>
+                            setWorktreeEnabled(event.target.checked)
+                          }
+                        />
+                        <span>
+                          <strong>Run in a git worktree</strong>
+                          <small>
+                            Work in an isolated checkout on its own branch. The
+                            branch is not merged automatically.
+                          </small>
+                        </span>
+                      </label>
+                      {worktreeEnabled ? (
+                        <div className="form-row">
+                          <label className="field">
+                            <span>Project</span>
+                            <select
+                              value={taskProject}
+                              onChange={(event) =>
+                                setTaskProject(event.target.value)
+                              }
+                            >
+                              {availableProjects.map((project) => (
+                                <option key={project.id} value={project.id}>
+                                  {project.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>Base branch</span>
+                            <select
+                              value={taskBaseBranch}
+                              onChange={(event) =>
+                                setTaskBaseBranch(event.target.value)
+                              }
+                              disabled={projectBranchesBusy || !projectBranches}
+                            >
+                              {projectBranches ? (
+                                projectBranches.branches.map((branch) => (
+                                  <option key={branch} value={branch}>
+                                    {branch}
+                                  </option>
+                                ))
+                              ) : (
+                                <option value="">
+                                  {projectBranchesBusy
+                                    ? "Loading branches…"
+                                    : "No local branches"}
+                                </option>
+                              )}
+                            </select>
+                          </label>
+                          <div className="field">
+                            <span>Worktree branch</span>
+                            <code className="worktree-preview">
+                              {worktreeBranchPreview(taskDescription)}
+                            </code>
+                          </div>
+                        </div>
+                      ) : null}
+                    </section>
+                  ) : null}
                   <div className="form-actions">
                     <button
                       type="submit"
@@ -1747,7 +2765,11 @@ export default function App() {
                         busy === "create-task" ||
                         !taskDescription.trim() ||
                         !taskOutput.trim() ||
-                        !taskAssignee
+                        !taskAssignee ||
+                        (worktreeEnabled &&
+                          (!taskProject ||
+                            !taskBaseBranch ||
+                            projectBranchesBusy))
                       }
                     >
                       {busy === "create-task" ? "Creating…" : "Create task"}
@@ -1768,10 +2790,19 @@ export default function App() {
               task={selectedTask}
               assignments={taskAssignments}
               runs={taskRuns}
+              runTasks={taskRunTasks}
+              worktree={taskWorktree}
+              discardingWorktree={busy === "discard-worktree"}
+              onDiscardWorktree={() => void handleDiscardWorktree()}
+              onOpenTask={openTask}
               cancelling={busy === "cancel-task"}
               onCancel={handleCancelTask}
               running={runningTasks.has(selectedTask.id)}
               onRun={() => handleRunTask(selectedTask.id)}
+              onApprovePlan={() => void handleApprovePlan(selectedTask.id)}
+              approvingPlan={busy === "approve-plan"}
+              onToggleArchive={() => void handleToggleArchive(selectedTask)}
+              archiveBusy={busy === "archive-task"}
             />
           ) : (
             <div className="empty-workspace">
@@ -1800,12 +2831,28 @@ export default function App() {
             busy={busy}
             updater={updater}
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
+            section={settingsSection}
+            projects={projects}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
             onEditAgent={handleEditAgent}
+            onSessionChange={setSession}
+            onAddProject={handleAddProject}
+            onRemoveProject={handleRemoveProject}
           />
         )}
       </main>
+
+      {backgroundOpen ? (
+        <BackgroundTasksPanel
+          overview={overview}
+          agents={agents}
+          now={overviewNow}
+          inert={onboardingOpen}
+          onClose={() => setBackgroundOpen(false)}
+          onOpenTask={openTask}
+        />
+      ) : null}
 
       {onboardingOpen ? (
         <Onboarding
@@ -1825,9 +2872,22 @@ export default function App() {
         />
       ) : null}
 
+      {modelMenu ? (
+        <ContextMenu
+          x={modelMenu.x}
+          y={modelMenu.y}
+          items={modelMenuItems}
+          onClose={() => setModelMenu(null)}
+        />
+      ) : null}
+
       {dialog?.kind === "rename-channel" ? (
         <Modal
-          title="Rename channel"
+          title={
+            dialog.channel.kind === "conversation"
+              ? "Rename conversation"
+              : "Rename channel"
+          }
           onClose={closeDialog}
           footer={
             <>
@@ -1876,7 +2936,11 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "delete-channel" ? (
         <Modal
-          title="Delete channel"
+          title={
+            dialog.channel.kind === "conversation"
+              ? "Delete conversation"
+              : "Delete channel"
+          }
           onClose={closeDialog}
           footer={
             <>
@@ -1894,16 +2958,27 @@ export default function App() {
                 onClick={() => void submitDelete()}
                 disabled={dialogBusy}
               >
-                {dialogBusy ? "Deleting…" : "Delete channel"}
+                {dialogBusy
+                  ? "Deleting…"
+                  : dialog.channel.kind === "conversation"
+                    ? "Delete conversation"
+                    : "Delete channel"}
               </button>
             </>
           }
         >
-          <p className="dialog-copy">
-            Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
-            deleted. Tasks keep their history but are no longer linked to the
-            channel.
-          </p>
+          {dialog.channel.kind === "conversation" ? (
+            <p className="dialog-copy">
+              Delete <strong>{dialog.channel.name}</strong>? Its messages and context
+              will be deleted. This cannot be undone.
+            </p>
+          ) : (
+            <p className="dialog-copy">
+              Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
+              deleted. Tasks keep their history but are no longer linked to the
+              channel.
+            </p>
+          )}
           {dialogError ? (
             <p className="dialog-error" role="alert">
               {dialogError}

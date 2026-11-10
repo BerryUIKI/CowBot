@@ -73,6 +73,10 @@ Delivered:
 >
 > **Channel mentions (0.1.4)**: a channel message that mentions an agent by name (or `@team`) becomes a task in that channel, runs through the assignment scheduler with the channel's approval policy, and posts the answer back as a message from that agent; unknown mentions and failures produce a system notice. A scoped scheduler keeps background turns from claiming each other's assignments (ADR-0022, ADR-0023). `cowbot message post --wait` drives the same path from the CLI.
 >
+> **Usage accounting and conversations (M1–M2)**: every completion records normalized token usage per call, including DeepSeek cache hit/miss fields, and the desktop stores optional per-model context-window metadata (ADR-0029). User-created single-agent conversations sit above agent contacts in the sidebar and keep an independent append-only context branch per participant; the model request is a real system/user/assistant/tool message list rather than a rendered transcript. A header context ring and popover report percent used/left against the usable window, per-category tokens, last-turn and conversation cache hit rate, and offer manual compaction plus optional automatic compaction (off by default at 80%). At 100% sending is blocked with compact, clear-context, and new-conversation actions. Display history is never deleted by context operations, and workspace packages round-trip conversation data (ADR-0030).
+>
+> **Worktrees and background cards (0.1.7)**: Settings → Projects registers local git repositories on this machine. A new task can opt into a per-task worktree on `cowbot/<slug>` under `<repo>/.cowbot/worktrees`; the run's file, code, and command tools are rooted at the checkout, and task detail shows the branch, diff, and discard actions. Crew tasks share the submitted task through `Task.run_group`, and assignment/worktree events feed compact sidebar cards plus a Background panel with live status, progress, and finished runs. Worktree records and project paths stay local and are excluded from `.cowpkg`; merging a branch back or opening a pull request remains out of scope (ADR-0031).
+>
 > **Phase 1 status**: complete. The exit criteria below are met. Reproducible path: install a release → complete onboarding → add agents from a template → create a channel and a task in it → run the crew and decide an approval → inspect run and tool-call history → export the workspace, import it as a new local workspace, and switch between them. The CLI reads `cowbot.toml`, lists and creates channels and messages, and can attach a crew's tasks to a channel (ADR-0020). 0.1.x remains the current release line until Phase 2 work starts.
 
 ### 4.2 Phase 1 Exit Criteria
@@ -143,6 +147,26 @@ Delivered:
 | 3.6 | Scale and polish | Streaming responses; retries/backoff; rate limiting; token and cost accounting; performance and UX improvements |
 
 Each workstream can ship independently; prioritization will be decided with users after Phase 2.
+
+### 6.2 Deferred Product Directions (Not Started)
+
+**Product structure and vertical kits (planned, not started).** Work and Code are project profiles rather than global modes; domain presets use starter kits, capability packs, and security policies. Finance is the first vertical, targeting small private funds and independent analysts; medical research is a later candidate. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the decision record and scope.
+
+**Project model (planned for internal M6; not started).** Projects become the unit of work inside a workspace, with channels and tasks optionally scoped to one; Home is the unscoped view. The model is settled at the decision level; implementation is not scheduled. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the locked decisions and work breakdown.
+
+Locked decisions:
+
+- A workspace remains the data, tenant, and scheduling boundary; projects are context boundaries, not permission boundaries.
+- Home is `project_id = NULL` for channels and tasks. No implicit "General" project is created, and existing rows are not backfilled.
+- Agents stay workspace-wide with one direct conversation each; `project_agents` records which agents a project uses, and projects own group channels only.
+- Channel names are unique per project; Home is a separate namespace.
+- Archiving makes a project read-only without cancelling running work; hard deletion is limited to projects with no tasks or messages.
+- Mentions and task assignment reject agents outside the project team; removing a member keeps history and blocks new assignments.
+- Code projects bind one repository from the device-local registry, which is excluded from `.cowpkg` export.
+- The existing device-local git registry keeps its behavior but is renamed **Repositories**; **Project** means the work unit in this plan.
+- Workspace policy sets the enforced security floor; project settings may only tighten it.
+
+**Branded editions (deferred, not started).** Future distribution may build separate installers from the same codebase — for example CowBot Finance or CowBot Medical — each with its own application identity, data directory, update channel, compliance defaults, and support terms. This is deferred until a paying vertical customer requires a distinct procurement identity, update channel, or compliance package. Switching editions inside one installation is not planned; domain adaptation stays at runtime through project-level presets, capability packs, and security policies.
 
 ---
 

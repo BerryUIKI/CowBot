@@ -8,23 +8,43 @@ import type {
   ApprovalLevel,
   Assignment,
   AssignmentEvent,
+  AuditEvent,
   Channel,
   ChannelMessage,
   ClientSession,
+  CompactionOutcome,
+  ConversationContext,
   CowEvent,
+  ModelMetadata,
   ModelSettings,
   OnboardingState,
+  PermissionRule,
+  Project,
+  ProjectBranches,
   ProviderProtocol,
+  RuleDecision,
   Run,
+  SessionDecisionEntry,
   Task,
+  TaskOverviewEntry,
+  TaskWorktree,
+  TaskWorktreeDiff,
   TemplateDocument,
   ToolCallRecord,
   ToolDefinition,
+  WorkspacePolicy,
   WorkspaceSummary,
 } from "./types";
 
 export function getSession(): Promise<ClientSession> {
   return invoke<ClientSession>("get_session");
+}
+
+export function updateUserProfile(
+  name: string,
+  email: string,
+): Promise<ClientSession> {
+  return invoke<ClientSession>("update_user_profile", { name, email });
 }
 
 export function listChannels(): Promise<Channel[]> {
@@ -61,6 +81,37 @@ export function clearChannelMessages(channelId: string): Promise<number> {
 
 export function listMessages(channelId: string, limit = 200): Promise<ChannelMessage[]> {
   return invoke<ChannelMessage[]>("list_messages", { channelId, limit });
+}
+
+export function createConversation(
+  title: string | null,
+  agentId: string,
+): Promise<Channel> {
+  return invoke<Channel>("create_conversation", { title, agentId });
+}
+
+export function getConversationContext(channelId: string): Promise<ConversationContext> {
+  return invoke<ConversationContext>("get_conversation_context", { channelId });
+}
+
+export function updateConversationSettings(
+  channelId: string,
+  autoCompact: boolean,
+  compactThreshold: number,
+): Promise<ConversationContext> {
+  return invoke<ConversationContext>("update_conversation_settings", {
+    channelId,
+    autoCompact,
+    compactThreshold,
+  });
+}
+
+export function compactConversation(channelId: string): Promise<CompactionOutcome> {
+  return invoke<CompactionOutcome>("compact_conversation", { channelId });
+}
+
+export function clearConversationContext(channelId: string): Promise<number> {
+  return invoke<number>("clear_conversation_context", { channelId });
 }
 
 export function postMessage(
@@ -106,6 +157,7 @@ export function createTask(input: {
   assignee: string;
   channelId: string | null;
   approvalLevel: ApprovalLevel;
+  worktree: { projectId: string; baseBranch: string } | null;
 }): Promise<Task> {
   return invoke<Task>("create_task", {
     description: input.description,
@@ -113,11 +165,32 @@ export function createTask(input: {
     assignee: input.assignee,
     channelId: input.channelId,
     approvalLevel: input.approvalLevel,
+    worktree: input.worktree,
   });
 }
 
 export function listTasks(): Promise<Task[]> {
   return invoke<Task[]>("list_tasks");
+}
+
+export function listRunTasks(taskId: string): Promise<Task[]> {
+  return invoke<Task[]>("list_run_tasks", { taskId });
+}
+
+export function getTaskWorktree(taskId: string): Promise<TaskWorktree | null> {
+  return invoke<TaskWorktree | null>("get_task_worktree", { taskId });
+}
+
+export function taskWorktreeDiff(taskId: string): Promise<TaskWorktreeDiff> {
+  return invoke<TaskWorktreeDiff>("task_worktree_diff", { taskId });
+}
+
+export function discardTaskWorktree(taskId: string): Promise<TaskWorktree> {
+  return invoke<TaskWorktree>("discard_task_worktree", { taskId });
+}
+
+export function listTaskOverview(): Promise<TaskOverviewEntry[]> {
+  return invoke<TaskOverviewEntry[]>("list_task_overview");
 }
 
 export function runTask(taskId: string, approvalLevel: ApprovalLevel): Promise<void> {
@@ -150,6 +223,18 @@ export function cancelTask(taskId: string, reason: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId, reason });
 }
 
+export function archiveTask(taskId: string): Promise<Task> {
+  return invoke<Task>("archive_task", { taskId });
+}
+
+export function unarchiveTask(taskId: string): Promise<Task> {
+  return invoke<Task>("unarchive_task", { taskId });
+}
+
+export function approveTaskPlan(taskId: string): Promise<Task> {
+  return invoke<Task>("approve_task_plan", { taskId });
+}
+
 export function listAssignments(taskId: string): Promise<Assignment[]> {
   return invoke<Assignment[]>("list_assignments", { taskId });
 }
@@ -170,8 +255,67 @@ export function pendingApprovals(): Promise<Approval[]> {
   return invoke<Approval[]>("pending_approvals");
 }
 
-export function decideApproval(approvalId: string, approved: boolean): Promise<Approval> {
-  return invoke<Approval>("decide_approval", { approvalId, approved });
+export function decideApproval(
+  approvalId: string,
+  approved: boolean,
+  forSession = false,
+): Promise<Approval> {
+  return invoke<Approval>("decide_approval", { approvalId, approved, forSession });
+}
+
+export function getSessionDecisions(): Promise<SessionDecisionEntry[]> {
+  return invoke<SessionDecisionEntry[]>("session_decisions");
+}
+
+export function clearSessionDecisions(): Promise<void> {
+  return invoke<void>("clear_session_decisions");
+}
+
+export function listPermissionRules(): Promise<PermissionRule[]> {
+  return invoke<PermissionRule[]>("list_permission_rules");
+}
+
+export function createPermissionRule(
+  tool: string,
+  command: string | null,
+  decision: RuleDecision,
+): Promise<PermissionRule> {
+  return invoke<PermissionRule>("create_permission_rule", {
+    tool,
+    command,
+    decision,
+  });
+}
+
+export function setPermissionRuleEnabled(
+  ruleId: string,
+  enabled: boolean,
+): Promise<PermissionRule> {
+  return invoke<PermissionRule>("set_permission_rule_enabled", {
+    ruleId,
+    enabled,
+  });
+}
+
+export function deletePermissionRule(ruleId: string): Promise<void> {
+  return invoke<void>("delete_permission_rule", { ruleId });
+}
+
+export function getWorkspacePolicy(): Promise<WorkspacePolicy> {
+  return invoke<WorkspacePolicy>("get_workspace_policy");
+}
+
+export function setBypassCritical(
+  bypassCritical: WorkspacePolicy["bypass_critical"],
+): Promise<WorkspacePolicy> {
+  return invoke<WorkspacePolicy>("set_bypass_critical", { bypassCritical });
+}
+
+export function getAuditEvents(
+  limit = 200,
+  source: string | null = null,
+): Promise<AuditEvent[]> {
+  return invoke<AuditEvent[]>("list_audit_events", { limit, source });
 }
 
 export function getModelSettings(): Promise<ModelSettings> {
@@ -185,6 +329,7 @@ export function saveModelProvider(input: {
   baseUrl: string;
   models: string[];
   model: string;
+  modelMetadata: Record<string, ModelMetadata>;
   apiKey: string;
   clearApiKey: boolean;
 }): Promise<ModelSettings> {
@@ -196,6 +341,7 @@ export function saveModelProvider(input: {
       baseUrl: input.baseUrl,
       models: input.models,
       model: input.model,
+      modelMetadata: input.modelMetadata,
       apiKey: input.apiKey,
       clearApiKey: input.clearApiKey,
     },
@@ -208,6 +354,13 @@ export function deleteModelProvider(providerId: string): Promise<ModelSettings> 
 
 export function activateModelProvider(providerId: string | null): Promise<ModelSettings> {
   return invoke<ModelSettings>("activate_model_provider", { providerId });
+}
+
+export function setActiveModel(
+  providerId: string,
+  model: string,
+): Promise<ModelSettings> {
+  return invoke<ModelSettings>("set_active_model", { providerId, model });
 }
 
 export function testModelProvider(input: {
@@ -266,6 +419,22 @@ export function importWorkspace(path: string): Promise<void> {
 
 export function createWorkspace(name: string): Promise<void> {
   return invoke<void>("create_workspace", { name });
+}
+
+export function listProjects(): Promise<Project[]> {
+  return invoke<Project[]>("list_projects");
+}
+
+export function addProject(path: string): Promise<Project[]> {
+  return invoke<Project[]>("add_project", { path });
+}
+
+export function removeProject(projectId: string): Promise<Project[]> {
+  return invoke<Project[]>("remove_project", { projectId });
+}
+
+export function listProjectBranches(projectId: string): Promise<ProjectBranches> {
+  return invoke<ProjectBranches>("list_project_branches", { projectId });
 }
 
 export function getAppInfo(): Promise<AppInfo> {

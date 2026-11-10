@@ -178,6 +178,7 @@ enum MessageCommands {
 #[serde(rename_all = "kebab-case")]
 enum ApprovalLevelArg {
     Ask,
+    AcceptEdits,
     SafeAuto,
     PlanOnly,
     Trusted,
@@ -187,6 +188,7 @@ impl From<ApprovalLevelArg> for ApprovalLevel {
     fn from(value: ApprovalLevelArg) -> Self {
         match value {
             ApprovalLevelArg::Ask => ApprovalLevel::Ask,
+            ApprovalLevelArg::AcceptEdits => ApprovalLevel::AcceptEdits,
             ApprovalLevelArg::SafeAuto => ApprovalLevel::SafeAuto,
             ApprovalLevelArg::PlanOnly => ApprovalLevel::PlanOnly,
             ApprovalLevelArg::Trusted => ApprovalLevel::Trusted,
@@ -223,8 +225,15 @@ async fn import_package(input: PathBuf, settings: &Settings) -> anyhow::Result<(
     );
     println!("  exported by:  {}", manifest.exported_by.workspace_name);
     println!(
-        "  contents:     {} channels, {} messages, {} agents, {} tasks, {} runs",
-        summary.channels, summary.messages, summary.agents, summary.tasks, summary.runs
+        "  contents:     {} channels, {} messages, {} agents, {} tasks, {} runs, \
+         {} conversations, {} context entries",
+        summary.channels,
+        summary.messages,
+        summary.agents,
+        summary.tasks,
+        summary.runs,
+        summary.conversations,
+        summary.context_entries
     );
     Ok(())
 }
@@ -417,6 +426,7 @@ async fn reply_to_mentions(
     tools.register(Arc::new(ReadFileTool::new(None)));
     tools.register(Arc::new(WriteFileTool::new(None)));
 
+    let use_model_permissions = !dry_run && (api_key.is_some() || settings.base_url.is_some());
     let llm: Arc<dyn LlmProvider> = if dry_run || (api_key.is_none() && settings.base_url.is_none())
     {
         println!("Note: replying with the offline MockLlmProvider.");
@@ -439,6 +449,8 @@ async fn reply_to_mentions(
             ChannelTurnOptions {
                 approval_level: settings.approval.into(),
                 max_concurrency: settings.concurrency,
+                use_model_permissions,
+                platform_context: None,
             },
         )
         .await?;
@@ -554,13 +566,21 @@ async fn run_crew(
                 EventPayload::AgentThought { agent_id, thought } => {
                     println!("\n💭 [{}] Thought:\n{}", agent_id, thought.trim());
                 }
-                EventPayload::ToolCallRequested { agent_id, call } => {
+                EventPayload::ToolCallRequested {
+                    agent_id,
+                    task_id: _,
+                    call,
+                } => {
                     println!(
                         "\n🔧 [{}] Tool Call: {} (args: {})",
                         agent_id, call.name, call.arguments
                     );
                 }
-                EventPayload::ToolCallExecuted { agent_id, result } => {
+                EventPayload::ToolCallExecuted {
+                    agent_id,
+                    task_id: _,
+                    result,
+                } => {
                     let status = if result.success { "SUCCESS" } else { "FAILED" };
                     println!(
                         "⚡ [{}] Tool Result [{}]:\n{}",
@@ -579,6 +599,7 @@ async fn run_crew(
                     approval,
                     risk,
                     reason,
+                    ..
                 } => {
                     println!("\n🔐 Approval required: {}", reason);
                     println!(
@@ -612,6 +633,7 @@ async fn run_crew(
     tools.register(Arc::new(WriteFileTool::new(None)));
 
     // Initialize LLM Provider
+    let use_model_permissions = !dry_run && (api_key.is_some() || settings.base_url.is_some());
     let llm: Arc<dyn LlmProvider> = if dry_run || (api_key.is_none() && settings.base_url.is_none())
     {
         println!("Note: Running in dry-run mode using MockLlmProvider.");
@@ -687,6 +709,8 @@ async fn run_crew(
                 approval_level: settings.approval.into(),
                 channel_id,
                 max_concurrency: settings.concurrency,
+                use_model_permissions,
+                capture_plan_task: None,
             },
         )
         .await?;

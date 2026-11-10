@@ -15,8 +15,11 @@ cowbot-llm = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 cowbot-tools = { workspace = true }
+tempfile = { workspace = true }

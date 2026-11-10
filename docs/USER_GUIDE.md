@@ -107,7 +107,8 @@ automatically; **Settings → Workspace** manages the rest.
 - **Switch** — selects another registered workspace and restarts CowBot.
 - **Export workspace** — writes the active workspace to a `.cowpkg` package.
   Exported packages contain channels, messages, agents, templates, tasks, runs,
-  and audit events with SHA-256 checksums; credentials are never included.
+  audit events, and conversation participants, settings, and context branches
+  with SHA-256 checksums; credentials are never included.
 - **Import package** — verifies a `.cowpkg` package, creates a new workspace
   database named `<name> (imported)`, registers it, and restarts into it. Import
   never merges with or overwrites existing data.
@@ -123,6 +124,44 @@ app data directory:
 The default database is `cowbot.db`; imported or created workspaces live under
 `workspaces/`. Deleting a database file removes that workspace from the switcher
 on the next start.
+
+## Projects and worktrees
+
+A **project** is a local git repository that CowBot may run tasks in. Projects
+are registered per machine: their paths live in the desktop `config.json` and
+are never included in `.cowpkg` packages.
+
+- **Register a repository** in **Settings → Projects** with **Add folder**.
+  Choose any folder inside the repository; CowBot resolves the work-tree root,
+  derives the project name from the folder, and shows the current branch.
+  Duplicate folders and folders outside git are rejected with an explanation.
+- **Remove** deletes only the registry entry; files and existing worktrees on
+  disk are untouched. A folder that is no longer available is marked
+  **Missing** without failing the list.
+- **Run a task in a worktree**: in **Tasks → New task**, enable **Run in a git
+  worktree**, pick the project and a base branch (the project's current branch
+  by default), and create the task. When you press **Run**, CowBot creates
+  `<repo>/.cowbot/worktrees/<slug>` on branch `cowbot/<slug>-<id>` and roots
+  the agents' file, code, and command tools there. The checkout is created from
+  the base branch at run time, so a queued task does not hold a stale checkout.
+  `.cowbot/` is added to the repository's local `.git/info/exclude`, not the
+  tracked `.gitignore`.
+- The branch is **not merged automatically**. Inspect it with git or from the
+  task detail, then merge it in your own tooling.
+- **Inspect a worktree** in the task detail's Worktree card: status, branch
+  (with **Copy**), base branch, project, path, and creation time.
+  **Open folder** reveals the checkout; **View diff** shows `git status`, the
+  diffstat, and the patch (up to 256 KiB, with a truncation notice).
+- **Discard** removes the checkout folder and the branch after a confirmation.
+  It is disabled while the task is running and loses uncommitted changes. The
+  record stays as **Removed**. A worktree whose folder disappeared shows
+  **Missing** and can be discarded to clean up its record; create a new task to
+  run in a worktree again.
+- If creating the worktree fails (not a repository, unknown base branch,
+  existing branch or path, git not installed), the run is rejected with the git
+  error and the task stays pending.
+- Worktrees are only created for tasks that requested a project. Channel turns
+  and tasks without a project keep using the shared app-data workspace.
 
 ## Team
 
@@ -143,8 +182,13 @@ from templates; a standalone agent editor is not part of this release.
   `list_agents`, `list_templates`). Adding the Main Assistant template is the
   alternative.
 - Agent actions that change the workspace ask for approval under the
-  **Ask** and **Safe auto** policies. The approval card shows the tool name,
+  **Manual** and **Auto** policies. The approval card shows the tool name,
   arguments, risk, and reason.
+- The Main Assistant can target a registered project: `create_task` accepts
+  `project` and an optional `base_branch`, validates them, and requests a
+  worktree for the queued task. Its environment block lists registered projects
+  with their current branches, and the approval card shows the project and base
+  branch arguments before you approve.
 
 ## Agents, channels, and tasks
 
@@ -153,6 +197,12 @@ from templates; a standalone agent editor is not part of this release.
   that agent directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
+- **Conversations** — the **Conversations** section holds user-created
+  single-agent sessions. Choose **New conversation**, give it a title, and pick
+  an agent. Unlike an agent contact, a conversation keeps its own model context
+  and a fixed model; you can have several conversations with the same agent, and
+  the header shows a context meter (see below). Conversations can be pinned,
+  renamed, deleted, compacted, and cleared like other sidebar rows.
 - **Channels** — group rooms sit below the agents. Create one with **New
   channel** or the **+** button, post messages, and follow the timeline. Names
   must be unique in the workspace, case-insensitively. Mention an agent by name
@@ -161,14 +211,16 @@ from templates; a standalone agent editor is not part of this release.
   channel header, and `@team` (also `@all`, `@everyone`, `@here`) addresses all
   of them. Matching is case-insensitive; an unknown name produces a system
   notice listing the agents that exist.
-- **Manage conversations** — right-click an agent or channel row (or use its
-  **⋯** button) to pin it to the top, rename a channel, delete a group channel,
-  or clear an agent conversation's history. Deleting a channel deletes its
-  messages; tasks keep their history but are no longer linked to that channel.
-  Clearing a conversation keeps the agent and removes only its messages. Agent
+- **Manage conversations** — right-click an agent, conversation, or channel row
+  (or use its **⋯** button) to pin it to the top, rename it, delete a group
+  channel or conversation, clear an agent conversation's history, or compact and
+  clear a user-created conversation's context. Deleting a channel or
+  conversation deletes its messages (and, for a conversation, its context);
+  tasks keep their history but are no longer linked to that channel. Clearing an
+  agent conversation keeps the agent and removes only its messages. Agent
   conversations cannot be deleted from the channel list.
-- **Search** — the field above the sidebar list filters agents, channels, and
-  tasks by name.
+- **Search** — the field above the sidebar list filters agents, conversations,
+  channels, and tasks by name.
 - **Rich answers** — agent and user messages render Markdown: headings, lists,
   tables, code blocks, and links. Links open in your system browser. A fenced
   `html` code block appears as an **HTML preview** card with **Preview**,
@@ -176,37 +228,108 @@ from templates; a standalone agent editor is not part of this release.
   CSS and JavaScript but blocks network access, external images, form
   submission, and access to the app. Use it for interactive results such as
   forms, calculators, or small dashboards.
-- **Approval** — the dropdown in the conversation header sets the approval
-  policy for answers in that conversation. It uses the same policies as tasks,
-  so a risky tool call raised while an agent answers appears in **Approvals**.
+- **Approval** — the mode control in the composer footer opens the five-mode
+  menu: Auto, Manual, Accept edits, Plan, and Bypass permissions. It applies
+  to answers in that conversation and uses the same policies as tasks, so a
+  risky tool call raised while an agent answers appears in **Approvals**.
+  Settings → Approvals also manages workspace allow / ask / deny rules and
+  session decisions; Settings → Audit filters decisions by source.
 - A direct message or a mention becomes a task for that agent: it is listed in
   **Tasks** with its assignment, run, and tool calls, and it can be cancelled
   there. The answer is also posted back to the conversation as a message from
   that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
-  optional channel, and an approval policy. Select the task and choose **Run**
-  to execute the Planner → Coder → Reviewer crew. The task detail shows
-  assignments, assignment events, runs, and tool calls.
+  optional channel, an approval policy, and optionally a project worktree.
+  Select the task and choose **Run** to execute the Planner → Coder → Reviewer
+  crew. The submitted task becomes the run's owning task: its detail shows the
+  run tasks, assignments, assignment events, runs, tool calls, and the worktree
+  when one exists.
+- **Crew runs** create three related tasks (Planner, Coder, Reviewer) under the
+  task you ran.
 - **Cancel** stops a running task.
 
 Progress refreshes from live events; all history persists across restarts.
+
+### Background tasks
+
+Running work is visible without opening Tasks.
+
+- **Sidebar cards** — under a group channel, up to two compact cards show that
+  channel's active runs: status dot, title, latest activity (`Reading …`,
+  `Running: …`, or the tool name), a worktree branch chip, and elapsed time.
+  Select a card to open the owning task.
+- **Background panel** — the **Background** toggle in the sidebar footer shows
+  the active run count and opens a right-side panel. Each run shows its status,
+  elapsed time, an `x/y` progress bar, expandable assignment rows with the
+  responsible agent and latest detail, and an **Up next** line for queued
+  steps. **Finished** is collapsed by default and lists the last 20 runs with an
+  outcome snippet and duration; select one to open its task. The panel remembers
+  whether it was open.
+- Cards update from assignment, tool-call, task, and worktree events. Below a
+  window width of about 1180 px the panel opens as an overlay so the main pane
+  keeps its width.
 
 > Answers use the active model provider. With no provider configured the app
 > falls back to the offline mock model, which only echoes the prompt; with a
 > provider that cannot answer, the channel shows a system notice with the error
 > instead of staying silent.
 
+### Conversation context
+
+A user-created conversation keeps an independent, append-only context for its
+agent. The visible timeline and the model context are separate: clearing or
+compacting the context never deletes messages.
+
+- The **context ring** in the header shows how much of the model's usable
+  context window is occupied. Hover it for percent used and left, the token
+  ratio, and a breakdown into system prompt, tool schemas, history, and the
+  latest message. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is
+  a danger colour, and 100% blocks sending.
+- Percentages need a context window. Set **Context window** (and optionally
+  **Max output**) for the model in **Settings → Model**. Without it the ring
+  shows absolute tokens only.
+- **Cache hit rate** for the last turn and the whole conversation comes from
+  the usage the provider reports. Providers without prompt caching show no
+  cached tokens.
+- **Compact now** summarizes older context entries into one summary and stops
+  sending the summarized entries; recent turns stay verbatim. A system notice in
+  the timeline reports the token change, and the original messages remain
+  visible.
+- **Compact automatically** is off by default. When enabled, CowBot compacts
+  before a send if the next message would cross the configured percentage
+  (80% by default) of the usable window.
+- **Clear context** stops sending every earlier message but keeps them in the
+  timeline. **Delete conversation** removes the conversation, its messages, and
+  its context. At 100% the composer is blocked and offers compact, clear, and
+  new-conversation actions.
+- The fixed model is recorded when the conversation is created; changing the
+  active provider in Settings does not switch existing conversations. A
+  conversation whose provider was deleted falls back to the active provider
+  with its recorded model name.
+
 ### Approval policies
 
-- **Ask** — prompt for risky tool calls (default for interactive use).
-- **Safe auto** — automatically approve low-risk reads while asking for
-  higher-risk actions.
-- **Plan only** — deny actions that would modify the machine.
-- **Trusted** — approve everything except critical actions.
+- **Auto** — approve read-only and low-risk tools automatically; medium and high risk are decided by the active model's permission evaluator, which falls back to asking you when it is unsure or unavailable.
+- **Manual** — approve read-only tools automatically; ask before anything that
+  changes state (default for interactive use).
+- **Accept edits** — run workspace file edits automatically; other tools
+  follow Manual.
+- **Plan** — run only read-only tools and deny everything else. The agent is
+  asked to answer with a plan; it is stored with the task, and **Approve plan
+  and continue** re-runs that task in Manual mode with the approved plan as
+  context. Plan mode also applies to conversation and channel turns.
+- **Bypass permissions** — run every tool call. Critical-risk calls follow
+  **Settings → Approvals → Critical calls under Bypass**: Allow (default), Ask
+  with a red approval card, or Block. Destructive channel deletion always asks,
+  even under Bypass. Selecting Bypass warns every time, and the mode control
+  stays red while it is active.
 
-Approvals appear in **Approvals**. Each decision is recorded in the audit log.
-Approval is a guardrail, not OS isolation: the subprocess sandbox runs commands
-with your user permissions, so treat model-generated commands as untrusted.
+Approvals appear in **Approvals**. Workspace rules in Settings → Approvals are
+evaluated before the model evaluator: Deny wins over Ask, and Ask over Allow.
+Each decision records its source in the audit log, and Settings → Audit filters
+by rule, model, session, human, policy, or system. Approval is a guardrail, not
+OS isolation: the subprocess sandbox runs commands with your user permissions,
+so treat model-generated commands as untrusted.
 
 ## Data and backups
 
@@ -255,7 +378,7 @@ takes flags and environment variables.
 db = "cowbot.db"
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
-approval = "ask"       # ask | safe-auto | plan-only | trusted
+approval = "ask"       # ask | accept-edits | safe-auto | plan-only | trusted
 concurrency = 4        # cross-root concurrency limit
 ```
 
@@ -282,7 +405,7 @@ cowbot import --input my-workspace.cowpkg --db other.db
 - `--dry-run` forces the offline mock model.
 - `--model`, `--base-url` (`OPENAI_BASE_URL`), and `--api-key`
   (`OPENAI_API_KEY`) configure the OpenAI Chat Completions endpoint.
-- `--approval` accepts `ask`, `safe-auto`, `plan-only`, and `trusted`.
+- `--approval` accepts `ask`, `accept-edits`, `safe-auto`, `plan-only`, and `trusted`.
 - `--concurrency` bounds how many root assignments run at the same time.
 - `run --channel <id>` stores the crew's tasks in that channel.
 - `message post --wait` lets the agents mentioned in the message answer before
@@ -340,11 +463,20 @@ reporting, see [SECURITY.md](../SECURITY.md).
 - Workspace tools are available in the desktop app only; the CLI's channel
   turns do not expose them. `create_task` queues a pending task and does not run
   the assigned agent automatically.
+- Worktrees are per task run and are not merged back from CowBot: there is no
+  merge or pull-request action, and deleting a task does not delete its
+  worktree. Registered project paths and worktree records stay on one machine
+  and are not part of workspace packages.
 - Agents cannot be deleted from the UI; edit their name, role, or tools
   instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
-- No streaming responses, retries, rate limiting, or token accounting.
+- User-created conversations are single-agent in this release; group
+  conversations and mention routing arrive in a later milestone.
+- No streaming responses, retries, or rate limiting. Token usage is recorded per
+  model call, but there are no cost or billing views.
+- Context occupancy and compaction are estimated from a character heuristic
+  between calls; provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
 - Workspace deletion and renaming are not available in the UI.
 - Builds are unsigned; macOS may require approval again after an update.

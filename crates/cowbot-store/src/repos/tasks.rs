@@ -14,22 +14,34 @@ use crate::store::Store;
 #[derive(sqlx::FromRow)]
 struct TaskRow {
     id: String,
+    channel_id: Option<String>,
+    title: String,
     description: String,
     expected_output: String,
     assigned_agent: Option<String>,
     context_tasks: String,
+    run_group: Option<String>,
     status: String,
+    archived_at: Option<String>,
+    plan: Option<String>,
+    plan_approved: i64,
 }
 
 impl TaskRow {
     fn into_domain(self) -> CowResult<Task> {
         Ok(Task {
             id: TaskId(self.id),
+            title: self.title,
             description: self.description,
             expected_output: self.expected_output,
             assigned_agent: self.assigned_agent.map(AgentId),
+            channel_id: self.channel_id.map(ChannelId::new),
             context_tasks: parse_json(&self.context_tasks, "tasks.context_tasks")?,
+            run_group: self.run_group.map(TaskId),
             status: parse_json(&self.status, "tasks.status")?,
+            archived: self.archived_at.is_some(),
+            plan: self.plan,
+            plan_approved: self.plan_approved != 0,
         })
     }
 }
@@ -163,18 +175,28 @@ impl Store {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO tasks
-                (id, workspace_id, channel_id, description, expected_output,
-                 assigned_agent, context_tasks, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (id, workspace_id, channel_id, title, description, expected_output,
+                 assigned_agent, context_tasks, run_group, status, archived_at, plan, plan_approved,
+                 created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id.0)
         .bind(&workspace_id.0)
-        .bind(channel_id.map(|channel| channel.0.clone()))
+        .bind(
+            channel_id
+                .or(task.channel_id.as_ref())
+                .map(|channel| channel.0.clone()),
+        )
+        .bind(&task.title)
         .bind(&task.description)
         .bind(&task.expected_output)
         .bind(task.assigned_agent.as_ref().map(|agent| agent.0.clone()))
         .bind(serde_json::to_string(&task.context_tasks)?)
+        .bind(task.run_group.as_ref().map(|task_id| task_id.0.clone()))
         .bind(serde_json::to_string(&task.status)?)
+        .bind(task.archived.then(|| now.clone()))
+        .bind(&task.plan)
+        .bind(i64::from(task.plan_approved))
         .bind(&now)
         .bind(&now)
         .execute(self.pool())
@@ -185,8 +207,9 @@ impl Store {
 
     pub async fn get_task(&self, id: &TaskId) -> CowResult<Option<Task>> {
         let row = sqlx::query_as::<_, TaskRow>(
-            "SELECT id, description, expected_output, assigned_agent,
-                    context_tasks, status FROM tasks WHERE id = ?",
+            "SELECT id, channel_id, title, description, expected_output, assigned_agent,
+                    context_tasks, run_group, status, archived_at, plan, plan_approved
+             FROM tasks WHERE id = ?",
         )
         .bind(&id.0)
         .fetch_optional(self.pool())
@@ -208,8 +231,8 @@ impl Store {
 
     pub async fn list_tasks(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
-            "SELECT id, description, expected_output, assigned_agent,
-                    context_tasks, status
+            "SELECT id, channel_id, title, description, expected_output, assigned_agent,
+                    context_tasks, run_group, status, archived_at, plan, plan_approved
              FROM tasks WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(&workspace_id.0)
@@ -217,6 +240,55 @@ impl Store {
         .await
         .map_err(db)?;
         rows.into_iter().map(TaskRow::into_domain).collect()
+    }
+
+    /// Tasks created by one run, in creation order.
+    pub async fn list_tasks_by_run_group(&self, run_group: &TaskId) -> CowResult<Vec<Task>> {
+        let rows = sqlx::query_as::<_, TaskRow>(
+            "SELECT id, channel_id, title, description, expected_output, assigned_agent,
+                    context_tasks, run_group, status, archived_at, plan, plan_approved
+             FROM tasks WHERE run_group = ? ORDER BY created_at",
+        )
+        .bind(&run_group.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(TaskRow::into_domain).collect()
+    }
+
+    pub async fn set_task_archived(&self, id: &TaskId, archived: bool) -> CowResult<()> {
+        let archived_at = archived.then(|| Utc::now().to_rfc3339());
+        sqlx::query("UPDATE tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
+            .bind(archived_at)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// Store a Plan-mode artifact and clear any previous approval.
+    pub async fn set_task_plan(&self, id: &TaskId, plan: &str) -> CowResult<()> {
+        sqlx::query("UPDATE tasks SET plan = ?, plan_approved = 0, updated_at = ? WHERE id = ?")
+            .bind(plan)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// Mark the stored plan approved so the task can continue in Manual mode.
+    pub async fn approve_task_plan(&self, id: &TaskId) -> CowResult<()> {
+        sqlx::query("UPDATE tasks SET plan_approved = 1, updated_at = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
     }
 
     pub async fn create_run(&self, run: &Run) -> CowResult<()> {
@@ -328,6 +400,29 @@ impl Store {
         rows.into_iter().map(ToolCallRow::into_domain).collect()
     }
 
+    /// Newest tool call in a run, including the owning task's crew tasks.
+    pub async fn latest_tool_call_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> CowResult<Option<ToolCallRecord>> {
+        let row = sqlx::query_as::<_, ToolCallRow>(
+            "SELECT tc.id, tc.run_id, tc.name, tc.arguments, tc.result, tc.approved_by,
+                    tc.created_at
+             FROM tool_calls tc
+             JOIN runs r ON r.id = tc.run_id
+             JOIN tasks t ON t.id = r.task_id
+             WHERE t.id = ? OR t.run_group = ?
+             ORDER BY tc.created_at DESC
+             LIMIT 1",
+        )
+        .bind(&task_id.0)
+        .bind(&task_id.0)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        row.map(ToolCallRow::into_domain).transpose()
+    }
+
     pub async fn create_approval(&self, approval: &Approval) -> CowResult<()> {
         sqlx::query(
             "INSERT INTO approvals
@@ -389,6 +484,18 @@ impl Store {
         let rows = sqlx::query_as::<_, ApprovalRow>(
             "SELECT id, task_id, tool_call_id, status, decided_by, decided_at, created_at
              FROM approvals WHERE task_id = ? AND status = 'pending' ORDER BY created_at",
+        )
+        .bind(&task_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(ApprovalRow::into_domain).collect()
+    }
+
+    pub async fn list_approvals_for_task(&self, task_id: &TaskId) -> CowResult<Vec<Approval>> {
+        let rows = sqlx::query_as::<_, ApprovalRow>(
+            "SELECT id, task_id, tool_call_id, status, decided_by, decided_at, created_at
+             FROM approvals WHERE task_id = ? ORDER BY created_at",
         )
         .bind(&task_id.0)
         .fetch_all(self.pool())

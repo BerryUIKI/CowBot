@@ -3,6 +3,7 @@ use std::sync::Arc;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
+use cowbot_core::approval::ApprovalStatus;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::error::{CowError, CowResult};
@@ -14,7 +15,9 @@ use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
 use crate::channels::ChannelService;
+use crate::conversations::ConversationService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::session_decisions::SessionDecisions;
 
 /// How many channel messages are used as conversation context for one turn.
 const HISTORY_LIMIT: u32 = 20;
@@ -26,6 +29,11 @@ pub struct ChannelTurnOptions {
     pub approval_level: ApprovalLevel,
     /// Maximum number of agents that may run at the same time.
     pub max_concurrency: usize,
+    /// Let Auto mode ask the active model for permission decisions.
+    pub use_model_permissions: bool,
+    /// Extra environment text appended to the platform context, for example
+    /// registered projects the desktop can target with workspace tools.
+    pub platform_context: Option<String>,
 }
 
 impl Default for ChannelTurnOptions {
@@ -33,6 +41,8 @@ impl Default for ChannelTurnOptions {
         Self {
             approval_level: ApprovalLevel::Ask,
             max_concurrency: 4,
+            use_model_permissions: false,
+            platform_context: None,
         }
     }
 }
@@ -66,15 +76,29 @@ pub struct ChannelAgentService {
     store: Store,
     workspace_id: WorkspaceId,
     channels: ChannelService,
+    conversations: ConversationService,
+    session_decisions: Option<Arc<SessionDecisions>>,
 }
 
 impl ChannelAgentService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
         Self {
+            conversations: ConversationService::new(
+                store.clone(),
+                bus.clone(),
+                workspace_id.clone(),
+            ),
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
+            session_decisions: None,
         }
+    }
+
+    pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
+        self.session_decisions = decisions.clone();
+        self.conversations = self.conversations.with_session_decisions(decisions);
+        self
     }
 
     /// Answer `message` on behalf of every agent it mentions.
@@ -97,6 +121,16 @@ impl ChannelAgentService {
                 "channel '{channel_id}' was not found"
             )));
         };
+
+        // User-created conversations have their own participant set, fixed
+        // model, and append-only context branch.
+        if channel.is_conversation() {
+            return self
+                .conversations
+                .reply(channel_id, message, llm, tools, options)
+                .await;
+        }
+
         let agents = self.store.list_agents(&self.workspace_id).await?;
         let direct = channel.agent_id.is_some();
 
@@ -181,11 +215,15 @@ impl ChannelAgentService {
             self.workspace_id.clone(),
             options.max_concurrency,
         )
-        .with_scope();
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(self.session_decisions.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
             max_concurrency: options.max_concurrency,
+            use_model_permissions: options.use_model_permissions,
+            capture_plan_task: None,
         };
 
         // History excludes this turn's own notices, so an "@Nobody" notice
@@ -193,16 +231,20 @@ impl ChannelAgentService {
         let history = self.render_history(&channel, message, &agents).await?;
 
         let mut tasks = Vec::new();
-        let platform = Self::platform_context(&agents);
+        let platform = Self::platform_context(&agents, options.platform_context.as_deref());
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
             let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
+            let mut task_options = run_options.clone();
+            if options.approval_level == ApprovalLevel::PlanOnly {
+                task_options.capture_plan_task = Some(task.id.clone());
+            }
             scheduler
                 .enqueue(
                     &task,
                     requester.clone(),
                     AssignmentOrigin::User,
-                    &run_options,
+                    &task_options,
                 )
                 .await?;
             tasks.push(task.id);
@@ -225,7 +267,7 @@ impl ChannelAgentService {
     }
 
     /// Environment shared by every channel turn.
-    fn platform_context(agents: &[AgentProfile]) -> String {
+    pub(crate) fn platform_context(agents: &[AgentProfile], extra: Option<&str>) -> String {
         let mut roster = agents
             .iter()
             .take(20)
@@ -237,6 +279,9 @@ impl ChannelAgentService {
         if roster.is_empty() {
             roster.push("- (no agents yet)".to_string());
         }
+        let extra = extra
+            .map(|extra| format!("\n\n{extra}"))
+            .unwrap_or_default();
 
         format!(
             "Environment: you are running inside CowBot, a local desktop workspace for a \
@@ -244,15 +289,18 @@ impl ChannelAgentService {
              Workspace agents:\n{roster}\n\n\
              Workspace actions (only when enabled for you): create_channel creates a group \
              channel; create_task queues work for another agent but does not run it; \
-             instantiate_team adds agents from a template; list_agents and list_templates \
-             inspect the workspace. Deleting channels or agents is a UI action you cannot perform.\n\n\
+             instantiate_team adds agents from a template; list_agents, list_channels, and \
+             list_templates inspect the workspace. delete_channel deletes a group channel \
+             and always requires human approval; agent direct conversations cannot be \
+             deleted. Deleting agents is a UI action you cannot perform.\n\n\
              Rendering: normal answers use Markdown. For an interactive interface, put a \
              complete HTML document in a ```html code block; it runs in a sandbox with inline \
              CSS and JavaScript but no network access, and it cannot send messages back.\n\n\
              Rules: reply in the language of the latest user message. Do not invent or refer to \
              external products such as Slack, Discord, Teams, or Feishu. If a request needs an \
-             action you cannot perform, explain the matching CowBot UI action plainly.",
+             action you cannot perform, explain the matching CowBot UI action plainly.{extra}",
             roster = roster.join("\n"),
+            extra = extra,
         )
     }
 
@@ -304,6 +352,8 @@ impl ChannelAgentService {
             description,
             "A concise reply addressed to the user, ready to post in the channel.",
         )
+        .with_title(message.content.lines().next().unwrap_or_default())
+        .with_channel(channel.id.clone())
         .assign_to(agent.id.clone())
     }
 
@@ -325,8 +375,22 @@ impl ChannelAgentService {
             TaskStatus::Completed { output } => {
                 let content = output.trim();
                 if content.is_empty() {
-                    self.post_notice(channel, &format!("{name} finished without a reply."))
+                    let approvals = self.store.list_approvals_for_task(&task.id).await?;
+                    let expired = approvals
+                        .iter()
+                        .any(|approval| approval.status == ApprovalStatus::Expired);
+                    if expired {
+                        self.post_notice(
+                            channel,
+                            &format!(
+                                "{name} did not reply because the approval request expired before a decision."
+                            ),
+                        )
                         .await?;
+                    } else {
+                        self.post_notice(channel, &format!("{name} finished without a reply."))
+                            .await?;
+                    }
                 } else {
                     self.channels
                         .post_message(&channel.id, Sender::Agent(assignee), content.to_string())

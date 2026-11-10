@@ -4,10 +4,19 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::task::Task;
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolCallRecorder, ToolGate};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder};
+use cowbot_llm::{ChatCompletionRequest, ChatMessage, ChatRole, LlmProvider};
 use cowbot_tools::ToolRegistry;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// Receives the assistant and tool messages an agent appends while solving a
+/// task. Conversation turns use it to mirror the exchange into an append-only
+/// context branch (ADR-0030).
+#[async_trait::async_trait]
+pub trait ConversationRecorder: Send + Sync {
+    async fn record_message(&self, message: &ChatMessage) -> CowResult<()>;
+}
 
 /// An active agent runtime instance backed by an LLM provider and tool registry.
 pub struct AgentInstance {
@@ -17,6 +26,9 @@ pub struct AgentInstance {
     pub model: String,
     tool_gate: Option<Arc<dyn ToolGate>>,
     tool_recorder: Option<Arc<dyn ToolCallRecorder>>,
+    usage_recorder: Option<Arc<dyn LlmUsageRecorder>>,
+    conversation_recorder: Option<Arc<dyn ConversationRecorder>>,
+    mode_instruction: Option<String>,
 }
 
 impl AgentInstance {
@@ -33,6 +45,9 @@ impl AgentInstance {
             model: model.into(),
             tool_gate: None,
             tool_recorder: None,
+            usage_recorder: None,
+            conversation_recorder: None,
+            mode_instruction: None,
         }
     }
 
@@ -52,6 +67,27 @@ impl AgentInstance {
         self.tool_recorder = None;
     }
 
+    pub fn set_usage_recorder(&mut self, recorder: Option<Arc<dyn LlmUsageRecorder>>) {
+        self.usage_recorder = recorder;
+    }
+
+    pub fn clear_usage_recorder(&mut self) {
+        self.usage_recorder = None;
+    }
+
+    pub fn set_conversation_recorder(&mut self, recorder: Option<Arc<dyn ConversationRecorder>>) {
+        self.conversation_recorder = recorder;
+    }
+
+    pub fn clear_conversation_recorder(&mut self) {
+        self.conversation_recorder = None;
+    }
+
+    /// Add a mode-specific system instruction, for example Plan mode.
+    pub fn set_mode_instruction(&mut self, instruction: Option<String>) {
+        self.mode_instruction = instruction;
+    }
+
     pub fn id(&self) -> &AgentId {
         &self.profile.id
     }
@@ -67,14 +103,11 @@ impl AgentInstance {
         context_outputs: &[String],
         bus: &EventBus,
     ) -> CowResult<String> {
-        info!(
-            agent = %self.profile.name,
-            task_id = %task.id,
-            "Agent starting task execution"
-        );
-
         let system_prompt = self.profile.build_system_prompt();
         let mut messages = vec![ChatMessage::system(system_prompt)];
+        if let Some(instruction) = &self.mode_instruction {
+            messages.push(ChatMessage::system(instruction.clone()));
+        }
 
         // Inject prerequisite context if any exists
         let mut prompt = format!(
@@ -90,6 +123,50 @@ impl AgentInstance {
         }
 
         messages.push(ChatMessage::user(prompt));
+        self.run_loop(task, messages, bus).await
+    }
+
+    /// Executes a task from a caller-assembled message list.
+    ///
+    /// Conversation turns pass the system prompt plus the active context branch
+    /// here, so the model sees an append-only history instead of one rendered
+    /// transcript (ADR-0030).
+    pub async fn execute_messages(
+        &mut self,
+        task: &Task,
+        mut messages: Vec<ChatMessage>,
+        bus: &EventBus,
+    ) -> CowResult<String> {
+        if messages.is_empty() {
+            return Err(CowError::Agent(
+                "a task needs at least one message to execute".to_string(),
+            ));
+        }
+        if let Some(instruction) = &self.mode_instruction {
+            let insert_at = if messages
+                .first()
+                .is_some_and(|message| message.role == ChatRole::System)
+            {
+                1
+            } else {
+                0
+            };
+            messages.insert(insert_at, ChatMessage::system(instruction.clone()));
+        }
+        self.run_loop(task, messages, bus).await
+    }
+
+    async fn run_loop(
+        &mut self,
+        task: &Task,
+        mut messages: Vec<ChatMessage>,
+        bus: &EventBus,
+    ) -> CowResult<String> {
+        info!(
+            agent = %self.profile.name,
+            task_id = %task.id,
+            "Agent starting task execution"
+        );
 
         let tool_definitions = self.tools.definitions_for(&self.profile.tools);
 
@@ -113,6 +190,22 @@ impl AgentInstance {
 
             let response = self.llm.chat_complete(&req).await?;
 
+            if let Some(recorder) = &self.usage_recorder {
+                let call = LlmCallUsage {
+                    model: self.model.clone(),
+                    call_kind: LlmCallKind::Agent,
+                    usage: response.usage.clone(),
+                    raw_usage: response.raw_usage.clone(),
+                };
+                if let Err(error) = recorder.record_llm_call(&call).await {
+                    warn!(
+                        agent = %self.profile.name,
+                        error = %error,
+                        "Failed to record LLM usage"
+                    );
+                }
+            }
+
             // If the model produced thought/text, publish to event bus
             if let Some(content) = &response.content {
                 if !content.trim().is_empty() {
@@ -129,6 +222,11 @@ impl AgentInstance {
                 let final_output = response
                     .content
                     .unwrap_or_else(|| "Task completed without output".to_string());
+                if let Some(recorder) = &self.conversation_recorder {
+                    recorder
+                        .record_message(&ChatMessage::assistant(final_output.clone()))
+                        .await?;
+                }
                 info!(
                     agent = %self.profile.name,
                     task_id = %task.id,
@@ -141,6 +239,9 @@ impl AgentInstance {
             let mut assistant_msg =
                 ChatMessage::assistant(response.content.clone().unwrap_or_default());
             assistant_msg.tool_calls = Some(response.tool_calls.clone());
+            if let Some(recorder) = &self.conversation_recorder {
+                recorder.record_message(&assistant_msg).await?;
+            }
             messages.push(assistant_msg);
 
             // Execute each tool call and emit events to the bus
@@ -153,6 +254,7 @@ impl AgentInstance {
 
                 bus.publish(Event::new(EventPayload::ToolCallRequested {
                     agent_id: self.profile.id.clone(),
+                    task_id: task.id.clone(),
                     call: tool_call.clone(),
                 }));
 
@@ -184,6 +286,7 @@ impl AgentInstance {
 
                 bus.publish(Event::new(EventPayload::ToolCallExecuted {
                     agent_id: self.profile.id.clone(),
+                    task_id: task.id.clone(),
                     result: tool_res.clone(),
                 }));
 
@@ -199,7 +302,11 @@ impl AgentInstance {
                     format!("Error: {}", tool_res.error.unwrap_or_default())
                 };
 
-                messages.push(ChatMessage::tool(tool_output, call.id));
+                let tool_message = ChatMessage::tool(tool_output, call.id);
+                if let Some(recorder) = &self.conversation_recorder {
+                    recorder.record_message(&tool_message).await?;
+                }
+                messages.push(tool_message);
             }
         }
 

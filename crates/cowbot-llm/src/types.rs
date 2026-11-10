@@ -1,4 +1,5 @@
 use cowbot_core::tool::ToolDefinition;
+use cowbot_core::usage::TokenUsage;
 use serde::{Deserialize, Serialize};
 
 /// Role in a chat completion interaction.
@@ -91,4 +92,10 @@ pub struct ChatCompletionResponse {
     pub content: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,
     pub finish_reason: Option<String>,
+    /// Normalized usage, or `None` when the provider omitted it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
+    /// The provider's original usage object, for diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_usage: Option<serde_json::Value>,
 }

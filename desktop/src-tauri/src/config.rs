@@ -5,10 +5,12 @@
 //! the id of the active one. API keys never cross the Tauri command boundary
 //! back to the frontend; the UI only learns whether a provider has a stored key.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use cowbot_llm::{
@@ -36,6 +38,35 @@ pub struct WorkspaceEntry {
     pub name: String,
 }
 
+/// One local git repository that worktree tasks can target.
+///
+/// Projects are device-local: the path is never exported in a `.cowpkg`
+/// package and never leaves this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectEntry {
+    pub id: String,
+    pub name: String,
+    /// Canonical repository root.
+    pub path: String,
+}
+
+/// A project as reported to the settings view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectView {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub current_branch: Option<String>,
+    pub available: bool,
+}
+
+/// Branch listing for the worktree selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectBranches {
+    pub current: Option<String>,
+    pub branches: Vec<String>,
+}
+
 /// Wire protocol a saved provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ProviderProtocol {
@@ -49,6 +80,19 @@ pub enum ProviderProtocol {
     /// OpenAI Responses (`/v1/responses`).
     #[serde(rename = "openai-responses")]
     OpenAiResponses,
+}
+
+/// Optional context-window metadata for one model.
+///
+/// The desktop never guesses these values: a model without metadata is treated
+/// as having an unknown window, and later context UI falls back to absolute
+/// token counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 /// One model provider saved by the user.
@@ -69,6 +113,9 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
     /// The active model used for runs.
     pub model: String,
+    /// Optional per-model context-window metadata.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_metadata: BTreeMap<String, ModelMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
@@ -95,6 +142,9 @@ pub struct AppConfig {
     /// Workspaces offered by the desktop switcher.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Local git repositories available to worktree tasks.
+    #[serde(default)]
+    pub projects: Vec<ProjectEntry>,
 }
 
 fn onboarding_default_for_legacy() -> bool {
@@ -114,6 +164,7 @@ impl Default for AppConfig {
             auto_check_updates: true,
             active_workspace_database: None,
             workspaces: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
@@ -122,6 +173,14 @@ impl AppConfig {
     /// Look up a provider by id.
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|provider| provider.id == id)
+    }
+
+    /// Look up a registered project by id or name.
+    pub fn project(&self, id_or_name: &str) -> Option<&ProjectEntry> {
+        self.projects.iter().find(|project| {
+            project.id.eq_ignore_ascii_case(id_or_name)
+                || project.name.eq_ignore_ascii_case(id_or_name)
+        })
     }
 
     /// The active provider, if one is configured and still present.
@@ -281,6 +340,10 @@ pub fn normalize_api_key(raw: Option<&str>) -> Option<String> {
 }
 
 /// Build a validated provider.
+///
+/// The explicit parameters mirror the persisted provider fields; grouping them
+/// into a temporary struct would not add validation value.
+#[allow(clippy::too_many_arguments)]
 pub fn make_provider(
     id: String,
     name: &str,
@@ -289,6 +352,7 @@ pub fn make_provider(
     models: &[String],
     model: &str,
     api_key: Option<&str>,
+    model_metadata: BTreeMap<String, ModelMetadata>,
 ) -> Result<ProviderConfig, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -302,8 +366,20 @@ pub fn make_provider(
         base_url,
         models: normalized_models(models, &model),
         model,
+        model_metadata: normalized_metadata(model_metadata),
         api_key: normalize_api_key(api_key),
     })
+}
+
+fn normalized_metadata(
+    metadata: BTreeMap<String, ModelMetadata>,
+) -> BTreeMap<String, ModelMetadata> {
+    metadata
+        .into_iter()
+        .filter(|(_, metadata)| {
+            metadata.context_window.is_some() || metadata.max_output_tokens.is_some()
+        })
+        .collect()
 }
 
 /// Generate an id for a new provider that does not collide with existing ones.
@@ -323,6 +399,199 @@ fn provider_id_for(millis: u128, existing: &[ProviderConfig]) -> String {
         suffix += 1;
     }
     candidate
+}
+
+/// Generate an id for a new project that does not collide with existing ones.
+pub fn new_project_id(existing: &[ProjectEntry]) -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    project_id_for(millis, existing)
+}
+
+fn project_id_for(millis: u128, existing: &[ProjectEntry]) -> String {
+    let mut candidate = format!("project-{millis}");
+    let mut suffix = 1;
+    while existing.iter().any(|project| project.id == candidate) {
+        candidate = format!("project-{millis}-{suffix}");
+        suffix += 1;
+    }
+    candidate
+}
+
+/// Run a git command in `directory`, returning trimmed stdout.
+fn git_output(directory: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            format!("CowBot could not run git: {error}. Install git and make sure it is on PATH.")
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Resolve a folder to the root of the git work tree that contains it.
+pub fn resolve_project_root(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Choose a folder to register.".to_string());
+    }
+    let folder = Path::new(trimmed);
+    if !folder.is_dir() {
+        return Err(format!(
+            "`{trimmed}` is not a folder. Choose an existing repository folder."
+        ));
+    }
+    let root = git_output(folder, &["rev-parse", "--show-toplevel"]).map_err(|error| {
+        format!("`{trimmed}` is not inside a git work tree. Choose a repository folder. ({error})")
+    })?;
+    let root = PathBuf::from(root);
+    if root.as_os_str().is_empty() {
+        return Err(format!(
+            "`{trimmed}` is not inside a git work tree. Choose a repository folder."
+        ));
+    }
+    fs::canonicalize(&root).map_err(|error| {
+        format!(
+            "failed to resolve the repository root {}: {error}",
+            root.display()
+        )
+    })
+}
+
+fn project_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Project")
+        .to_string()
+}
+
+fn same_path(left: &str, right: &str) -> bool {
+    #[cfg(windows)]
+    {
+        left.eq_ignore_ascii_case(right)
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+/// Register a git repository. The returned entry is added to `config`.
+pub fn add_project(config: &mut AppConfig, path: &str) -> Result<ProjectEntry, String> {
+    let root = resolve_project_root(path)?;
+    let canonical = root.display().to_string();
+    if let Some(existing) = config
+        .projects
+        .iter()
+        .find(|project| same_path(&project.path, &canonical))
+    {
+        return Err(format!(
+            "`{canonical}` is already registered as '{}'.",
+            existing.name
+        ));
+    }
+
+    let entry = ProjectEntry {
+        id: new_project_id(&config.projects),
+        name: project_name(&root),
+        path: canonical,
+    };
+    config.projects.push(entry.clone());
+    Ok(entry)
+}
+
+/// Remove a project from the registry. Files are never touched.
+pub fn remove_project(config: &mut AppConfig, id_or_name: &str) -> Result<ProjectEntry, String> {
+    let index = config
+        .projects
+        .iter()
+        .position(|project| {
+            project.id.eq_ignore_ascii_case(id_or_name)
+                || project.name.eq_ignore_ascii_case(id_or_name)
+        })
+        .ok_or_else(|| format!("project '{id_or_name}' was not found"))?;
+    Ok(config.projects.remove(index))
+}
+
+/// The branch a project currently has checked out, when it can be read.
+pub fn project_current_branch(path: &str) -> Option<String> {
+    let directory = Path::new(path);
+    if !directory.is_dir() {
+        return None;
+    }
+    git_output(directory, &["symbolic-ref", "--short", "HEAD"])
+        .or_else(|_| git_output(directory, &["rev-parse", "--abbrev-ref", "HEAD"]))
+        .ok()
+        .filter(|branch| !branch.is_empty() && branch != "HEAD")
+}
+
+/// Local branches of a project plus the current one.
+pub fn project_branches(path: &str) -> Result<ProjectBranches, String> {
+    let directory = Path::new(path);
+    if !directory.is_dir() {
+        return Err(format!("`{path}` is not available on this machine."));
+    }
+    let current = project_current_branch(path);
+    let listing = git_output(
+        directory,
+        &["for-each-ref", "refs/heads", "--format=%(refname:short)"],
+    )?;
+    let mut branches = listing
+        .lines()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if let Some(current) = &current {
+        if !branches.iter().any(|branch| branch == current) {
+            branches.push(current.clone());
+        }
+    }
+    Ok(ProjectBranches { current, branches })
+}
+
+/// Report a project's availability and current branch for the settings view.
+pub fn project_view(project: &ProjectEntry) -> ProjectView {
+    let available = resolve_project_root(&project.path).is_ok();
+    ProjectView {
+        id: project.id.clone(),
+        name: project.name.clone(),
+        path: project.path.clone(),
+        current_branch: available
+            .then(|| project_current_branch(&project.path))
+            .flatten(),
+        available,
+    }
+}
+
+/// Drop stale worktree administrative entries for a project.
+///
+/// Missing folders are already reconciled in the database; this only clears
+/// git's own bookkeeping so a new `worktree add` is not blocked by a stale
+/// entry.
+pub fn prune_project_worktrees(project: &ProjectEntry) {
+    let directory = Path::new(&project.path);
+    if directory.is_dir() {
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(["worktree", "prune"])
+            .output();
+    }
 }
 
 /// Resolve the active provider, falling back to the offline mock model.
@@ -380,6 +649,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             models: vec!["example-model".to_string()],
             model: "example-model".to_string(),
+            model_metadata: BTreeMap::new(),
             api_key: Some("secret".to_string()),
         }
     }
@@ -457,6 +727,11 @@ mod tests {
                 database: "workspaces/one.db".to_string(),
                 name: "Team".to_string(),
             }],
+            projects: vec![ProjectEntry {
+                id: "project-1".to_string(),
+                name: "cowbot".to_string(),
+                path: "/repos/cowbot".to_string(),
+            }],
         };
 
         save(&path, &config).unwrap();
@@ -489,6 +764,7 @@ mod tests {
 
         assert!(config.active_workspace_database.is_none());
         assert!(config.workspaces.is_empty());
+        assert!(config.projects.is_empty());
     }
 
     #[test]
@@ -664,6 +940,7 @@ mod tests {
             ],
             "gpt-4o-mini",
             None,
+            BTreeMap::new(),
         )
         .unwrap();
 
@@ -680,6 +957,7 @@ mod tests {
             &["gpt-4o".to_string()],
             "o3",
             None,
+            BTreeMap::new(),
         )
         .unwrap();
 
@@ -687,6 +965,62 @@ mod tests {
             provider.models,
             vec!["gpt-4o".to_string(), "o3".to_string()]
         );
+    }
+
+    #[test]
+    fn legacy_provider_files_load_without_model_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(
+            &path,
+            r#"{"version":1,"active_provider_id":"p1","providers":[{"id":"p1","name":"Legacy","base_url":"https://api.example.com/v1","model":"m"}]}"#,
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+        assert!(config.providers[0].model_metadata.is_empty());
+    }
+
+    #[test]
+    fn model_metadata_round_trips_and_empty_values_are_dropped() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "deepseek-chat".to_string(),
+            ModelMetadata {
+                context_window: Some(128_000),
+                max_output_tokens: Some(8_192),
+            },
+        );
+        metadata.insert("empty-model".to_string(), ModelMetadata::default());
+
+        let provider = make_provider(
+            "p1".into(),
+            "DeepSeek",
+            ProviderProtocol::OpenAi,
+            "https://api.deepseek.com",
+            &["deepseek-chat".to_string(), "empty-model".to_string()],
+            "deepseek-chat",
+            None,
+            metadata,
+        )
+        .unwrap();
+        assert_eq!(provider.model_metadata.len(), 1);
+
+        let config = AppConfig {
+            providers: vec![provider],
+            active_provider_id: Some("p1".to_string()),
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert_eq!(load(&path).unwrap(), config);
+        let raw = fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let metadata = &value["providers"][0]["model_metadata"];
+        assert_eq!(metadata["deepseek-chat"]["context_window"], 128_000);
+        assert!(metadata.get("empty-model").is_none());
     }
 
     #[test]
@@ -709,7 +1043,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -719,7 +1054,8 @@ mod tests {
             "",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -729,7 +1065,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             " ",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_err());
         assert!(make_provider(
@@ -739,7 +1076,8 @@ mod tests {
             "https://a.test/v1",
             &[],
             "m",
-            None
+            None,
+            BTreeMap::new()
         )
         .is_ok());
     }
@@ -757,6 +1095,140 @@ mod tests {
         assert_eq!(provider_id_for(42, &existing), "provider-42-1");
         assert_eq!(provider_id_for(43, &existing), "provider-43");
         assert!(new_provider_id(&existing).starts_with("provider-"));
+    }
+
+    fn init_repository(root: &Path) -> PathBuf {
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        fs::write(repo.join("README.md"), "initial\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+        repo
+    }
+
+    #[test]
+    fn project_ids_do_not_collide() {
+        let existing = vec![ProjectEntry {
+            id: "project-42".to_string(),
+            name: "one".to_string(),
+            path: "/one".to_string(),
+        }];
+        assert_eq!(project_id_for(42, &existing), "project-42-1");
+        assert_eq!(project_id_for(43, &existing), "project-43");
+        assert!(new_project_id(&existing).starts_with("project-"));
+    }
+
+    #[test]
+    fn resolving_a_folder_uses_the_repository_root() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = init_repository(root.path());
+        let nested = repo.join("apps").join("web");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(
+            resolve_project_root(nested.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&repo).unwrap()
+        );
+    }
+
+    #[test]
+    fn registering_projects_rejects_duplicates_and_non_repositories() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = init_repository(root.path());
+        let plain = root.path().join("plain");
+        fs::create_dir_all(&plain).unwrap();
+
+        let mut config = AppConfig::default();
+        let added = add_project(&mut config, repo.to_str().unwrap()).unwrap();
+        assert_eq!(added.name, "repo");
+        assert_eq!(config.projects.len(), 1);
+        assert_eq!(
+            config.project("repo").map(|project| project.id.as_str()),
+            Some(added.id.as_str())
+        );
+
+        let nested = repo.join("apps");
+        fs::create_dir_all(&nested).unwrap();
+        let duplicate = add_project(&mut config, nested.to_str().unwrap()).unwrap_err();
+        assert!(duplicate.contains("already registered"), "{duplicate}");
+
+        let error = add_project(&mut config, plain.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("not inside a git work tree"), "{error}");
+        assert_eq!(config.projects.len(), 1);
+    }
+
+    #[test]
+    fn project_branches_include_the_current_branch() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = init_repository(root.path());
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["branch", "feature/other"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+
+        let listing = project_branches(repo.to_str().unwrap()).unwrap();
+
+        assert_eq!(listing.current.as_deref(), Some("main"));
+        assert!(listing.branches.iter().any(|branch| branch == "main"));
+        assert!(listing
+            .branches
+            .iter()
+            .any(|branch| branch == "feature/other"));
+    }
+
+    #[test]
+    fn removing_a_project_keeps_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = init_repository(root.path());
+        let mut config = AppConfig::default();
+        let added = add_project(&mut config, repo.to_str().unwrap()).unwrap();
+
+        let removed = remove_project(&mut config, "repo").unwrap();
+
+        assert_eq!(removed, added);
+        assert!(config.projects.is_empty());
+        assert!(repo.exists());
+        assert!(remove_project(&mut config, "repo").is_err());
+    }
+
+    #[test]
+    fn project_views_report_availability() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = init_repository(root.path());
+        let mut config = AppConfig::default();
+        let added = add_project(&mut config, repo.to_str().unwrap()).unwrap();
+
+        let view = project_view(&added);
+        assert!(view.available);
+        assert_eq!(view.current_branch.as_deref(), Some("main"));
+
+        let missing = ProjectEntry {
+            id: "project-missing".to_string(),
+            name: "missing".to_string(),
+            path: root.path().join("gone").display().to_string(),
+        };
+        let view = project_view(&missing);
+        assert!(!view.available);
+        assert!(view.current_branch.is_none());
     }
 
     #[cfg(unix)]

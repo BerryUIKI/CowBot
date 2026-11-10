@@ -15,9 +15,14 @@ pub const AGENTS_PATH: &str = "agents.json";
 pub const TEMPLATES_PATH: &str = "templates.json";
 pub const CHANNELS_PATH: &str = "channels.jsonl";
 pub const MESSAGES_PATH: &str = "messages.jsonl";
+pub const PARTICIPANTS_PATH: &str = "channel_participants.jsonl";
+pub const CONVERSATION_SETTINGS_PATH: &str = "conversation_settings.jsonl";
+pub const CONTEXT_ENTRIES_PATH: &str = "context_entries.jsonl";
+pub const CONTEXT_EVENTS_PATH: &str = "context_events.jsonl";
 pub const TASKS_PATH: &str = "tasks.json";
 pub const RUNS_PATH: &str = "runs.jsonl";
 pub const AUDIT_PATH: &str = "audit.jsonl";
+pub const PERMISSION_RULES_PATH: &str = "permission_rules.jsonl";
 
 /// What a package contains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

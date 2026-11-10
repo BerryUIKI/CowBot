@@ -9,8 +9,9 @@ use zip::write::SimpleFileOptions;
 
 use crate::manifest::{
     ExportedBy, Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH,
-    CHANNELS_PATH, MANIFEST_PATH, MESSAGES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH,
-    WORKSPACE_PATH,
+    CHANNELS_PATH, CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH,
+    MANIFEST_PATH, MESSAGES_PATH, PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH,
+    TEMPLATES_PATH, WORKSPACE_PATH,
 };
 
 /// Upper bound for a package produced or read in one go.
@@ -61,9 +62,17 @@ pub async fn export_workspace(
         runs.extend(store.list_runs(&task.id).await?);
     }
 
+    let participants = store.list_all_channel_participants(workspace_id).await?;
+    let conversation_settings = store
+        .list_conversation_settings_for_workspace(workspace_id)
+        .await?;
+    let context_entries = store.list_all_context_entries(workspace_id).await?;
+    let context_events = store.list_all_context_events(workspace_id).await?;
+
     let audit = store
         .list_audit_events(workspace_id, AUDIT_EVENT_LIMIT)
         .await?;
+    let permission_rules = store.list_permission_rules(workspace_id).await?;
 
     let mut entries: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
     entries.insert(
@@ -74,9 +83,17 @@ pub async fn export_workspace(
     entries.insert(TEMPLATES_PATH, to_bytes(&templates)?);
     entries.insert(CHANNELS_PATH, to_jsonl(&channels)?);
     entries.insert(MESSAGES_PATH, to_jsonl(&messages)?);
+    entries.insert(PARTICIPANTS_PATH, to_jsonl(&participants)?);
+    entries.insert(
+        CONVERSATION_SETTINGS_PATH,
+        to_jsonl(&conversation_settings)?,
+    );
+    entries.insert(CONTEXT_ENTRIES_PATH, to_jsonl(&context_entries)?);
+    entries.insert(CONTEXT_EVENTS_PATH, to_jsonl(&context_events)?);
     entries.insert(TASKS_PATH, to_bytes(&tasks)?);
     entries.insert(RUNS_PATH, to_jsonl(&runs)?);
     entries.insert(AUDIT_PATH, to_jsonl(&audit)?);
+    entries.insert(PERMISSION_RULES_PATH, to_jsonl(&permission_rules)?);
 
     let mut manifest = Manifest::new(
         PackageKind::Workspace,

@@ -1,18 +1,30 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
-use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
+use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
+use cowbot_core::assignment::{
+    Assignment, AssignmentEvent, AssignmentId, AssignmentOutcome, AssignmentStatus,
+};
+use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::conversation::{
+    context_usage_state, usable_window, CacheUsageSummary, CompactionOutcome, ContextUsageState,
+    ConversationContext, ConversationSettingsUpdate,
+};
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
-use cowbot_llm::{ChatCompletionRequest, ChatMessage};
+use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
+use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
+use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
@@ -41,6 +53,19 @@ pub async fn get_session(
     state
         .client
         .session()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_user_profile(
+    state: State<'_, AppState>,
+    name: String,
+    email: String,
+) -> Result<cowbot_client::ClientSession, String> {
+    state
+        .client
+        .update_user_profile(&name, &email)
         .await
         .map_err(|error| error.to_string())
 }
@@ -151,6 +176,53 @@ pub async fn post_message(
     approval_level: Option<ApprovalLevel>,
 ) -> Result<ChannelMessage, String> {
     let channel_id = ChannelId::new(channel_id);
+    let channel = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
+    let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
+
+    // A conversation has a fixed provider/model and a bounded context. Check
+    // capacity before persisting the message so a blocked send leaves no
+    // orphaned user turn behind.
+    let (llm, model) = if channel.is_conversation() {
+        let settings = state
+            .client
+            .conversation_settings(&channel_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let runtime = conversation_runtime(&state, &settings);
+        let pending = estimate_tokens(content.trim());
+        let mut view = conversation_context_view(&state, &channel_id).await?;
+
+        if let Some(usable) = view.usable_tokens {
+            let projected = view.total_tokens.saturating_add(pending);
+            let threshold_reached = settings.auto_compact
+                && u64::from(projected) * 100
+                    >= u64::from(usable) * u64::from(settings.compact_threshold);
+            if threshold_reached {
+                state
+                    .client
+                    .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                view = conversation_context_view(&state, &channel_id).await?;
+            }
+            if view.total_tokens.saturating_add(pending) >= usable {
+                return Err(
+                    "This conversation's context is full. Compact the context, clear it, or \
+                     start a new conversation before sending."
+                        .to_string(),
+                );
+            }
+        }
+        runtime
+    } else {
+        state.runtime_model()
+    };
+
     let message = state
         .client
         .post_message(&channel_id, &content)
@@ -160,13 +232,13 @@ pub async fn post_message(
     // Agents answer in the background so the composer stays responsive; the
     // timeline refreshes from MessagePosted events and the turn-finished event.
     let client = state.client.clone();
-    let (llm, model) = state.runtime_model();
     let tools = state.tools.clone();
     let channel = channel_id.clone();
     let posted = message.clone();
     let reply_id = message.id.clone();
     let running = state.replies.clone();
-    let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
+    let use_model_permissions = state.uses_remote_model();
+    let platform_context = project_platform_context(&state);
     if !running.lock().insert(reply_id.clone()) {
         return Ok(message);
     }
@@ -182,6 +254,8 @@ pub async fn post_message(
                 ChannelTurnOptions {
                     approval_level,
                     max_concurrency: 4,
+                    use_model_permissions,
+                    platform_context,
                 },
             )
             .await;
@@ -263,6 +337,14 @@ pub async fn instantiate_agents(
         .map_err(|error| error.to_string())
 }
 
+/// Project and base branch chosen for a worktree task.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSelection {
+    pub project_id: String,
+    pub base_branch: String,
+}
+
 #[tauri::command]
 pub async fn create_task(
     state: State<'_, AppState>,
@@ -271,18 +353,60 @@ pub async fn create_task(
     assignee: String,
     channel_id: Option<String>,
     approval_level: ApprovalLevel,
+    worktree: Option<WorktreeSelection>,
 ) -> Result<Task, String> {
+    // Resolve the project and branch before creating anything, so a bad
+    // selection leaves no orphaned task behind.
+    let requested_worktree = match &worktree {
+        Some(selection) => {
+            let config = load_config(&state)?;
+            let project = config
+                .project(&selection.project_id)
+                .cloned()
+                .ok_or_else(|| format!("project '{}' is not registered", selection.project_id))?;
+            let branches = config::project_branches(&project.path)
+                .map_err(|error| format!("project '{}' is not available: {error}", project.name))?;
+            if selection.base_branch.trim().is_empty() {
+                return Err("Choose a base branch for the worktree.".to_string());
+            }
+            if !branches
+                .branches
+                .iter()
+                .any(|branch| branch == &selection.base_branch)
+            {
+                return Err(format!(
+                    "base branch '{}' does not exist in '{}'. Available branches: {}",
+                    selection.base_branch,
+                    project.name,
+                    branches.branches.join(", ")
+                ));
+            }
+            Some((project, selection.base_branch.clone()))
+        }
+        None => None,
+    };
+
     let mut task = NewTask::new(description, expected_output, AgentId::new(assignee));
     if let Some(channel_id) = channel_id {
         task = task.in_channel(ChannelId::new(channel_id));
     }
     task = task.with_approval_level(approval_level);
 
-    state
+    let created = state
         .client
         .create_task(&task)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    if let Some((project, base_branch)) = requested_worktree {
+        state
+            .client
+            .request_worktree(&created.id, &project.id, &project.path, &base_branch)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(created)
 }
 
 #[tauri::command]
@@ -299,6 +423,38 @@ pub async fn run_task(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("task '{task_id}' was not found"))?;
 
+    // A worktree task is prepared before spawning so a git failure rejects
+    // the run and the task stays pending.
+    let worktree = match state
+        .client
+        .task_worktree(&task.id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(record) => match record.status {
+            WorktreeStatus::Requested | WorktreeStatus::Ready => Some(
+                state
+                    .client
+                    .prepare_worktree(&task.id)
+                    .await
+                    .map_err(|error| format!("The worktree could not be prepared: {error}"))?,
+            ),
+            WorktreeStatus::Removed => {
+                return Err(
+                    "This task's worktree was discarded. Create a new task to run in a worktree."
+                        .to_string(),
+                )
+            }
+            WorktreeStatus::Missing => {
+                return Err(
+                    "This task's worktree folder is missing. Discard the worktree and create a new task."
+                        .to_string(),
+                )
+            }
+        },
+        None => None,
+    };
+
     let running = state.running.clone();
     if !running.lock().insert(task_id.clone()) {
         return Err(format!("task '{task_id}' is already running"));
@@ -306,20 +462,60 @@ pub async fn run_task(
 
     let client = state.client.clone();
     let (llm, model) = state.runtime_model();
-    let tools = state.tools.clone();
+    let tools = match &worktree {
+        Some(record) => AppState::rooted_tools(
+            Path::new(&record.worktree_path),
+            state.config_path.clone(),
+            state.client.clone(),
+        ),
+        None => state.tools.clone(),
+    };
     let run_id = task_id.clone();
+    let use_model_permissions = state.uses_remote_model();
 
     tauri::async_runtime::spawn(async move {
-        let outcome = async {
-            let mut crew = build_standard_crew(&task.description, &llm, &tools, &model);
-            client.run_crew(&mut crew, approval_level).await
+        let outcome: Result<(), String> = async {
+            let mut options = cowbot_service::CrewRunOptions {
+                approval_level,
+                use_model_permissions,
+                ..cowbot_service::CrewRunOptions::default()
+            };
+            // Plan runs and approved plans belong to the stored task: run it
+            // with its own assignee so its plan, status, and history stay
+            // attached to it. Other runs keep the standard crew pipeline.
+            if approval_level == ApprovalLevel::PlanOnly || task.plan_approved {
+                let agents = client
+                    .list_agents()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let assignee = task.assigned_agent.clone();
+                let profile = agents
+                    .into_iter()
+                    .find(|agent| Some(&agent.id) == assignee.as_ref())
+                    .ok_or_else(|| format!("task '{}' has no assignable agent", task.id))?;
+                let agent = AgentInstance::new(profile, llm.clone(), tools.clone(), &model);
+                if approval_level == ApprovalLevel::PlanOnly {
+                    options.capture_plan_task = Some(task.id.clone());
+                }
+                client
+                    .run_existing_task(&task, agent, options)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            } else {
+                let mut crew = build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
+                client
+                    .run_crew_with_options(&mut crew, options)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(())
         }
         .await;
 
         running.lock().remove(&run_id);
 
         let payload = match outcome {
-            Ok(_) => RunFinished {
+            Ok(()) => RunFinished {
                 task_id: run_id,
                 ok: true,
                 error: None,
@@ -327,7 +523,7 @@ pub async fn run_task(
             Err(error) => RunFinished {
                 task_id: run_id,
                 ok: false,
-                error: Some(error.to_string()),
+                error: Some(error),
             },
         };
         let _ = app.emit("cowbot-run-finished", payload);
@@ -338,12 +534,27 @@ pub async fn run_task(
 
 /// Build the Planner/Coder/Reviewer pipeline used by the CLI, with the
 /// submitted task's description as the objective.
+///
+/// Every crew task carries the submitted task's id as its run group, so the
+/// run has one owning task for background cards and worktrees.
 fn build_standard_crew(
-    objective: &str,
+    submitted: &Task,
+    worktree: Option<&TaskWorktree>,
     llm: &std::sync::Arc<dyn cowbot_llm::LlmProvider>,
     tools: &cowbot_tools::ToolRegistry,
     model: &str,
 ) -> Crew {
+    let objective = submitted.description.as_str();
+    let run_group = submitted.id.clone();
+    let checkout_note = worktree
+        .map(|worktree| {
+            format!(
+                "\n\nRun in the git worktree at {} on branch {} (base branch {}). \
+                 File and command tools are rooted there; do not modify the main checkout.",
+                worktree.worktree_path, worktree.branch, worktree.base_branch
+            )
+        })
+        .unwrap_or_default();
     let planner_profile = StandardRoles::planner();
     let planner_id = planner_profile.id.clone();
     let planner = AgentInstance::new(planner_profile, llm.clone(), tools.clone(), model);
@@ -362,25 +573,32 @@ fn build_standard_crew(
     crew.add_agent(reviewer);
 
     let plan_task = Task::new(
-        format!("Analyze objective and formulate architecture plan: {objective}"),
+        format!("Analyze objective and formulate architecture plan: {objective}{checkout_note}"),
         "A clear, step-by-step implementation and verification plan.",
     )
-    .assign_to(planner_id);
+    .assign_to(planner_id)
+    .in_run_group(run_group.clone());
     let plan_id = plan_task.id.clone();
 
     let code_task = Task::new(
-        "Execute code implementation and verify functionality in the sandbox.",
+        format!(
+            "Execute code implementation and verify functionality in the sandbox.{checkout_note}"
+        ),
         "Working source code and sandbox execution results.",
     )
     .assign_to(coder_id)
-    .with_context_task(plan_id);
+    .with_context_task(plan_id)
+    .in_run_group(run_group.clone());
 
     let review_task = Task::new(
-        "Review implementation, tests, and diffs for correctness and edge cases.",
+        format!(
+            "Review implementation, tests, and diffs for correctness and edge cases.{checkout_note}"
+        ),
         "Comprehensive review findings and final approval status.",
     )
     .assign_to(reviewer_id)
-    .with_context_task(code_task.id.clone());
+    .with_context_task(code_task.id.clone())
+    .in_run_group(run_group);
 
     crew.add_task(plan_task);
     crew.add_task(code_task);
@@ -398,6 +616,266 @@ pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String>
 }
 
 #[tauri::command]
+pub async fn list_run_tasks(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Vec<Task>, String> {
+    state
+        .client
+        .list_run_tasks(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_task_worktree(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Option<TaskWorktree>, String> {
+    state
+        .client
+        .task_worktree(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn task_worktree_diff(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<TaskWorktreeDiff, String> {
+    state
+        .client
+        .worktree_diff(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn discard_task_worktree(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<TaskWorktree, String> {
+    state
+        .client
+        .discard_worktree(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One run in the background overview.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewEntry {
+    pub run_id: String,
+    pub title: String,
+    pub channel_id: Option<String>,
+    pub status: String,
+    pub progress: TaskOverviewProgress,
+    pub assignments: Vec<TaskOverviewAssignment>,
+    pub worktree: Option<TaskWorktree>,
+    pub latest_tool_call: Option<ToolCallRecord>,
+    pub started_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewProgress {
+    pub completed: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskOverviewAssignment {
+    pub id: String,
+    pub assignee: String,
+    pub status: AssignmentStatus,
+    pub detail: Option<String>,
+}
+
+/// Display status for a run, derived from its assignments.
+fn overview_status(assignments: &[Assignment]) -> &'static str {
+    use AssignmentStatus::*;
+    if assignments.is_empty() {
+        return "queued";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Running)
+    {
+        return "running";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == NeedsInput)
+    {
+        return "needs_input";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Waiting)
+    {
+        return "waiting";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Resume)
+    {
+        return "resume";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Queued)
+    {
+        return "queued";
+    }
+    if assignments
+        .iter()
+        .any(|assignment| assignment.status == Failed)
+    {
+        return "failed";
+    }
+    if assignments
+        .iter()
+        .all(|assignment| assignment.status == Cancelled)
+    {
+        return "cancelled";
+    }
+    "completed"
+}
+
+fn overview_detail(assignment: &Assignment) -> Option<String> {
+    if let Some(error) = &assignment.last_error {
+        return Some(error.clone());
+    }
+    match &assignment.outcome {
+        Some(AssignmentOutcome::Completed { output }) => Some(output.clone()),
+        Some(AssignmentOutcome::Failed { error }) => Some(error.clone()),
+        Some(AssignmentOutcome::Cancelled { reason }) => Some(reason.clone()),
+        None => None,
+    }
+}
+
+/// One summary entry per run group for sidebar cards and the background panel.
+#[tauri::command]
+pub async fn list_task_overview(
+    state: State<'_, AppState>,
+) -> Result<Vec<TaskOverviewEntry>, String> {
+    let tasks = state
+        .client
+        .list_tasks()
+        .await
+        .map_err(|error| error.to_string())?;
+    let worktree_by_task: HashMap<String, TaskWorktree> = state
+        .client
+        .list_worktrees()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|worktree| (worktree.task_id.0.clone(), worktree))
+        .collect();
+
+    let mut groups: HashMap<String, Vec<Task>> = HashMap::new();
+    for task in tasks {
+        let run_id = task
+            .run_group
+            .as_ref()
+            .map(|id| id.0.clone())
+            .unwrap_or_else(|| task.id.0.clone());
+        groups.entry(run_id).or_default().push(task);
+    }
+
+    let mut entries = Vec::new();
+    for (run_id, group_tasks) in groups {
+        let worktree = worktree_by_task.get(&run_id).cloned();
+        let assignments = state
+            .client
+            .list_run_assignments(&TaskId::new(run_id.clone()))
+            .await
+            .map_err(|error| error.to_string())?;
+        if assignments.is_empty() && worktree.is_none() {
+            continue;
+        }
+        let Some(owner) = group_tasks.iter().find(|task| task.id.0 == run_id) else {
+            continue;
+        };
+        if owner.archived {
+            continue;
+        }
+
+        let started_at = assignments
+            .iter()
+            .map(|assignment| assignment.created_at.to_rfc3339())
+            .chain(
+                worktree
+                    .iter()
+                    .map(|worktree| worktree.created_at.to_rfc3339()),
+            )
+            .min();
+        let updated_at = assignments
+            .iter()
+            .map(|assignment| assignment.updated_at.to_rfc3339())
+            .chain(
+                worktree
+                    .iter()
+                    .map(|worktree| worktree.updated_at.to_rfc3339()),
+            )
+            .max();
+        let (Some(started_at), Some(updated_at)) = (started_at, updated_at) else {
+            continue;
+        };
+
+        let completed = assignments
+            .iter()
+            .filter(|assignment| assignment.status.is_terminal())
+            .count() as u32;
+        let total = assignments.len() as u32;
+        let latest_tool_call = state
+            .client
+            .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
+            .await
+            .map_err(|error| error.to_string())?;
+        let title = if owner.title.trim().is_empty() {
+            owner.description.clone()
+        } else {
+            owner.title.clone()
+        };
+        let channel_id = owner
+            .channel_id
+            .as_ref()
+            .map(|channel| channel.0.clone())
+            .or_else(|| {
+                group_tasks
+                    .iter()
+                    .find_map(|task| task.channel_id.as_ref().map(|channel| channel.0.clone()))
+            });
+
+        entries.push(TaskOverviewEntry {
+            run_id,
+            title,
+            channel_id,
+            status: overview_status(&assignments).to_string(),
+            progress: TaskOverviewProgress { completed, total },
+            assignments: assignments
+                .iter()
+                .map(|assignment| TaskOverviewAssignment {
+                    id: assignment.id.0.clone(),
+                    assignee: assignment.assignee.0.clone(),
+                    status: assignment.status,
+                    detail: overview_detail(assignment),
+                })
+                .collect(),
+            worktree,
+            latest_tool_call,
+            started_at,
+            updated_at,
+        });
+    }
+
+    entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(entries)
+}
+
+#[tauri::command]
 pub async fn cancel_task(
     state: State<'_, AppState>,
     task_id: String,
@@ -406,6 +884,36 @@ pub async fn cancel_task(
     state
         .client
         .cancel_task(&TaskId::new(task_id), &reason)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn archive_task(state: State<'_, AppState>, task_id: String) -> Result<Task, String> {
+    state
+        .client
+        .archive_task(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unarchive_task(state: State<'_, AppState>, task_id: String) -> Result<Task, String> {
+    state
+        .client
+        .unarchive_task(&TaskId::new(task_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn approve_task_plan(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Task, String> {
+    state
+        .client
+        .approve_task_plan(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
 }
@@ -469,10 +977,120 @@ pub async fn decide_approval(
     state: State<'_, AppState>,
     approval_id: String,
     approved: bool,
+    for_session: Option<bool>,
 ) -> Result<Approval, String> {
+    let approval_id = ApprovalId::new(approval_id);
+    let result = if for_session.unwrap_or(false) {
+        state
+            .client
+            .decide_approval_for_session(&approval_id, approved)
+            .await
+    } else {
+        state.client.decide_approval(&approval_id, approved).await
+    };
+    result.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn session_decisions(
+    state: State<'_, AppState>,
+) -> Result<Vec<cowbot_client::SessionDecisionView>, String> {
     state
         .client
-        .decide_approval(&ApprovalId::new(approval_id), approved)
+        .session_decisions()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_session_decisions(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .client
+        .clear_session_decisions()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_permission_rules(
+    state: State<'_, AppState>,
+) -> Result<Vec<PermissionRule>, String> {
+    state
+        .client
+        .list_permission_rules()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_permission_rule(
+    state: State<'_, AppState>,
+    tool: String,
+    command: Option<String>,
+    decision: RuleDecision,
+) -> Result<PermissionRule, String> {
+    state
+        .client
+        .create_permission_rule(&tool, command.as_deref(), decision)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_permission_rule_enabled(
+    state: State<'_, AppState>,
+    rule_id: String,
+    enabled: bool,
+) -> Result<PermissionRule, String> {
+    state
+        .client
+        .set_permission_rule_enabled(&rule_id, enabled)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_permission_rule(
+    state: State<'_, AppState>,
+    rule_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .delete_permission_rule(&rule_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workspace_policy(state: State<'_, AppState>) -> Result<WorkspacePolicy, String> {
+    state
+        .client
+        .workspace_policy()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_bypass_critical(
+    state: State<'_, AppState>,
+    bypass_critical: BypassCritical,
+) -> Result<WorkspacePolicy, String> {
+    state
+        .client
+        .set_bypass_critical(bypass_critical)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_audit_events(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+    source: Option<String>,
+) -> Result<Vec<AuditEvent>, String> {
+    state
+        .client
+        .list_audit_events(limit.unwrap_or(200).min(1_000), source.as_deref())
         .await
         .map_err(|error| error.to_string())
 }
@@ -486,6 +1104,7 @@ pub struct ProviderView {
     pub base_url: String,
     pub models: Vec<String>,
     pub model: String,
+    pub model_metadata: BTreeMap<String, config::ModelMetadata>,
     pub has_api_key: bool,
     pub active: bool,
 }
@@ -502,6 +1121,27 @@ pub struct ModelSettings {
 fn load_config(state: &AppState) -> Result<config::AppConfig, String> {
     config::load(&state.config_path)
         .map_err(|error| format!("failed to read {}: {error}", state.config_path.display()))
+}
+
+/// Registered projects and their current branches for the assistant context.
+fn project_platform_context(state: &AppState) -> Option<String> {
+    let config = load_config(state).ok()?;
+    if config.projects.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "Registered git projects (create_task with project and base_branch runs the task in a worktree):"
+            .to_string(),
+    ];
+    for project in &config.projects {
+        let branch = config::project_current_branch(&project.path)
+            .unwrap_or_else(|| "unavailable".to_string());
+        lines.push(format!(
+            "- {} — current branch {} — {}",
+            project.name, branch, project.path
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 fn persist_config(
@@ -526,6 +1166,7 @@ fn model_settings(state: &AppState, config: &config::AppConfig) -> ModelSettings
             base_url: provider.base_url.clone(),
             models: provider.models.clone(),
             model: provider.model.clone(),
+            model_metadata: provider.model_metadata.clone(),
             has_api_key: provider.api_key.is_some(),
             active: active_id.as_deref() == Some(provider.id.as_str()),
         })
@@ -548,6 +1189,231 @@ pub fn get_model_settings(state: State<'_, AppState>) -> Result<ModelSettings, S
     Ok(model_settings(&state, &config))
 }
 
+/// Context meter values for one conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationContextView {
+    pub channel_id: String,
+    pub agent_id: String,
+    pub model: String,
+    pub provider_id: Option<String>,
+    pub system_tokens: u32,
+    pub tool_tokens: u32,
+    pub history_tokens: u32,
+    pub latest_tokens: u32,
+    pub total_tokens: u32,
+    pub active_entries: u32,
+    pub excluded_entries: u32,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub usable_tokens: Option<u32>,
+    pub percent_used: Option<f32>,
+    pub state: ContextUsageState,
+    pub auto_compact: bool,
+    pub compact_threshold: u32,
+    pub cache_last_turn: CacheUsageSummary,
+    pub cache_conversation: CacheUsageSummary,
+}
+
+/// Fixed provider/model of a conversation, falling back to the active runtime
+/// when the recorded provider was removed from the desktop configuration.
+fn conversation_runtime(
+    state: &AppState,
+    settings: &cowbot_core::conversation::ConversationSettings,
+) -> (Arc<dyn LlmProvider>, String) {
+    if let Some(provider_id) = settings.provider_id.as_deref() {
+        if let Ok(config) = load_config(state) {
+            if let Some(provider) = config.provider(provider_id) {
+                return (
+                    config::build_remote_provider(
+                        provider.protocol,
+                        &provider.base_url,
+                        provider.api_key.clone(),
+                    ),
+                    settings.model.clone(),
+                );
+            }
+        }
+    }
+    let (llm, _) = state.runtime_model();
+    (llm, settings.model.clone())
+}
+
+/// Context window and output limit metadata recorded for the conversation model.
+fn conversation_window(
+    state: &AppState,
+    settings: &cowbot_core::conversation::ConversationSettings,
+) -> (Option<u32>, Option<u32>) {
+    let Ok(config) = load_config(state) else {
+        return (None, None);
+    };
+    let provider = settings
+        .provider_id
+        .as_deref()
+        .and_then(|id| config.provider(id))
+        .or_else(|| config.active_provider());
+    provider
+        .and_then(|provider| provider.model_metadata.get(&settings.model))
+        .map(|metadata| (metadata.context_window, metadata.max_output_tokens))
+        .unwrap_or((None, None))
+}
+
+async fn conversation_context_view(
+    state: &AppState,
+    channel_id: &ChannelId,
+) -> Result<ConversationContextView, String> {
+    let context: ConversationContext = state
+        .client
+        .conversation_context(channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let settings = state
+        .client
+        .conversation_settings(channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    let tool_tokens = agents
+        .iter()
+        .find(|agent| agent.id == context.agent_id)
+        .map(|agent| {
+            serde_json::to_value(state.tools.definitions_for(&agent.tools))
+                .map(|value| estimate_json_tokens(&value))
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+
+    let (context_window, max_output_tokens) = conversation_window(state, &settings);
+    Ok(context_view_from_parts(
+        context,
+        &settings,
+        tool_tokens,
+        context_window,
+        max_output_tokens,
+    ))
+}
+
+fn context_view_from_parts(
+    context: ConversationContext,
+    settings: &cowbot_core::conversation::ConversationSettings,
+    tool_tokens: u32,
+    context_window: Option<u32>,
+    max_output_tokens: Option<u32>,
+) -> ConversationContextView {
+    let projection = &context.projection;
+    let total_tokens = projection.total_tokens().saturating_add(tool_tokens);
+    let usable_tokens = usable_window(context_window, max_output_tokens);
+    let (percent_used, usage_state) = context_usage_state(total_tokens, usable_tokens);
+
+    ConversationContextView {
+        channel_id: context.channel_id.0,
+        agent_id: context.agent_id.0,
+        model: context.model,
+        provider_id: context.provider_id,
+        system_tokens: projection.system_tokens,
+        tool_tokens,
+        history_tokens: projection.history_tokens,
+        latest_tokens: projection.latest_tokens,
+        total_tokens,
+        active_entries: projection.active_entries,
+        excluded_entries: projection.excluded_entries,
+        context_window,
+        max_output_tokens,
+        usable_tokens,
+        percent_used,
+        state: usage_state,
+        auto_compact: settings.auto_compact,
+        compact_threshold: settings.compact_threshold,
+        cache_last_turn: context.cache_last_turn,
+        cache_conversation: context.cache_conversation,
+    }
+}
+
+#[tauri::command]
+pub async fn create_conversation(
+    state: State<'_, AppState>,
+    title: Option<String>,
+    agent_id: String,
+) -> Result<Channel, String> {
+    let config = load_config(&state)?;
+    let (_, model) = state.runtime_model();
+    let provider_id = config.active_provider().map(|provider| provider.id.clone());
+    state
+        .client
+        .create_conversation(
+            title.as_deref(),
+            &AgentId::new(agent_id),
+            provider_id,
+            &model,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_conversation_context(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<ConversationContextView, String> {
+    conversation_context_view(&state, &ChannelId::new(channel_id)).await
+}
+
+#[tauri::command]
+pub async fn update_conversation_settings(
+    state: State<'_, AppState>,
+    channel_id: String,
+    auto_compact: Option<bool>,
+    compact_threshold: Option<u32>,
+) -> Result<ConversationContextView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    state
+        .client
+        .update_conversation_settings(
+            &channel_id,
+            &ConversationSettingsUpdate {
+                auto_compact,
+                compact_threshold,
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    conversation_context_view(&state, &channel_id).await
+}
+
+#[tauri::command]
+pub async fn compact_conversation(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<CompactionOutcome, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let settings = state
+        .client
+        .conversation_settings(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (llm, model) = conversation_runtime(&state, &settings);
+    state
+        .client
+        .compact_conversation(&channel_id, llm, &model)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_conversation_context(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<u64, String> {
+    state
+        .client
+        .clear_conversation_context(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Values submitted by the provider editor.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -560,6 +1426,8 @@ pub struct ProviderDraft {
     #[serde(default)]
     pub models: Vec<String>,
     pub model: String,
+    #[serde(default)]
+    pub model_metadata: BTreeMap<String, config::ModelMetadata>,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
@@ -593,6 +1461,7 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 &draft.models,
                 &draft.model,
                 key.as_deref(),
+                draft.model_metadata.clone(),
             )?;
         }
         None => {
@@ -605,6 +1474,7 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 &draft.models,
                 &draft.model,
                 typed_key.as_deref(),
+                draft.model_metadata.clone(),
             )?);
             if config.active_provider().is_none() {
                 config.active_provider_id = Some(id);
@@ -623,6 +1493,32 @@ pub fn save_model_provider(
 ) -> Result<ModelSettings, String> {
     let mut config = load_config(&state)?;
     upsert_provider(&mut config, &draft)?;
+
+    let config = persist_config(&state, config)?;
+    Ok(model_settings(&state, &config))
+}
+
+/// Select one of a provider's known models without resaving the provider.
+#[tauri::command]
+pub fn set_active_model(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> Result<ModelSettings, String> {
+    let mut config = load_config(&state)?;
+    let index = config
+        .providers
+        .iter()
+        .position(|provider| provider.id == provider_id)
+        .ok_or_else(|| format!("provider '{provider_id}' was not found"))?;
+    let provider = &config.providers[index];
+    if !provider.models.iter().any(|known| known == &model) {
+        return Err(format!(
+            "model '{model}' is not known for provider '{}'",
+            provider.name
+        ));
+    }
+    config.providers[index].model = model;
 
     let config = persist_config(&state, config)?;
     Ok(model_settings(&state, &config))
@@ -951,6 +1847,50 @@ pub async fn create_workspace(
     app.restart();
 }
 
+/// Registered local git repositories available to worktree tasks.
+#[tauri::command]
+pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<config::ProjectView>, String> {
+    let config = load_config(&state)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Register a local git repository after resolving its work-tree root.
+#[tauri::command]
+pub fn add_project(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<config::ProjectView>, String> {
+    let mut config = load_config(&state)?;
+    let project = config::add_project(&mut config, &path)?;
+    config::prune_project_worktrees(&project);
+    let config = persist_config(&state, config)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Remove a project from the registry without touching its files.
+#[tauri::command]
+pub fn remove_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<config::ProjectView>, String> {
+    let mut config = load_config(&state)?;
+    config::remove_project(&mut config, &project_id)?;
+    let config = persist_config(&state, config)?;
+    Ok(config.projects.iter().map(config::project_view).collect())
+}
+
+/// Local branches of a registered project and its current branch.
+#[tauri::command]
+pub fn list_project_branches(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<config::ProjectBranches, String> {
+    let config = load_config(&state)?;
+    let project = config
+        .project(&project_id)
+        .ok_or_else(|| format!("project '{project_id}' was not found"))?;
+    config::project_branches(&project.path)
+}
 /// Send a minimal completion with the drafted provider settings.
 ///
 /// A blank API key falls back to the key stored for `provider_id`, so a saved
@@ -1051,6 +1991,10 @@ fn summarize_reply(reply: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cowbot_core::assignment::{
+        AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
+    };
+    use cowbot_core::conversation::ContextProjection;
 
     fn draft(name: &str, base_url: &str, model: &str, api_key: Option<&str>) -> ProviderDraft {
         ProviderDraft {
@@ -1060,6 +2004,7 @@ mod tests {
             base_url: base_url.to_string(),
             models: vec![model.to_string()],
             model: model.to_string(),
+            model_metadata: BTreeMap::new(),
             api_key: api_key.map(str::to_string),
             clear_api_key: false,
         }
@@ -1074,6 +2019,12 @@ mod tests {
             "baseUrl": "https://api.anthropic.com",
             "models": ["claude-sonnet-5-5", "claude-opus-5-5"],
             "model": "claude-sonnet-5-5",
+            "modelMetadata": {
+                "claude-sonnet-5-5": {
+                    "context_window": 200000,
+                    "max_output_tokens": 8192
+                }
+            },
             "apiKey": "secret",
             "clearApiKey": false
         }))
@@ -1088,6 +2039,14 @@ mod tests {
                 "claude-sonnet-5-5".to_string(),
                 "claude-opus-5-5".to_string()
             ]
+        );
+        assert_eq!(
+            draft.model_metadata["claude-sonnet-5-5"].context_window,
+            Some(200_000)
+        );
+        assert_eq!(
+            draft.model_metadata["claude-sonnet-5-5"].max_output_tokens,
+            Some(8_192)
         );
         assert_eq!(draft.api_key.as_deref(), Some("secret"));
         assert!(!draft.clear_api_key);
@@ -1287,5 +2246,160 @@ mod tests {
             PathBuf::from("backup.cowpkg")
         );
         assert!(package_output_path("   ").is_err());
+    }
+
+    fn context_with_tokens(total: u32) -> ConversationContext {
+        ConversationContext {
+            channel_id: ChannelId::new("channel-1"),
+            agent_id: AgentId::new("agent-1"),
+            model: "test-model".to_string(),
+            provider_id: Some("provider-1".to_string()),
+            projection: ContextProjection {
+                system_tokens: total,
+                ..ContextProjection::default()
+            },
+            cache_last_turn: CacheUsageSummary::default(),
+            cache_conversation: CacheUsageSummary::default(),
+        }
+    }
+
+    #[test]
+    fn context_view_maps_usage_states_and_unknown_windows() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            Some("provider-1".to_string()),
+            "test-model",
+        );
+
+        let neutral = context_view_from_parts(
+            context_with_tokens(5_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(neutral.usable_tokens, Some(7_976));
+        assert_eq!(neutral.total_tokens, 5_000);
+        assert!(neutral.percent_used.unwrap() > 62.0);
+        assert!(neutral.percent_used.unwrap() < 63.0);
+        assert_eq!(neutral.state, ContextUsageState::Neutral);
+        assert_eq!(neutral.compact_threshold, 80);
+        assert!(!neutral.auto_compact);
+
+        let warning = context_view_from_parts(
+            context_with_tokens(6_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(warning.state, ContextUsageState::Warning);
+
+        let danger = context_view_from_parts(
+            context_with_tokens(7_500),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(danger.state, ContextUsageState::Danger);
+
+        let full = context_view_from_parts(
+            context_with_tokens(8_000),
+            &settings,
+            0,
+            Some(10_000),
+            Some(1_000),
+        );
+        assert_eq!(full.state, ContextUsageState::Full);
+
+        let unknown = context_view_from_parts(context_with_tokens(5_000), &settings, 0, None, None);
+        assert_eq!(unknown.state, ContextUsageState::Unknown);
+        assert_eq!(unknown.percent_used, None);
+        assert_eq!(unknown.usable_tokens, None);
+        assert_eq!(unknown.total_tokens, 5_000);
+    }
+
+    #[test]
+    fn context_view_adds_tool_schema_tokens_to_the_total() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            None,
+            "test-model",
+        );
+        let view = context_view_from_parts(
+            context_with_tokens(1_000),
+            &settings,
+            250,
+            Some(10_000),
+            None,
+        );
+        assert_eq!(view.tool_tokens, 250);
+        assert_eq!(view.total_tokens, 1_250);
+    }
+
+    fn assignment_with(status: AssignmentStatus) -> Assignment {
+        let mut assignment = Assignment::new_root(
+            TaskId::new("task-1"),
+            AssignmentOrigin::User,
+            AssignmentRequester::System,
+            AgentId::new("agent-1"),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        assignment.status = status;
+        assignment
+    }
+
+    #[test]
+    fn overview_status_prioritizes_active_work() {
+        use AssignmentStatus::*;
+
+        assert_eq!(overview_status(&[]), "queued");
+        assert_eq!(
+            overview_status(&[
+                assignment_with(Queued),
+                assignment_with(NeedsInput),
+                assignment_with(Waiting),
+            ]),
+            "needs_input"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Waiting)]),
+            "waiting"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Resume)]),
+            "resume"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Queued), assignment_with(Running)]),
+            "running"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Completed), assignment_with(Failed)]),
+            "failed"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Cancelled), assignment_with(Cancelled)]),
+            "cancelled"
+        );
+        assert_eq!(
+            overview_status(&[assignment_with(Completed), assignment_with(Completed)]),
+            "completed"
+        );
+    }
+
+    #[test]
+    fn overview_details_prefer_the_last_error() {
+        let mut assignment = assignment_with(AssignmentStatus::Failed);
+        assert_eq!(overview_detail(&assignment), None);
+        assignment.outcome = Some(AssignmentOutcome::Failed {
+            error: "boom".to_string(),
+        });
+        assert_eq!(overview_detail(&assignment), Some("boom".to_string()));
+        assignment.last_error = Some("stalled".to_string());
+        assert_eq!(overview_detail(&assignment), Some("stalled".to_string()));
     }
 }

@@ -32,6 +32,9 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0026](0026-channel-and-conversation-management.md) | Channel and conversation management |
 | [0027](0027-rich-agent-output.md) | Rich agent output: Markdown and sandboxed HTML artifacts |
 | [0028](0028-main-assistant-and-workspace-actions.md) | Main assistant and desktop workspace actions |
+| [0029](0029-token-usage-accounting.md) | Token usage accounting |
+| [0030](0030-conversation-sessions-and-context.md) | Conversation sessions and context accounting |
+| [0031](0031-task-worktrees-and-background-cards.md) | Task worktrees and background task cards |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

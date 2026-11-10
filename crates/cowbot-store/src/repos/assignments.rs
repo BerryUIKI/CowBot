@@ -1,3 +1,4 @@
+use chrono::Utc;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{
@@ -188,6 +189,7 @@ fn status_from_str(value: &str) -> CowResult<AssignmentStatus> {
 fn approval_level_to_str(level: ApprovalLevel) -> &'static str {
     match level {
         ApprovalLevel::Ask => "ask",
+        ApprovalLevel::AcceptEdits => "accept_edits",
         ApprovalLevel::SafeAuto => "safe_auto",
         ApprovalLevel::PlanOnly => "plan_only",
         ApprovalLevel::Trusted => "trusted",
@@ -197,6 +199,7 @@ fn approval_level_to_str(level: ApprovalLevel) -> &'static str {
 fn approval_level_from_str(value: &str) -> CowResult<ApprovalLevel> {
     match value {
         "ask" => Ok(ApprovalLevel::Ask),
+        "accept_edits" => Ok(ApprovalLevel::AcceptEdits),
         "safe_auto" => Ok(ApprovalLevel::SafeAuto),
         "plan_only" => Ok(ApprovalLevel::PlanOnly),
         "trusted" => Ok(ApprovalLevel::Trusted),
@@ -339,6 +342,28 @@ impl Store {
         rows.into_iter().map(AssignmentRow::into_domain).collect()
     }
 
+    /// Every assignment in a run: the owning task's own assignments and the
+    /// assignments of tasks whose `run_group` is that task.
+    pub async fn list_assignments_for_run(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
+        let rows = sqlx::query_as::<_, AssignmentRow>(
+            "SELECT a.id, a.root_id, a.parent_id, a.depth, a.task_id, a.origin, a.requester,
+                    a.assignee, a.mode, a.reply, a.status, a.executions, a.restarts, a.wakes,
+                    a.request_budget, a.execution_budget, a.wake_budget, a.approval_level,
+                    a.outcome, a.stall_strikes, a.repeated_errors, a.last_error,
+                    a.created_at, a.updated_at
+             FROM assignments a
+             JOIN tasks t ON t.id = a.task_id
+             WHERE t.id = ? OR t.run_group = ?
+             ORDER BY a.created_at",
+        )
+        .bind(&task_id.0)
+        .bind(&task_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(AssignmentRow::into_domain).collect()
+    }
+
     pub async fn list_child_assignments(
         &self,
         parent_id: &AssignmentId,
@@ -445,6 +470,22 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
+        Ok(())
+    }
+
+    /// Change the approval level of a queued assignment before it starts.
+    pub async fn set_assignment_approval_level(
+        &self,
+        id: &AssignmentId,
+        approval_level: ApprovalLevel,
+    ) -> CowResult<()> {
+        sqlx::query("UPDATE assignments SET approval_level = ?, updated_at = ? WHERE id = ?")
+            .bind(approval_level_to_str(approval_level))
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
         Ok(())
     }
 

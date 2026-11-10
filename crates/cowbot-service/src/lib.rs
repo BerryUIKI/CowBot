@@ -9,18 +9,33 @@ mod assignments;
 mod bootstrap;
 mod channel_agents;
 mod channels;
+mod conversations;
 mod crew_runner;
+mod permissions;
+mod permissions_rules;
 mod scheduler;
+mod session_decisions;
 mod task_service;
 mod templates;
+mod worktrees;
 
 pub use agents::{AgentService, AgentUpdate};
-pub use approvals::{decision_for, ApprovalDecision, ApprovalService, ScopedApprovalGate};
+pub use approvals::{
+    decision_for, decision_for_call, ApprovalDecision, ApprovalService, ScopedApprovalGate,
+};
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
 pub use channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};
 pub use channels::ChannelService;
+pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
+pub use permissions::{
+    ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
+    PermissionRequest,
+};
+pub use permissions_rules::PermissionService;
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
+pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
 pub use templates::{builtin_templates, TemplateService};
+pub use worktrees::{slug_for, WorktreeService};

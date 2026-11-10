@@ -3,24 +3,33 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cowbot_agent::Crew;
+use cowbot_agent::{AgentInstance, Crew};
 use cowbot_bus::EventBus;
-use cowbot_core::agent::AgentProfile;
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
+use cowbot_core::agent::{AgentId, AgentProfile};
+use cowbot_core::approval::{
+    Approval, ApprovalId, ApprovalLevel, ApprovalStatus, BypassCritical, WorkspacePolicy,
+};
 use cowbot_core::assignment::{
     Assignment, AssignmentEvent, AssignmentId, AssignmentOrigin, AssignmentRequester,
+    AssignmentStatus,
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
+use cowbot_core::conversation::{
+    CompactionOutcome, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+};
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
-    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
-    ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport, CrewRunOptions,
-    CrewRunner, LocalContext, TaskService, TemplateService,
+    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
+    AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
+    SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -28,7 +37,8 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport,
+    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, SessionDecisionView,
+    WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -38,11 +48,15 @@ pub struct LocalClient {
     session: ClientSession,
     channels: ChannelService,
     channel_agents: ChannelAgentService,
+    conversations: ConversationService,
     templates: TemplateService,
     tasks: TaskService,
     assignments: AssignmentService,
     approvals: ApprovalService,
     agents: AgentService,
+    permissions: PermissionService,
+    session_decisions: Arc<SessionDecisions>,
+    worktrees: WorktreeService,
 }
 
 impl LocalClient {
@@ -65,18 +79,27 @@ impl LocalClient {
     }
 
     async fn build(store: Store, bus: EventBus, context: LocalContext) -> CowResult<Self> {
+        let session_decisions = SessionDecisions::new();
         let assignments = AssignmentService::new(store.clone(), bus.clone());
         assignments.reconcile_on_startup().await?;
         let approvals =
-            ApprovalService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+            ApprovalService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
         approvals.reconcile_on_startup().await?;
 
         let channels = ChannelService::new(store.clone(), bus.clone());
         let channel_agents =
-            ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+            ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
+        let conversations =
+            ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
+        let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
+        let worktrees = WorktreeService::new(store.clone(), bus.clone());
+        worktrees.reconcile().await?;
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -92,11 +115,15 @@ impl LocalClient {
             session,
             channels,
             channel_agents,
+            conversations,
             templates,
             tasks,
             assignments,
             approvals,
             agents,
+            permissions,
+            session_decisions,
+            worktrees,
         })
     }
 
@@ -189,6 +216,7 @@ impl LocalClient {
         options: CrewRunOptions,
     ) -> CowResult<HashMap<TaskId, String>> {
         CrewRunner::new(self.store.clone(), self.bus.clone())
+            .with_session_decisions(self.session_decisions.clone())
             .run_with_options(
                 crew,
                 &self.session.workspace.id,
@@ -198,6 +226,75 @@ impl LocalClient {
             )
             .await
     }
+
+    /// Execute an existing stored task with its assignee through the
+    /// assignment scheduler.
+    ///
+    /// Used by the desktop for Plan-mode runs and for "Approve plan and
+    /// continue": the task keeps its identity, status, plan, and history
+    /// instead of spawning a fresh crew. The caller supplies the agent
+    /// instance because the LLM and tool handles live in the desktop runtime.
+    pub async fn run_existing_task(
+        &self,
+        task: &Task,
+        agent: AgentInstance,
+        options: CrewRunOptions,
+    ) -> CowResult<String> {
+        let stored = self
+            .store
+            .get_task(&task.id)
+            .await?
+            .ok_or_else(|| CowError::Task(format!("task '{}' was not found", task.id)))?;
+        if stored.assigned_agent.as_ref() != Some(&agent.profile.id) {
+            return Err(CowError::Task(format!(
+                "task '{}' is not assigned to agent '{}'",
+                stored.id, agent.profile.id
+            )));
+        }
+
+        // A task created from the desktop already has a queued root. Reuse it
+        // but apply the approval level the user selected for this run.
+        let queued = self
+            .store
+            .list_assignments_for_task(&stored.id)
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                assignment.parent_id.is_none() && assignment.status == AssignmentStatus::Queued
+            });
+        if let Some(queued) = queued {
+            if queued.approval_level != options.approval_level {
+                self.store
+                    .set_assignment_approval_level(&queued.id, options.approval_level)
+                    .await?;
+            }
+        }
+
+        let mut scheduler = AssignmentScheduler::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.session.workspace.id.clone(),
+            1,
+        )
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(Some(self.session_decisions.clone()));
+        scheduler.register_instance(&agent);
+        scheduler
+            .enqueue(
+                &stored,
+                AssignmentRequester::User(self.session.user.id.0.clone()),
+                AssignmentOrigin::User,
+                &options,
+            )
+            .await?;
+        let completed = scheduler.run_until_idle().await?;
+        completed
+            .get(&stored.id)
+            .cloned()
+            .ok_or_else(|| CowError::Task(format!("task '{}' did not complete", stored.id)))
+    }
+
     /// Ensure every workspace agent has a direct conversation channel.
     ///
     /// Idempotent: existing conversations are reused, missing ones are created
@@ -230,12 +327,133 @@ impl LocalClient {
             .reply(channel_id, message, llm, tools, model, &options)
             .await
     }
+
+    /// Compact a conversation context with the caller's fixed model client.
+    ///
+    /// Local-only for the same reason as [`Self::reply_to_mentions`]: the LLM
+    /// handle lives in the desktop runtime, not in the workspace database.
+    pub async fn compact_conversation(
+        &self,
+        channel_id: &ChannelId,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+    ) -> CowResult<CompactionOutcome> {
+        self.conversations.compact(channel_id, llm, model).await
+    }
+
+    /// Record that a task wants a git worktree.
+    ///
+    /// Local-only: the checkout lives on this machine and is not part of the
+    /// transport-neutral protocol.
+    pub async fn request_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree> {
+        self.worktrees
+            .request(task_id, project_id, project_path, base_branch)
+            .await
+    }
+
+    /// Create the branch and checkout for a requested worktree.
+    pub async fn prepare_worktree(&self, task_id: &TaskId) -> CowResult<TaskWorktree> {
+        self.worktrees.prepare(task_id).await
+    }
+
+    pub async fn task_worktree(&self, task_id: &TaskId) -> CowResult<Option<TaskWorktree>> {
+        self.worktrees.get(task_id).await
+    }
+
+    pub async fn list_worktrees(&self) -> CowResult<Vec<TaskWorktree>> {
+        self.worktrees.list().await
+    }
+
+    pub async fn discard_worktree(&self, task_id: &TaskId) -> CowResult<TaskWorktree> {
+        self.worktrees.discard(task_id).await
+    }
+
+    pub async fn worktree_diff(&self, task_id: &TaskId) -> CowResult<TaskWorktreeDiff> {
+        self.worktrees.diff(task_id).await
+    }
+
+    pub async fn reconcile_worktrees(&self) -> CowResult<Vec<TaskWorktree>> {
+        self.worktrees.reconcile().await
+    }
+
+    /// Assignments of a run, including its crew tasks.
+    pub async fn list_run_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
+        self.store.list_assignments_for_run(task_id).await
+    }
+
+    /// Newest tool call in a run, used by background task cards.
+    pub async fn latest_tool_call_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> CowResult<Option<ToolCallRecord>> {
+        self.store.latest_tool_call_for_task(task_id).await
+    }
 }
 
 #[async_trait]
 impl Client for LocalClient {
     async fn session(&self) -> CowResult<ClientSession> {
-        Ok(self.session.clone())
+        let user_id = self.session.user.id.clone();
+        let user = self
+            .store
+            .get_user(&user_id)
+            .await?
+            .ok_or_else(|| CowError::Storage(format!("user '{}' was not found", user_id.0)))?;
+        Ok(ClientSession {
+            user: ClientUser {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+            },
+            workspace: self.session.workspace.clone(),
+        })
+    }
+
+    async fn update_user_profile(&self, name: &str, email: &str) -> CowResult<ClientSession> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CowError::Config("Display name is required.".to_string()));
+        }
+        if name.chars().count() > 80 {
+            return Err(CowError::Config(
+                "Display name is limited to 80 characters.".to_string(),
+            ));
+        }
+
+        let email = email.trim().to_lowercase();
+        let email_valid = email
+            .split_once('@')
+            .map(|(local, domain)| !local.is_empty() && !domain.is_empty())
+            .unwrap_or(false);
+        if !email_valid {
+            return Err(CowError::Config("Enter a valid email address.".to_string()));
+        }
+        if let Some(existing) = self.store.get_user_by_email(&email).await? {
+            if existing.id != self.session.user.id {
+                return Err(CowError::Config(
+                    "That email is already used by another local user.".to_string(),
+                ));
+            }
+        }
+
+        self.store
+            .update_user(&self.session.user.id, name, &email)
+            .await?;
+
+        Ok(ClientSession {
+            user: ClientUser {
+                id: self.session.user.id.clone(),
+                name: name.to_string(),
+                email,
+            },
+            workspace: self.session.workspace.clone(),
+        })
     }
 
     fn subscribe(&self) -> EventStream {
@@ -265,6 +483,10 @@ impl Client for LocalClient {
         self.channels
             .list_channels(&self.session.workspace.id)
             .await
+    }
+
+    async fn get_channel(&self, channel_id: &ChannelId) -> CowResult<Option<Channel>> {
+        self.store.get_channel(channel_id).await
     }
 
     async fn create_channel(&self, name: &str, topic: &str) -> CowResult<Channel> {
@@ -330,9 +552,47 @@ impl Client for LocalClient {
         self.channels.list_messages(channel_id, limit).await
     }
 
+    async fn create_conversation(
+        &self,
+        title: Option<&str>,
+        agent_id: &AgentId,
+        provider_id: Option<String>,
+        model: &str,
+    ) -> CowResult<Channel> {
+        self.conversations
+            .create(title, agent_id, provider_id, model)
+            .await
+    }
+
+    async fn conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<ConversationSettings> {
+        self.conversations.settings(channel_id).await
+    }
+
+    async fn update_conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+        update: &ConversationSettingsUpdate,
+    ) -> CowResult<ConversationSettings> {
+        self.conversations.update_settings(channel_id, update).await
+    }
+
+    async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
+        self.conversations.context(channel_id).await
+    }
+
+    async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.conversations.clear_context(channel_id).await
+    }
+
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
-        let model = Task::new(task.description.clone(), task.expected_output.clone())
+        let mut model = Task::new(task.description.clone(), task.expected_output.clone())
             .assign_to(task.assignee.clone());
+        if let Some(channel_id) = &task.channel_id {
+            model = model.with_channel(channel_id.clone());
+        }
         self.tasks
             .create(
                 &self.session.workspace.id,
@@ -349,12 +609,28 @@ impl Client for LocalClient {
         self.tasks.list(&self.session.workspace.id).await
     }
 
+    async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>> {
+        self.tasks.list_run_tasks(task_id).await
+    }
+
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>> {
         self.tasks.get(task_id).await
     }
 
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()> {
         self.tasks.cancel(task_id, reason).await
+    }
+
+    async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.set_archived(task_id, true).await
+    }
+
+    async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.set_archived(task_id, false).await
+    }
+
+    async fn approve_task_plan(&self, task_id: &TaskId) -> CowResult<Task> {
+        self.tasks.approve_plan(task_id).await
     }
 
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>> {
@@ -380,10 +656,50 @@ impl Client for LocalClient {
         self.assignments.events(assignment_id).await
     }
 
-    async fn list_audit_events(&self, limit: u32) -> CowResult<Vec<AuditEvent>> {
+    async fn list_audit_events(
+        &self,
+        limit: u32,
+        source: Option<&str>,
+    ) -> CowResult<Vec<AuditEvent>> {
         self.store
-            .list_audit_events(&self.session.workspace.id, limit)
+            .list_audit_events_by_source(&self.session.workspace.id, source, limit)
             .await
+    }
+
+    async fn list_permission_rules(&self) -> CowResult<Vec<PermissionRule>> {
+        self.permissions.list().await
+    }
+
+    async fn create_permission_rule(
+        &self,
+        tool: &str,
+        command: Option<&str>,
+        decision: RuleDecision,
+    ) -> CowResult<PermissionRule> {
+        self.permissions.create(tool, command, decision).await
+    }
+
+    async fn set_permission_rule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> CowResult<PermissionRule> {
+        self.permissions.set_enabled(id, enabled).await
+    }
+
+    async fn delete_permission_rule(&self, id: &str) -> CowResult<()> {
+        self.permissions.delete(id).await
+    }
+
+    async fn workspace_policy(&self) -> CowResult<WorkspacePolicy> {
+        self.permissions.policy().await
+    }
+
+    async fn set_bypass_critical(
+        &self,
+        bypass_critical: BypassCritical,
+    ) -> CowResult<WorkspacePolicy> {
+        self.permissions.set_bypass_critical(bypass_critical).await
     }
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>> {
@@ -403,6 +719,38 @@ impl Client for LocalClient {
         self.approvals
             .decide(approval_id, status, &self.session.user.id.0)
             .await
+    }
+
+    async fn decide_approval_for_session(
+        &self,
+        approval_id: &ApprovalId,
+        approved: bool,
+    ) -> CowResult<Approval> {
+        let status = if approved {
+            ApprovalStatus::Approved
+        } else {
+            ApprovalStatus::Rejected
+        };
+        self.approvals
+            .decide_for_session(approval_id, status, &self.session.user.id.0)
+            .await
+    }
+
+    async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>> {
+        Ok(self
+            .session_decisions
+            .entries()
+            .into_iter()
+            .map(|entry| SessionDecisionView {
+                key: entry.key,
+                decision: entry.decision,
+            })
+            .collect())
+    }
+
+    async fn clear_session_decisions(&self) -> CowResult<()> {
+        self.session_decisions.clear();
+        Ok(())
     }
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>> {
@@ -460,7 +808,8 @@ mod tests {
         AssignmentEventKind, AssignmentMode, AssignmentOrigin, ReplyMode,
     };
     use cowbot_core::run::RunStatus;
-    use cowbot_core::task::Task;
+    use cowbot_core::task::{Task, TaskStatus};
+    use cowbot_llm::MockLlmProvider;
     use serde_json::json;
 
     #[tokio::test]
@@ -586,7 +935,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, AssignmentEventKind::Enqueued);
 
-        let audit = client.list_audit_events(10).await.unwrap();
+        let audit = client.list_audit_events(10, None).await.unwrap();
         assert!(audit.iter().any(|event| event.action == "test.action"));
     }
 
@@ -687,6 +1036,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worktree_operations_roundtrip_through_the_client() {
+        use cowbot_core::worktree::WorktreeStatus;
+
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let workspace_id = client.session().await.unwrap().workspace.id;
+
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write(repo.join("README.md"), "initial\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+
+        let task = Task::new("Client worktree", "Output");
+        client
+            .store
+            .create_task(&workspace_id, None, &task)
+            .await
+            .unwrap();
+
+        let requested = client
+            .request_worktree(&task.id, "project-1", repo.to_str().unwrap(), "main")
+            .await
+            .unwrap();
+        assert_eq!(requested.status, WorktreeStatus::Requested);
+
+        let ready = client.prepare_worktree(&task.id).await.unwrap();
+        assert_eq!(ready.status, WorktreeStatus::Ready);
+        assert_eq!(
+            client
+                .task_worktree(&task.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .branch,
+            ready.branch
+        );
+
+        let diff = client.worktree_diff(&task.id).await.unwrap();
+        assert!(diff.status.is_empty());
+        assert!(!diff.truncated);
+        assert_eq!(client.list_worktrees().await.unwrap().len(), 1);
+
+        let removed = client.discard_worktree(&task.id).await.unwrap();
+        assert_eq!(removed.status, WorktreeStatus::Removed);
+        assert!(!std::path::Path::new(&ready.worktree_path).exists());
+    }
+
+    #[tokio::test]
     async fn new_workspace_databases_use_the_requested_name() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("team.db");
@@ -702,5 +1116,168 @@ mod tests {
         assert!(LocalClient::create_workspace_database(&path, "  ")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn conversation_operations_roundtrip_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let added = client
+            .instantiate_agents("builtin-general-assistant")
+            .await
+            .unwrap();
+        let agent = added.first().unwrap();
+
+        let channel = client
+            .create_conversation(
+                Some("Design review"),
+                &agent.id,
+                Some("provider-1".to_string()),
+                "mock-model",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            channel.kind,
+            cowbot_core::conversation::ChannelKind::Conversation
+        );
+        assert_eq!(
+            client.get_channel(&channel.id).await.unwrap().unwrap().kind,
+            cowbot_core::conversation::ChannelKind::Conversation
+        );
+
+        let settings = client.conversation_settings(&channel.id).await.unwrap();
+        assert_eq!(settings.model, "mock-model");
+        assert_eq!(settings.provider_id.as_deref(), Some("provider-1"));
+        assert!(!settings.auto_compact);
+
+        let updated = client
+            .update_conversation_settings(
+                &channel.id,
+                &cowbot_core::conversation::ConversationSettingsUpdate {
+                    auto_compact: Some(true),
+                    compact_threshold: Some(70),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(updated.auto_compact);
+        assert_eq!(updated.compact_threshold, 70);
+
+        let message = client
+            .post_message(&channel.id, "hello there")
+            .await
+            .unwrap();
+        let report = client
+            .reply_to_mentions(
+                &channel.id,
+                &message,
+                Arc::new(MockLlmProvider::echo()),
+                ToolRegistry::new(),
+                "mock-model",
+                ChannelTurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.agents, vec![agent.id.clone()]);
+
+        let context = client.conversation_context(&channel.id).await.unwrap();
+        assert_eq!(context.agent_id, agent.id);
+        assert_eq!(context.projection.active_entries, 2);
+        assert!(context.projection.total_tokens() > 0);
+
+        let cleared = client
+            .clear_conversation_context(&channel.id)
+            .await
+            .unwrap();
+        assert!(cleared >= 2);
+        let context = client.conversation_context(&channel.id).await.unwrap();
+        assert_eq!(context.projection.active_entries, 0);
+    }
+
+    #[tokio::test]
+    async fn run_existing_task_uses_its_assignee_and_captures_the_plan() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+        let session = client.session().await.unwrap();
+        let workspace_id = session.workspace.id;
+        let user_id = session.user.id.0;
+        let profile = AgentProfile::new("Tester", "Engineer", "Ship", "Terse");
+        client
+            .store
+            .upsert_agent(&workspace_id, &profile)
+            .await
+            .unwrap();
+
+        let task = Task::new("Do the work", "Output").assign_to(profile.id.clone());
+        client
+            .store
+            .create_task(&workspace_id, None, &task)
+            .await
+            .unwrap();
+        let output = client
+            .run_existing_task(
+                &task,
+                AgentInstance::new(
+                    profile.clone(),
+                    Arc::new(MockLlmProvider::echo()),
+                    ToolRegistry::new(),
+                    "mock-model",
+                ),
+                CrewRunOptions {
+                    approval_level: ApprovalLevel::Ask,
+                    ..CrewRunOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(output.starts_with("Mock response to:"));
+        let completed = client.store.get_task(&task.id).await.unwrap().unwrap();
+        assert!(matches!(completed.status, TaskStatus::Completed { .. }));
+
+        let plan_task = Task::new("Plan the work", "A plan").assign_to(profile.id.clone());
+        client
+            .store
+            .create_task(&workspace_id, None, &plan_task)
+            .await
+            .unwrap();
+        let queued = Assignment::new_root(
+            plan_task.id.clone(),
+            AssignmentOrigin::User,
+            AssignmentRequester::User(user_id),
+            profile.id.clone(),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        client.store.create_assignment(&queued).await.unwrap();
+        client
+            .run_existing_task(
+                &plan_task,
+                AgentInstance::new(
+                    profile,
+                    Arc::new(MockLlmProvider::echo()),
+                    ToolRegistry::new(),
+                    "mock-model",
+                ),
+                CrewRunOptions {
+                    approval_level: ApprovalLevel::PlanOnly,
+                    capture_plan_task: Some(plan_task.id.clone()),
+                    ..CrewRunOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let planned = client.store.get_task(&plan_task.id).await.unwrap().unwrap();
+        assert!(planned.plan.is_some());
+        assert!(!planned.plan_approved);
+        let updated = client
+            .store
+            .get_assignment(&queued.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.approval_level, ApprovalLevel::PlanOnly);
     }
 }

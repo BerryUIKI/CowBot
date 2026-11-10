@@ -13,11 +13,13 @@ use cowbot_core::assignment::{
 };
 use cowbot_core::channel::ChannelId;
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::tool::{ToolCall, ToolCallRecorder, ToolGate, ToolResult};
-use cowbot_llm::LlmProvider;
+use cowbot_core::usage::{LlmCallRecord, LlmCallUsage, LlmUsageRecorder};
+use cowbot_llm::{ChatMessage, LlmProvider};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 use tokio::sync::Semaphore;
@@ -25,6 +27,22 @@ use tokio::task::JoinSet;
 
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
+use crate::permissions::ModelPermissionEvaluator;
+use crate::session_decisions::SessionDecisions;
+
+/// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
+/// approval policy; the agent is asked to finish with the plan itself.
+const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
+
+/// A conversation turn whose model request is assembled before the assignment
+/// is enqueued. The per-agent context branch receives the assistant and tool
+/// messages the agent produces.
+#[derive(Clone)]
+struct PreparedConversationTurn {
+    messages: Vec<ChatMessage>,
+    channel_id: ChannelId,
+    agent_id: AgentId,
+}
 
 /// Options for one scheduled crew run.
 #[derive(Debug, Clone)]
@@ -35,6 +53,12 @@ pub struct CrewRunOptions {
     pub channel_id: Option<ChannelId>,
     /// Maximum number of assignments that may execute at the same time.
     pub max_concurrency: usize,
+    /// Let Auto mode ask the active model for permission decisions.
+    pub use_model_permissions: bool,
+    /// Capture this task's Plan-mode output as its plan. Crew runs that plan
+    /// with one agent set the planning task; pipeline runs leave it unset so
+    /// coder and reviewer outputs are not shown as plans.
+    pub capture_plan_task: Option<TaskId>,
 }
 
 impl Default for CrewRunOptions {
@@ -43,6 +67,8 @@ impl Default for CrewRunOptions {
             approval_level: ApprovalLevel::Ask,
             channel_id: None,
             max_concurrency: 4,
+            use_model_permissions: false,
+            capture_plan_task: None,
         }
     }
 }
@@ -61,6 +87,7 @@ impl AgentExecution {
     ///
     /// A new instance per call keeps assignment execution independent, which
     /// lets independent roots run concurrently.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         task: &Task,
@@ -68,7 +95,10 @@ impl AgentExecution {
         bus: &EventBus,
         gate: Arc<dyn ToolGate>,
         recorder: Arc<dyn ToolCallRecorder>,
-    ) -> CowResult<String> {
+        usage_recorder: Arc<dyn LlmUsageRecorder>,
+        conversation: Option<Vec<ChatMessage>>,
+        plan_mode: bool,
+    ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
             self.llm.clone(),
@@ -77,7 +107,57 @@ impl AgentExecution {
         );
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
-        agent.execute_task(task, context, bus).await
+        agent.set_usage_recorder(Some(usage_recorder));
+        if plan_mode {
+            agent.set_mode_instruction(Some(PLAN_MODE_INSTRUCTION.to_string()));
+        }
+
+        match conversation {
+            Some(messages) => {
+                let collector = Arc::new(CollectingConversation::new());
+                agent.set_conversation_recorder(Some(collector.clone()));
+                let output = agent.execute_messages(task, messages, bus).await?;
+                Ok((output, Some(collector.messages())))
+            }
+            None => {
+                let output = agent.execute_task(task, context, bus).await?;
+                Ok((output, None))
+            }
+        }
+    }
+}
+
+/// Collects the messages an agent appends during a conversation turn.
+///
+/// The scheduler writes them to the context branch only after the turn
+/// succeeds, so a failed turn never leaves an assistant tool call without its
+/// tool results in the branch.
+struct CollectingConversation {
+    messages: StdMutex<Vec<ChatMessage>>,
+}
+
+impl CollectingConversation {
+    fn new() -> Self {
+        Self {
+            messages: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn messages(&self) -> Vec<ChatMessage> {
+        self.messages
+            .lock()
+            .map(|messages| messages.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl cowbot_agent::ConversationRecorder for CollectingConversation {
+    async fn record_message(&self, message: &ChatMessage) -> CowResult<()> {
+        if let Ok(mut messages) = self.messages.lock() {
+            messages.push(message.clone());
+        }
+        Ok(())
     }
 }
 
@@ -95,6 +175,14 @@ pub struct AssignmentScheduler {
     max_concurrency: usize,
     /// When set, only assignments rooted in a task enqueued here are claimed.
     scope: Option<Arc<StdMutex<HashSet<AssignmentId>>>>,
+    /// Ask the active model for Auto-mode permission decisions.
+    use_model_permissions: bool,
+    /// Human decisions remembered for this process.
+    session_decisions: Option<Arc<SessionDecisions>>,
+    /// Model requests prepared for conversation turns, keyed by task id.
+    prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
+    /// Tasks whose completed Plan-mode output becomes their stored plan.
+    plan_tasks: Arc<StdMutex<HashSet<TaskId>>>,
 }
 
 enum Claim {
@@ -124,7 +212,23 @@ impl AssignmentScheduler {
             executions: HashMap::new(),
             max_concurrency,
             scope: None,
+            use_model_permissions: false,
+            session_decisions: None,
+            prepared: Arc::new(StdMutex::new(HashMap::new())),
+            plan_tasks: Arc::new(StdMutex::new(HashSet::new())),
         }
+    }
+
+    /// Enable model-decided Auto mode for assignments run by this scheduler.
+    pub fn with_model_permissions(mut self, enabled: bool) -> Self {
+        self.use_model_permissions = enabled;
+        self
+    }
+
+    /// Share the process-lifetime session approval decisions.
+    pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
+        self.session_decisions = decisions;
+        self
     }
 
     /// Limit this scheduler to the roots enqueued through it.
@@ -185,6 +289,11 @@ impl AssignmentScheduler {
         origin: AssignmentOrigin,
         options: &CrewRunOptions,
     ) -> CowResult<Assignment> {
+        if options.capture_plan_task.as_ref() == Some(&task.id) {
+            if let Ok(mut plan_tasks) = self.plan_tasks.lock() {
+                plan_tasks.insert(task.id.clone());
+            }
+        }
         let assignment = self
             .enqueue_untracked(task, requester, origin, options)
             .await?;
@@ -194,6 +303,43 @@ impl AssignmentScheduler {
             }
         }
         Ok(assignment)
+    }
+
+    /// Enqueue a conversation turn that runs against a caller-assembled request.
+    ///
+    /// The assistant and tool messages produced by the turn are appended to the
+    /// conversation's context branch when the assignment completes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_conversation_turn(
+        &self,
+        task: &Task,
+        requester: AssignmentRequester,
+        origin: AssignmentOrigin,
+        options: &CrewRunOptions,
+        messages: Vec<ChatMessage>,
+        channel_id: ChannelId,
+        agent_id: AgentId,
+    ) -> CowResult<Assignment> {
+        if let Ok(mut prepared) = self.prepared.lock() {
+            prepared.insert(
+                task.id.clone(),
+                PreparedConversationTurn {
+                    messages,
+                    channel_id,
+                    agent_id,
+                },
+            );
+        }
+
+        match self.enqueue(task, requester, origin, options).await {
+            Ok(assignment) => Ok(assignment),
+            Err(error) => {
+                if let Ok(mut prepared) = self.prepared.lock() {
+                    prepared.remove(&task.id);
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn enqueue_untracked(
@@ -438,31 +584,98 @@ impl AssignmentScheduler {
             return Err(CowError::Agent(reason));
         };
         let context = self.context_for(&assignment, &task).await?;
+        let prepared = self
+            .prepared
+            .lock()
+            .ok()
+            .and_then(|mut prepared| prepared.remove(&task.id));
 
         self.assignments.start(&assignment.id).await?;
 
         let run = Run::new(task.id.clone(), assignment.assignee.clone());
         self.assignments.store().create_run(&run).await?;
 
-        let gate = Arc::new(ScopedApprovalGate::new(
-            self.approvals.clone(),
-            assignment.id.clone(),
-        ));
+        let mut approvals = self
+            .approvals
+            .clone()
+            .with_session_decisions(self.session_decisions.clone());
+        if self.use_model_permissions {
+            approvals = approvals.with_evaluator(Some(Arc::new(ModelPermissionEvaluator::new(
+                executor.llm.clone(),
+                executor.model.clone(),
+            ))));
+        }
+        let gate = Arc::new(ScopedApprovalGate::new(approvals, assignment.id.clone()));
         let recorder = Arc::new(RunToolCallRecorder {
             store: self.assignments.store().clone(),
             run_id: run.id.clone(),
         });
+        let usage_recorder = Arc::new(RunUsageRecorder {
+            store: self.assignments.store().clone(),
+            run_id: run.id.clone(),
+            task_id: task.id.clone(),
+            agent_id: assignment.assignee.clone(),
+            channel_id: task.channel_id.clone(),
+        });
 
+        let messages = prepared.as_ref().map(|turn| turn.messages.clone());
+        let plan_mode = assignment.approval_level == ApprovalLevel::PlanOnly;
         match executor
-            .execute(&task, &context, self.assignments.bus(), gate, recorder)
+            .execute(
+                &task,
+                &context,
+                self.assignments.bus(),
+                gate,
+                recorder,
+                usage_recorder,
+                messages,
+                plan_mode,
+            )
             .await
         {
-            Ok(output) => {
+            Ok((output, recorded)) => {
+                if let (Some(turn), Some(messages)) = (&prepared, recorded) {
+                    let entries =
+                        context_entries_from_messages(&turn.channel_id, &turn.agent_id, &messages);
+                    if let Err(error) = self
+                        .assignments
+                        .store()
+                        .append_context_entries(&entries)
+                        .await
+                    {
+                        self.assignments
+                            .store()
+                            .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
+                            .await?;
+                        self.assignments
+                            .fail(&assignment.id, error.to_string())
+                            .await?;
+                        return Err(error);
+                    }
+                }
                 self.assignments
                     .store()
                     .update_run_status(&run.id, RunStatus::Completed, Some(Utc::now()))
                     .await?;
                 self.assignments.complete(&assignment.id, &output).await?;
+                if self
+                    .plan_tasks
+                    .lock()
+                    .map(|tasks| tasks.contains(&task.id))
+                    .unwrap_or(false)
+                    && assignment.approval_level == ApprovalLevel::PlanOnly
+                    && !output.trim().is_empty()
+                {
+                    self.assignments
+                        .store()
+                        .set_task_plan(&task.id, &output)
+                        .await?;
+                    if let Some(updated) = self.assignments.store().get_task(&task.id).await? {
+                        self.assignments
+                            .bus()
+                            .publish(Event::new(EventPayload::TaskUpdated(updated)));
+                    }
+                }
                 Ok((task.id.clone(), output))
             }
             Err(error) => {
@@ -490,6 +703,12 @@ impl AssignmentScheduler {
                 if let Some(AssignmentOutcome::Completed { output }) = child.outcome {
                     context.push(output);
                 }
+            }
+        }
+        // An approved plan is the instruction for the follow-up Manual run.
+        if assignment.approval_level != ApprovalLevel::PlanOnly && task.plan_approved {
+            if let Some(plan) = task.plan.as_deref().filter(|plan| !plan.trim().is_empty()) {
+                context.push(format!("Approved plan to implement:\n{plan}"));
             }
         }
         Ok(context)
@@ -540,4 +759,67 @@ impl ToolCallRecorder for RunToolCallRecorder {
         record.approved_by = approved_by.map(str::to_string);
         self.store.record_tool_call(&record).await
     }
+}
+
+/// Persists LLM usage under the run that produced it.
+struct RunUsageRecorder {
+    store: Store,
+    run_id: RunId,
+    task_id: TaskId,
+    agent_id: AgentId,
+    channel_id: Option<ChannelId>,
+}
+
+#[async_trait]
+impl LlmUsageRecorder for RunUsageRecorder {
+    async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()> {
+        let mut record = LlmCallRecord::new(call.call_kind, call.model.clone());
+        record.run_id = Some(self.run_id.clone());
+        record.task_id = Some(self.task_id.clone());
+        record.channel_id = self.channel_id.clone();
+        record.agent_id = Some(self.agent_id.clone());
+        record.usage = call.usage.clone();
+        record.raw_usage = call.raw_usage.clone();
+        self.store.record_llm_call(&record).await
+    }
+}
+
+/// Convert the messages an agent appended into context branch entries.
+fn context_entries_from_messages(
+    channel_id: &ChannelId,
+    agent_id: &AgentId,
+    messages: &[ChatMessage],
+) -> Vec<cowbot_core::conversation::ContextEntry> {
+    messages
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                cowbot_llm::ChatRole::System => cowbot_core::conversation::ContextRole::System,
+                cowbot_llm::ChatRole::User => cowbot_core::conversation::ContextRole::User,
+                cowbot_llm::ChatRole::Assistant => {
+                    cowbot_core::conversation::ContextRole::Assistant
+                }
+                cowbot_llm::ChatRole::Tool => cowbot_core::conversation::ContextRole::Tool,
+            };
+            let mut entry = cowbot_core::conversation::ContextEntry::new(
+                channel_id.clone(),
+                agent_id.clone(),
+                role,
+                message.content.clone(),
+            );
+            entry.tool_calls = message.tool_calls.as_ref().map(|calls| {
+                calls
+                    .iter()
+                    .map(|call| cowbot_core::conversation::ContextToolCall {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                    .collect()
+            });
+            entry.tool_call_id = message.tool_call_id.clone();
+            entry.recount();
+            entry
+        })
+        .collect()
 }

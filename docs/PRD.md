@@ -66,7 +66,7 @@ CowBot fills exactly this gap: **a self-hosted, channel-native multi-agent team 
 
 CowBot's core differentiation is not "a stronger single agent", but **putting multiple agents and humans in the same collaboration space**:
 
-- Channels and threads are the primary interface; humans and agents are both channel members. Every agent also has a direct conversation where messages reach it without a mention; group channels keep mention-based addressing (ADR-0024).
+- Channels and threads are the primary interface; humans and agents are both channel members. Every agent also has a direct conversation where messages reach it without a mention; group channels keep mention-based addressing (ADR-0024). Users can also create single-agent conversation sessions with an independent, visible model context and manual or automatic compaction (ADR-0030).
 - Agents are addressed via @mention in a group channel and answer in that channel; in an agent's direct conversation every message is addressed to that agent. Proactive task claiming by role is not implemented in 0.1.x.
 - Tasks, reasoning, tool calls, approvals, and deliverables all live in the channel timeline, traceable and auditable.
 - Humans can step in at any time to correct, approve, or take over.
@@ -142,9 +142,9 @@ CowBot follows a "single core, two forms" model:
 | Agent management | Create/edit agents (role, goal, backstory, model, tools, iteration limit) |
 | Tasks and orchestration | Task creation, assignment runtime (lifecycle, event log, budgets, restart reconciliation), sequential crew execution, deliverables, run and tool-call history, and status transitions |
 | Tools and sandbox | Code execution, file read/write; timeouts, output truncation, working-directory limits |
-| Approval policy | Modes (Ask / SafeAuto / PlanOnly / Trusted); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; tool/command/path allowlists |
+| Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; workspace allow / ask / deny rules per tool and command pattern; session decisions; Plan artifacts with approve-to-continue; a Bypass Critical tri-state; source-attributed audit |
 | Model configuration | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints (cloud APIs and local models), protocol selection, connection test |
-| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, and approval records |
+| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, approval records, conversation context, per-call token usage, permission rules, and task worktrees |
 | CLI | `cowbot` retained for initialization, diagnostics, headless runs, and debugging |
 
 ### 5.2 P1 (Enhancements)
@@ -156,8 +156,8 @@ CowBot follows a "single core, two forms" model:
 - Docker sandbox backend.
 - Webhooks and Mattermost / Slack / Feishu integrations.
 - Long-term agent memory and knowledge base.
-- Streaming responses, retries, rate limiting, and token/cost accounting.
-- Audit log and operation replay.
+- Streaming responses, retries, rate limiting, and cost/billing views (per-call token usage is recorded, ADR-0029).
+- Operation replay built on the existing audit log.
 
 ### 5.3 P2 (Ecosystem)
 
@@ -187,7 +187,7 @@ CowBot follows a "single core, two forms" model:
 2. Desktop console form factor: desktop shell (Tauri).
 3. Deployment: desktop app (optionally serverless) plus self-hosted server (Docker/single binary).
 4. General work has no fixed scenarios; only configurable primitives and templates are provided, preserving freedom.
-5. Approvals offer multiple modes (Ask by default, auto-approve safe operations, plan-only, trusted) with fine-grained rules.
+5. Approvals offer five modes (Manual by default, auto, accept edits, plan, bypass) with fine-grained rules.
 6. Built-in agent and team template library.
 7. v1 orchestration scope: single agent + sequential crew; hierarchical manager and DAG are P1.
 8. v1 memory scope: session plus channel/task history; project-level long-term memory is P1.
@@ -199,7 +199,19 @@ CowBot follows a "single core, two forms" model:
 14. Authentication: local accounts + Argon2id + opaque server session tokens + API tokens; OIDC/SSO is P1.
 15. PostgreSQL is deferred to the server phase; local/offline functionality comes first.
 
-### 7.2 Open Questions
+### 7.2 Planned Direction (2026-11-10)
+
+1. Work and Code are project profiles, not global application modes; a project chooses its profile.
+2. Workspaces remain the data, tenant, and scheduling boundary. Projects are the unit of work inside a workspace; Home is the unassigned view.
+3. Agents remain workspace-wide with one direct conversation each; projects track team membership and own group channels.
+4. Audience adaptation uses starter kits, capability packs, and security policies, not separate applications. A workspace policy is the enforced security floor; projects may only tighten it.
+5. Finance is the first vertical target, aimed at small private funds, family offices, and independent analysts. It is a research/analysis workspace, not investment advice or trading.
+6. Medical research and medical writing are a later vertical; clinical diagnosis, treatment recommendations, and clinical decision support are out of scope.
+7. Branded editions are deferred. There is no runtime edition switching; separate installers, if ever needed, are built from the same codebase.
+8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
+9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
+
+### 7.3 Open Questions
 
 1. Data-at-rest encryption design.
 2. Online template marketplace and template signing (P2).

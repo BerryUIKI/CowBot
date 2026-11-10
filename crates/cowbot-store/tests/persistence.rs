@@ -1,6 +1,9 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::Approval;
+use cowbot_core::approval::{Approval, ApprovalLevel, BypassCritical, WorkspacePolicy};
+use cowbot_core::assignment::{
+    Assignment, AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
+};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::identity::{
@@ -410,4 +413,208 @@ async fn tasks_runs_approvals_and_audit_roundtrip() {
     let events = store.list_audit_events(&workspace_id, 10).await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].action, "approval.approved");
+}
+
+#[tokio::test]
+async fn update_user_changes_name_and_email() {
+    let store = test_store().await;
+    let (user, _workspace) = seed_workspace(&store).await;
+
+    store
+        .update_user(&user.id, "Alice Cooper", "alice.cooper@example.com")
+        .await
+        .unwrap();
+
+    let updated = store.get_user(&user.id).await.unwrap().unwrap();
+    assert_eq!(updated.name, "Alice Cooper");
+    assert_eq!(updated.email, "alice.cooper@example.com");
+    assert_eq!(updated.password_hash, user.password_hash);
+}
+
+#[tokio::test]
+async fn task_title_and_archive_roundtrip() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let task = Task::new("First line\nSecond line", "Output").with_title("Short title");
+    store.create_task(&workspace.id, None, &task).await.unwrap();
+
+    let loaded = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(loaded.title, "Short title");
+    assert!(!loaded.archived);
+
+    store.set_task_archived(&task.id, true).await.unwrap();
+    let archived = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(archived.archived);
+
+    store.set_task_archived(&task.id, false).await.unwrap();
+    let restored = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(!restored.archived);
+}
+
+#[tokio::test]
+async fn task_plan_roundtrip_and_approval() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let task = Task::new("Plan the change", "A plan");
+    store.create_task(&workspace.id, None, &task).await.unwrap();
+    let loaded = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(loaded.plan.is_none());
+    assert!(!loaded.plan_approved);
+
+    store
+        .set_task_plan(&task.id, "1. Inspect\n2. Implement")
+        .await
+        .unwrap();
+    let planned = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(planned.plan.as_deref(), Some("1. Inspect\n2. Implement"));
+    assert!(!planned.plan_approved);
+
+    store.approve_task_plan(&task.id).await.unwrap();
+    let approved = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(approved.plan_approved);
+
+    store.set_task_plan(&task.id, "Revised plan").await.unwrap();
+    let revised = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(revised.plan.as_deref(), Some("Revised plan"));
+    assert!(!revised.plan_approved);
+}
+
+#[tokio::test]
+async fn run_group_links_and_lists_crew_tasks() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let owner = Task::new("Ship the release", "A release");
+    store
+        .create_task(&workspace.id, None, &owner)
+        .await
+        .unwrap();
+
+    let first = Task::new("Plan", "A plan").in_run_group(owner.id.clone());
+    let second = Task::new("Implement", "Code").in_run_group(owner.id.clone());
+    let unrelated = Task::new("Other work", "Other output");
+    for task in [&first, &second, &unrelated] {
+        store.create_task(&workspace.id, None, task).await.unwrap();
+    }
+
+    let loaded = store.get_task(&first.id).await.unwrap().unwrap();
+    assert_eq!(loaded.run_group, Some(owner.id.clone()));
+    assert!(store
+        .get_task(&owner.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .run_group
+        .is_none());
+
+    let group = store.list_tasks_by_run_group(&owner.id).await.unwrap();
+    assert_eq!(group.len(), 2);
+    assert_eq!(group[0].id, first.id);
+    assert_eq!(group[1].id, second.id);
+    assert!(store
+        .list_tasks_by_run_group(&unrelated.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn run_queries_span_the_owning_and_crew_tasks() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+    let agent = AgentId::new("agent-1");
+
+    let owner = Task::new("Ship the release", "A release");
+    store
+        .create_task(&workspace.id, None, &owner)
+        .await
+        .unwrap();
+    let child = Task::new("Implement", "Code").in_run_group(owner.id.clone());
+    store
+        .create_task(&workspace.id, None, &child)
+        .await
+        .unwrap();
+    let unrelated = Task::new("Other work", "Other output");
+    store
+        .create_task(&workspace.id, None, &unrelated)
+        .await
+        .unwrap();
+
+    for task in [&owner, &child, &unrelated] {
+        let assignment = Assignment::new_root(
+            task.id.clone(),
+            AssignmentOrigin::User,
+            AssignmentRequester::System,
+            agent.clone(),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        store.create_assignment(&assignment).await.unwrap();
+    }
+
+    let assignments = store.list_assignments_for_run(&owner.id).await.unwrap();
+    assert_eq!(assignments.len(), 2);
+    assert!(assignments.iter().any(|item| item.task_id == owner.id));
+    assert!(assignments.iter().any(|item| item.task_id == child.id));
+    assert_eq!(
+        store
+            .list_assignments_for_run(&unrelated.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let run = Run::new(child.id.clone(), agent);
+    store.create_run(&run).await.unwrap();
+    let mut older = ToolCallRecord::new(run.id.clone(), "read_file", json!({ "path": "a.rs" }));
+    older.created_at = Utc::now() - ChronoDuration::seconds(5);
+    store.record_tool_call(&older).await.unwrap();
+    let mut newer = ToolCallRecord::new(run.id.clone(), "write_file", json!({ "path": "b.rs" }));
+    newer.created_at = Utc::now();
+    store.record_tool_call(&newer).await.unwrap();
+
+    let latest = store
+        .latest_tool_call_for_task(&owner.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.name, "write_file");
+    assert!(store
+        .latest_tool_call_for_task(&unrelated.id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn workspace_policy_defaults_to_allow_and_roundtrips() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let default = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(default.bypass_critical, BypassCritical::Allow);
+
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace.id.clone(),
+            bypass_critical: BypassCritical::Ask,
+        })
+        .await
+        .unwrap();
+    let saved = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(saved.bypass_critical, BypassCritical::Ask);
+
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace.id.clone(),
+            bypass_critical: BypassCritical::Block,
+        })
+        .await
+        .unwrap();
+    let updated = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(updated.bypass_critical, BypassCritical::Block);
 }

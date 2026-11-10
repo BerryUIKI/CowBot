@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -7,15 +8,31 @@ import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
 import {
+  clearSessionDecisions,
+  createPermissionRule,
   createWorkspace,
+  deletePermissionRule,
   exportWorkspace,
+  getAuditEvents,
+  getSessionDecisions,
+  getWorkspacePolicy,
   importWorkspace,
+  listPermissionRules,
   listWorkspaces,
+  setBypassCritical as saveBypassCritical,
+  setPermissionRuleEnabled,
   switchWorkspace,
+  updateUserProfile,
 } from "./api";
 import type {
   AgentProfile,
+  AuditEvent,
+  BypassCritical,
   ClientSession,
+  PermissionRule,
+  Project,
+  RuleDecision,
+  SessionDecisionEntry,
   TemplateDocument,
   WorkspaceSummary,
 } from "./types";
@@ -29,16 +46,31 @@ interface SettingsViewProps {
   busy: string | null;
   updater: Updater;
   tasksRunning: boolean;
+  section: SettingsSection;
+  projects: Project[];
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
+  onSessionChange: (session: ClientSession) => void;
+  onAddProject: (path: string) => Promise<void>;
+  onRemoveProject: (project: Project) => Promise<void>;
 }
 
-type SettingsSection = "model" | "team" | "workspace" | "about";
+export type SettingsSection =
+  | "model"
+  | "team"
+  | "approvals"
+  | "audit"
+  | "projects"
+  | "workspace"
+  | "about";
 
-const sections: { id: SettingsSection; label: string }[] = [
+export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "team", label: "Team" },
+  { id: "approvals", label: "Approvals" },
+  { id: "audit", label: "Audit" },
+  { id: "projects", label: "Projects" },
   { id: "workspace", label: "Workspace" },
   { id: "about", label: "About" },
 ];
@@ -82,17 +114,44 @@ export default function SettingsView({
   busy,
   updater,
   tasksRunning,
+  section,
+  projects,
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
+  onSessionChange,
+  onAddProject,
+  onRemoveProject,
 }: SettingsViewProps) {
-  const [section, setSection] = useState<SettingsSection>("model");
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [sessionDecisions, setSessionDecisions] = useState<
+    SessionDecisionEntry[]
+  >([]);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [rules, setRules] = useState<PermissionRule[]>([]);
+  const [ruleTool, setRuleTool] = useState("execute_code");
+  const [ruleCommand, setRuleCommand] = useState("");
+  const [ruleDecision, setRuleDecision] = useState<RuleDecision>("ask");
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [ruleError, setRuleError] = useState<string | null>(null);
+  const [bypassCritical, setBypassCritical] = useState<BypassCritical>("allow");
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditSource, setAuditSource] = useState("all");
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,8 +169,154 @@ export default function SettingsView({
     };
   }, []);
 
-  async function handleSwitchWorkspace(database: string) {
-    setWorkspaceBusy(`switch-${database}`);
+  useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setSessionError(null);
+    getSessionDecisions()
+      .then((entries) => {
+        if (!cancelled) setSessionDecisions(entries);
+      })
+      .catch((error) => {
+        if (!cancelled) setSessionError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setRuleError(null);
+    listPermissionRules()
+      .then((next) => {
+        if (!cancelled) setRules(next);
+      })
+      .catch((error) => {
+        if (!cancelled) setRuleError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "approvals") return;
+    let cancelled = false;
+    setPolicyError(null);
+    getWorkspacePolicy()
+      .then((policy) => {
+        if (!cancelled) setBypassCritical(policy.bypass_critical);
+      })
+      .catch((error) => {
+        if (!cancelled) setPolicyError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "audit") return;
+    let cancelled = false;
+    setAuditBusy(true);
+    setAuditError(null);
+    getAuditEvents(200, auditSource === "all" ? null : auditSource)
+      .then((events) => {
+        if (!cancelled) setAuditEvents(events);
+      })
+      .catch((error) => {
+        if (!cancelled) setAuditError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setAuditBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, auditSource]);
+
+  async function handleClearSessionDecisions() {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      await clearSessionDecisions();
+      setSessionDecisions([]);
+    } catch (error) {
+      setSessionError(errorMessage(error));
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleBypassCritical(value: BypassCritical) {
+    setPolicyBusy(true);
+    setPolicyError(null);
+    try {
+      const policy = await saveBypassCritical(value);
+      setBypassCritical(policy.bypass_critical);
+    } catch (error) {
+      setPolicyError(errorMessage(error));
+    } finally {
+      setPolicyBusy(false);
+    }
+  }
+
+  async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const tool = ruleTool.trim();
+    if (!tool) return;
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      const rule = await createPermissionRule(
+        tool,
+        ruleCommand.trim() || null,
+        ruleDecision,
+      );
+      setRules((current) => [...current, rule]);
+      setRuleCommand("");
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function handleToggleRule(rule: PermissionRule) {
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      const updated = await setPermissionRuleEnabled(rule.id, !rule.enabled);
+      setRules((current) =>
+        current.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      );
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function handleDeleteRule(rule: PermissionRule) {
+    const label = rule.command ? `${rule.tool}: ${rule.command}` : rule.tool;
+    if (!window.confirm(`Delete the workspace rule "${label}"?`)) return;
+    setRuleBusy(true);
+    setRuleError(null);
+    try {
+      await deletePermissionRule(rule.id);
+      setRules((current) => current.filter((candidate) => candidate.id !== rule.id));
+    } catch (error) {
+      setRuleError(errorMessage(error));
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function handleSwitchWorkspace(database: string) {    setWorkspaceBusy(`switch-${database}`);
     setWorkspaceError(null);
     setWorkspaceNotice(null);
     try {
@@ -195,6 +400,49 @@ export default function SettingsView({
     }
   }
 
+  async function handleAddProject() {
+    const selection = await open({
+      directory: true,
+      multiple: false,
+      title: "Register a git repository",
+    });
+    if (typeof selection === "string" && selection.trim()) {
+      await onAddProject(selection);
+    }
+  }
+
+  function handleRemoveProject(project: Project) {
+    if (
+      window.confirm(
+        `Remove '${project.name}' from CowBot? The folder and its files are not touched.`,
+      )
+    ) {
+      void onRemoveProject(project);
+    }
+  }
+
+  function startEditProfile() {
+    setProfileName(session?.user.name ?? "");
+    setProfileEmail(session?.user.email ?? "");
+    setProfileError(null);
+    setEditingProfile(true);
+  }
+
+  async function handleProfileSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProfileBusy(true);
+    setProfileError(null);
+    try {
+      const updated = await updateUserProfile(profileName, profileEmail);
+      onSessionChange(updated);
+      setEditingProfile(false);
+    } catch (error) {
+      setProfileError(errorMessage(error));
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
   return (
     <div className="settings-view">
       <header className="view-header">
@@ -205,20 +453,6 @@ export default function SettingsView({
       </header>
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {sections.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="settings-nav-item"
-              aria-current={section === item.id ? "page" : undefined}
-              onClick={() => setSection(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
         <div className="settings-content">
           {section === "model" ? (
             <section className="settings-section" aria-labelledby="settings-model">
@@ -331,6 +565,334 @@ export default function SettingsView({
             </>
           ) : null}
 
+          {section === "approvals" ? (
+            <section
+              className="settings-section"
+              aria-labelledby="settings-approvals"
+            >
+              <div className="settings-section-head">
+                <h3 id="settings-approvals">Session approvals</h3>
+                <p className="settings-hint">
+                  Decisions remembered for this app session only. Restarting
+                  CowBot clears them. Rules and plan mode follow in this
+                  milestone.
+                </p>
+              </div>
+
+              {sessionError ? (
+                <p className="settings-status is-error" role="alert">
+                  {sessionError}
+                </p>
+              ) : null}
+              {sessionDecisions.length === 0 ? (
+                <p className="settings-empty">
+                  No session decisions yet. Use "Approve for session" on an
+                  approval card.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {sessionDecisions.map((entry) => (
+                    <li key={entry.key} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">{entry.key}</span>
+                        <span className="settings-badge">
+                          {entry.decision}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={handleClearSessionDecisions}
+                  disabled={sessionBusy || sessionDecisions.length === 0}
+                >
+                  {sessionBusy ? "Resetting…" : "Reset session decisions"}
+                </button>
+              </div>
+
+              <div className="settings-section-head settings-subsection">
+                <h3>Bypass permissions</h3>
+                <p className="settings-hint">
+                  Bypass permissions runs every tool call. Critical-risk calls
+                  under Bypass follow this setting; every other mode always
+                  blocks Critical calls. Selecting Bypass shows a warning each
+                  time and keeps a red marker while it is active.
+                </p>
+              </div>
+
+              {policyError ? (
+                <p className="settings-status is-error" role="alert">
+                  {policyError}
+                </p>
+              ) : null}
+
+              <label className="field settings-audit-filter">
+                <span>Critical calls under Bypass</span>
+                <select
+                  value={bypassCritical}
+                  onChange={(event) =>
+                    void handleBypassCritical(
+                      event.target.value as BypassCritical,
+                    )
+                  }
+                  disabled={policyBusy}
+                  aria-label="Critical calls under Bypass"
+                >
+                  <option value="allow">Allow (default)</option>
+                  <option value="ask">Ask with a red approval card</option>
+                  <option value="block">Block</option>
+                </select>
+              </label>
+
+              <div className="settings-section-head settings-subsection">
+                <h3>Workspace rules</h3>
+                <p className="settings-hint">
+                  Allow, ask, or deny rules evaluated before the model
+                  evaluator. Deny wins over ask, and ask over allow. Rules are
+                  stored with this workspace and exported with it; imported
+                  rules start disabled until reviewed.
+                </p>
+              </div>
+
+              {ruleError ? (
+                <p className="settings-status is-error" role="alert">
+                  {ruleError}
+                </p>
+              ) : null}
+
+              <form className="settings-rule-form" onSubmit={handleCreateRule}>
+                <label className="field">
+                  <span>Tool</span>
+                  <input
+                    value={ruleTool}
+                    onChange={(event) => setRuleTool(event.target.value)}
+                    placeholder="execute_code or *"
+                    aria-label="Rule tool"
+                  />
+                </label>
+                <label className="field">
+                  <span>Command pattern</span>
+                  <input
+                    value={ruleCommand}
+                    onChange={(event) => setRuleCommand(event.target.value)}
+                    placeholder="git * (optional)"
+                    aria-label="Rule command pattern"
+                  />
+                </label>
+                <label className="field">
+                  <span>Decision</span>
+                  <select
+                    value={ruleDecision}
+                    onChange={(event) =>
+                      setRuleDecision(event.target.value as RuleDecision)
+                    }
+                    aria-label="Rule decision"
+                  >
+                    <option value="allow">Allow</option>
+                    <option value="ask">Ask</option>
+                    <option value="deny">Deny</option>
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={ruleBusy}
+                >
+                  {ruleBusy ? "Adding…" : "Add rule"}
+                </button>
+              </form>
+
+              {rules.length === 0 ? (
+                <p className="settings-empty">
+                  No workspace rules yet. Rules apply to every agent in this
+                  workspace.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {rules.map((rule) => (
+                    <li key={rule.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">
+                          {rule.tool === "*" ? "all tools" : rule.tool}
+                          {rule.command ? `: ${rule.command}` : ""}
+                        </span>
+                        <span className={`settings-badge rule-${rule.decision}`}>
+                          {rule.decision}
+                        </span>
+                      </div>
+                      <div className="settings-card-actions">
+                        <span className="settings-meta-inline">
+                          {rule.source === "imported"
+                            ? "imported — review before enabling"
+                            : rule.enabled
+                              ? "enabled"
+                              : "disabled"}
+                        </span>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={ruleBusy}
+                          onClick={() => void handleToggleRule(rule)}
+                        >
+                          {rule.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button danger-text"
+                          disabled={ruleBusy}
+                          onClick={() => void handleDeleteRule(rule)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
+          {section === "audit" ? (
+            <section
+              className="settings-section"
+              aria-labelledby="settings-audit"
+            >
+              <div className="settings-section-head">
+                <h3 id="settings-audit">Audit</h3>
+                <p className="settings-hint">
+                  Every tool decision records its source: a workspace rule, the
+                  model evaluator, a session decision, a human approval, the
+                  active approval policy, or the runtime.
+                </p>
+              </div>
+
+              <label className="field settings-audit-filter">
+                <span>Source</span>
+                <select
+                  value={auditSource}
+                  onChange={(event) => setAuditSource(event.target.value)}
+                  aria-label="Audit source filter"
+                >
+                  <option value="all">All sources</option>
+                  <option value="rule">Rule</option>
+                  <option value="model">Model</option>
+                  <option value="session">Session</option>
+                  <option value="human">Human</option>
+                  <option value="policy">Policy</option>
+                  <option value="system">System</option>
+                </select>
+              </label>
+
+              {auditError ? (
+                <p className="settings-status is-error" role="alert">
+                  {auditError}
+                </p>
+              ) : null}
+              {auditBusy ? (
+                <p className="settings-empty">Loading audit events…</p>
+              ) : auditEvents.length === 0 ? (
+                <p className="settings-empty">No audit events for this source.</p>
+              ) : (
+                <ul className="settings-list">
+                  {auditEvents.map((event) => (
+                    <li key={event.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">
+                          {event.action}
+                        </span>
+                        <span
+                          className={`settings-badge audit-${
+                            event.source ?? "none"
+                          }`}
+                        >
+                          {event.source ?? "unknown"}
+                        </span>
+                      </div>
+                      <p className="settings-meta-inline">
+                        {event.actor} · {formatDateTime(event.created_at)}
+                      </p>
+                      <p className="audit-target">{event.target}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
+          {section === "projects" ? (
+            <section className="settings-section" aria-labelledby="settings-projects">
+              <div className="settings-section-head">
+                <h3 id="settings-projects">Projects</h3>
+                <p className="settings-hint">
+                  Local git repositories that tasks can run in. CowBot creates an
+                  isolated worktree per task; registered paths stay on this
+                  machine and are not included in workspace packages.
+                </p>
+              </div>
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void handleAddProject()}
+                  disabled={busy === "add-project"}
+                >
+                  {busy === "add-project" ? "Adding…" : "Add folder"}
+                </button>
+              </div>
+
+              {projects.length === 0 ? (
+                <p className="settings-empty">
+                  No projects yet. Add a git repository to run tasks in an
+                  isolated worktree.
+                </p>
+              ) : (
+                <ul className="settings-list">
+                  {projects.map((project) => (
+                    <li key={project.id} className="settings-card">
+                      <div className="settings-card-head">
+                        <span className="settings-card-title">{project.name}</span>
+                        {project.available && project.current_branch ? (
+                          <span className="settings-badge">
+                            {project.current_branch}
+                          </span>
+                        ) : null}
+                        {!project.available ? (
+                          <span className="settings-badge">Missing</span>
+                        ) : null}
+                      </div>
+                      <p className="settings-card-body settings-path">
+                        {project.path}
+                      </p>
+                      <div className="settings-card-foot">
+                        <span className="settings-meta-inline">
+                          {project.available
+                            ? "Available"
+                            : "Folder not found on this machine"}
+                        </span>
+                        <div className="settings-card-actions">
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => handleRemoveProject(project)}
+                            disabled={busy === "remove-project"}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
           {section === "workspace" ? (
             <>
               <section className="settings-section" aria-labelledby="settings-workspace">
@@ -354,6 +916,68 @@ export default function SettingsView({
                     <dd>{session?.user.email ?? "—"}</dd>
                   </div>
                 </dl>
+
+                {editingProfile ? (
+                  <form className="settings-profile-form" onSubmit={handleProfileSave}>
+                    <div className="settings-form-row">
+                      <label className="field">
+                        <span>Display name</span>
+                        <input
+                          value={profileName}
+                          onChange={(event) => setProfileName(event.target.value)}
+                          autoComplete="name"
+                          disabled={profileBusy}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Email</span>
+                        <input
+                          type="email"
+                          value={profileEmail}
+                          onChange={(event) => setProfileEmail(event.target.value)}
+                          autoComplete="email"
+                          disabled={profileBusy}
+                        />
+                      </label>
+                    </div>
+                    {profileError ? (
+                      <p className="settings-status is-error" role="alert">
+                        {profileError}
+                      </p>
+                    ) : null}
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={
+                          profileBusy ||
+                          !profileName.trim() ||
+                          !profileEmail.trim()
+                        }
+                      >
+                        {profileBusy ? "Saving…" : "Save profile"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setEditingProfile(false)}
+                        disabled={profileBusy}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={startEditProfile}
+                    >
+                      Edit profile
+                    </button>
+                  </div>
+                )}
               </section>
 
               <section

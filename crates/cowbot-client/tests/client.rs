@@ -25,6 +25,32 @@ async fn local_client_bootstraps_a_session() {
 }
 
 #[tokio::test]
+async fn local_client_updates_the_user_profile() {
+    let client = LocalClient::open_in_memory().await.unwrap();
+
+    let updated = client
+        .update_user_profile("  Alice  ", " ALICE@Example.com ")
+        .await
+        .unwrap();
+    assert_eq!(updated.user.name, "Alice");
+    assert_eq!(updated.user.email, "alice@example.com");
+
+    let session = client.session().await.unwrap();
+    assert_eq!(session.user.name, "Alice");
+    assert_eq!(session.user.email, "alice@example.com");
+    assert_eq!(session.workspace.name, "Default Workspace");
+
+    assert!(client
+        .update_user_profile("", "alice@example.com")
+        .await
+        .is_err());
+    assert!(client
+        .update_user_profile("Alice", "not-an-email")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn local_client_manages_channels_and_messages() {
     let client = LocalClient::open_in_memory().await.unwrap();
     let session = client.session().await.unwrap();

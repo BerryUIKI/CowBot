@@ -15,6 +15,8 @@ export interface ClientSession {
   workspace: Workspace;
 }
 
+export type ChannelKind = "channel" | "direct" | "conversation";
+
 export interface Channel {
   id: string;
   name: string;
@@ -22,6 +24,58 @@ export interface Channel {
   created_at: string;
   agent_id: string | null;
   pinned: boolean;
+  kind: ChannelKind;
+}
+
+export interface ConversationSettings {
+  channel_id: string;
+  mode: "single" | "group";
+  provider_id: string | null;
+  model: string;
+  router_enabled: boolean;
+  auto_compact: boolean;
+  compact_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CacheUsageSummary {
+  calls: number;
+  cached_input_tokens: number;
+  total_input_tokens: number;
+}
+
+export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
+
+export interface ConversationContext {
+  channel_id: string;
+  agent_id: string;
+  model: string;
+  provider_id: string | null;
+  system_tokens: number;
+  tool_tokens: number;
+  history_tokens: number;
+  latest_tokens: number;
+  total_tokens: number;
+  active_entries: number;
+  excluded_entries: number;
+  context_window: number | null;
+  max_output_tokens: number | null;
+  usable_tokens: number | null;
+  percent_used: number | null;
+  state: ContextUsageState;
+  auto_compact: boolean;
+  compact_threshold: number;
+  cache_last_turn: CacheUsageSummary;
+  cache_conversation: CacheUsageSummary;
+}
+
+export interface CompactionOutcome {
+  compacted: boolean;
+  summarized_entries: number;
+  tokens_before: number;
+  tokens_after: number;
+  summary: string | null;
 }
 
 export type Sender =
@@ -47,7 +101,55 @@ export interface CowEvent {
   };
 }
 
-export type ApprovalLevel = "ask" | "safe_auto" | "plan_only" | "trusted";
+export type ApprovalLevel =
+  | "ask"
+  | "accept_edits"
+  | "safe_auto"
+  | "plan_only"
+  | "trusted";
+
+export type BypassCritical = "allow" | "ask" | "block";
+
+export interface WorkspacePolicy {
+  workspace_id: string;
+  bypass_critical: BypassCritical;
+}
+
+export interface ApprovalMode {
+  value: ApprovalLevel;
+  label: string;
+  description: string;
+}
+
+/// Modes in the order Claude presents them.
+export const approvalModes: ApprovalMode[] = [
+  {
+    value: "safe_auto",
+    label: "Auto",
+    description: "Low-risk tools run automatically; medium and high risk ask.",
+  },
+  {
+    value: "ask",
+    label: "Manual",
+    description: "Read-only tools run; anything that changes state waits for approval.",
+  },
+  {
+    value: "accept_edits",
+    label: "Accept edits",
+    description: "Workspace file edits run; other tools follow Manual.",
+  },
+  {
+    value: "plan_only",
+    label: "Plan",
+    description: "Only read-only tools run; everything else is denied.",
+  },
+  {
+    value: "trusted",
+    label: "Bypass permissions",
+    description:
+      "Every tool call runs; critical-risk calls follow the Bypass setting in Settings → Approvals.",
+  },
+];
 
 export type TaskStatus =
   | "pending"
@@ -58,11 +160,17 @@ export type TaskStatus =
 
 export interface Task {
   id: string;
+  title: string;
   description: string;
   expected_output: string;
   assigned_agent: string | null;
+  channel_id: string | null;
   context_tasks: string[];
+  run_group: string | null;
   status: TaskStatus;
+  archived: boolean;
+  plan?: string | null;
+  plan_approved?: boolean;
 }
 
 export type AssignmentStatus =
@@ -155,6 +263,39 @@ export interface ToolCallDetail {
 export interface ApprovalRisk {
   risk: string;
   reason: string;
+  rule?: ApprovalRuleMatch | null;
+}
+
+export interface ApprovalRuleMatch {
+  rule_id: string;
+  description: string;
+  decision: RuleDecision;
+}
+
+export type RuleDecision = "allow" | "ask" | "deny";
+
+export type RuleSource = "local" | "imported";
+
+export interface PermissionRule {
+  id: string;
+  workspace_id: string;
+  tool: string;
+  command: string | null;
+  decision: RuleDecision;
+  enabled: boolean;
+  source: RuleSource;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  workspace_id: string;
+  actor: string;
+  action: string;
+  target: string;
+  source?: string | null;
+  created_at: string;
 }
 
 export interface Approval {
@@ -165,6 +306,11 @@ export interface Approval {
   decided_by: string | null;
   decided_at: string | null;
   created_at: string;
+}
+
+export interface SessionDecisionEntry {
+  key: string;
+  decision: "approved" | "rejected" | "unknown";
 }
 
 export interface AgentProfile {
@@ -197,6 +343,11 @@ export interface TemplateDocument {
 
 export type ProviderProtocol = "openai" | "anthropic" | "openai-responses";
 
+export interface ModelMetadata {
+  context_window?: number;
+  max_output_tokens?: number;
+}
+
 export interface ModelProvider {
   id: string;
   name: string;
@@ -204,6 +355,7 @@ export interface ModelProvider {
   base_url: string;
   models: string[];
   model: string;
+  model_metadata: Record<string, ModelMetadata>;
   has_api_key: boolean;
   active: boolean;
 }
@@ -224,6 +376,80 @@ export interface WorkspaceSummary {
   name: string;
   active: boolean;
   available: boolean;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  current_branch: string | null;
+  available: boolean;
+}
+
+export interface ProjectBranches {
+  current: string | null;
+  branches: string[];
+}
+
+export type WorktreeStatus = "requested" | "ready" | "removed" | "missing";
+
+export interface TaskWorktree {
+  task_id: string;
+  project_id: string;
+  project_path: string;
+  base_branch: string;
+  branch: string;
+  worktree_path: string;
+  status: WorktreeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskWorktreeDiff {
+  status: string;
+  stat: string;
+  patch: string;
+  truncated: boolean;
+}
+
+export type TaskOverviewStatus =
+  | "running"
+  | "needs_input"
+  | "waiting"
+  | "resume"
+  | "queued"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface TaskOverviewProgress {
+  completed: number;
+  total: number;
+}
+
+export interface TaskOverviewAssignment {
+  id: string;
+  assignee: string;
+  status: AssignmentStatus;
+  detail: string | null;
+}
+
+export interface TaskOverviewEntry {
+  run_id: string;
+  title: string;
+  channel_id: string | null;
+  status: TaskOverviewStatus;
+  progress: TaskOverviewProgress;
+  assignments: TaskOverviewAssignment[];
+  worktree: TaskWorktree | null;
+  latest_tool_call: ToolCallRecord | null;
+  started_at: string;
+  updated_at: string;
+}
+
+/** Whether an overview run still has work to show in the active sections. */
+export function isActiveOverviewStatus(status: TaskOverviewStatus): boolean {
+  return status !== "completed" && status !== "failed" && status !== "cancelled";
 }
 
 export interface AppInfo {
@@ -253,13 +479,15 @@ export function taskStatusLabel(status: TaskStatus): string {
 export function approvalLevelLabel(level: ApprovalLevel): string {
   switch (level) {
     case "ask":
-      return "Ask";
+      return "Manual";
+    case "accept_edits":
+      return "Accept edits";
     case "safe_auto":
-      return "Safe auto";
+      return "Auto";
     case "plan_only":
-      return "Plan only";
+      return "Plan";
     case "trusted":
-      return "Trusted";
+      return "Bypass permissions";
   }
 }
 

@@ -7,13 +7,17 @@
 
 use async_trait::async_trait;
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
+use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::conversation::{
+    ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+};
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -42,6 +46,13 @@ pub struct ClientUser {
 pub struct ClientSession {
     pub user: ClientUser,
     pub workspace: Workspace,
+}
+
+/// One remembered session approval decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionDecisionView {
+    pub key: String,
+    pub decision: String,
 }
 
 /// Summary of a workspace imported from a `.cowpkg` package.
@@ -115,6 +126,9 @@ pub trait Client: Send + Sync {
     /// The local user and workspace this client is bound to.
     async fn session(&self) -> CowResult<ClientSession>;
 
+    /// Update the local user's display name and email.
+    async fn update_user_profile(&self, name: &str, email: &str) -> CowResult<ClientSession>;
+
     /// Subscribe to live platform events.
     ///
     /// Local mode starts a forwarding task, so call this from within a Tokio
@@ -122,6 +136,7 @@ pub trait Client: Send + Sync {
     fn subscribe(&self) -> EventStream;
 
     async fn list_channels(&self) -> CowResult<Vec<Channel>>;
+    async fn get_channel(&self, channel_id: &ChannelId) -> CowResult<Option<Channel>>;
     async fn create_channel(&self, name: &str, topic: &str) -> CowResult<Channel>;
     async fn rename_channel(
         &self,
@@ -149,10 +164,41 @@ pub trait Client: Send + Sync {
         limit: u32,
     ) -> CowResult<Vec<ChannelMessage>>;
 
+    /// Create a user-created single-agent conversation.
+    ///
+    /// `provider_id` is the configured provider that supplies `model`; the pair
+    /// stays fixed for the conversation.
+    async fn create_conversation(
+        &self,
+        title: Option<&str>,
+        agent_id: &AgentId,
+        provider_id: Option<String>,
+        model: &str,
+    ) -> CowResult<Channel>;
+    async fn conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<ConversationSettings>;
+    async fn update_conversation_settings(
+        &self,
+        channel_id: &ChannelId,
+        update: &ConversationSettingsUpdate,
+    ) -> CowResult<ConversationSettings>;
+    /// Token breakdown and cache summaries of a conversation context.
+    async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
+    /// Exclude every active context entry; display messages are kept.
+    async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
+
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;
+    /// Tasks created by the run that `task_id` started.
+    async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>>;
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>>;
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
+    async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
+    async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;
+    /// Approve the Plan-mode artifact stored with a task.
+    async fn approve_task_plan(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn list_assignments(&self, task_id: &TaskId) -> CowResult<Vec<Assignment>>;
 
     async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>>;
@@ -162,7 +208,31 @@ pub trait Client: Send + Sync {
         &self,
         assignment_id: &AssignmentId,
     ) -> CowResult<Vec<AssignmentEvent>>;
-    async fn list_audit_events(&self, limit: u32) -> CowResult<Vec<AuditEvent>>;
+    async fn list_audit_events(
+        &self,
+        limit: u32,
+        source: Option<&str>,
+    ) -> CowResult<Vec<AuditEvent>>;
+
+    /// Workspace-level allow / ask / deny rules for tool calls.
+    async fn list_permission_rules(&self) -> CowResult<Vec<PermissionRule>>;
+    async fn create_permission_rule(
+        &self,
+        tool: &str,
+        command: Option<&str>,
+        decision: RuleDecision,
+    ) -> CowResult<PermissionRule>;
+    async fn set_permission_rule_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> CowResult<PermissionRule>;
+    async fn delete_permission_rule(&self, id: &str) -> CowResult<()>;
+    async fn workspace_policy(&self) -> CowResult<WorkspacePolicy>;
+    async fn set_bypass_critical(
+        &self,
+        bypass_critical: BypassCritical,
+    ) -> CowResult<WorkspacePolicy>;
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>>;
     async fn decide_approval(
@@ -170,6 +240,14 @@ pub trait Client: Send + Sync {
         approval_id: &ApprovalId,
         approved: bool,
     ) -> CowResult<Approval>;
+    /// Decide an approval and remember it for the rest of this process.
+    async fn decide_approval_for_session(
+        &self,
+        approval_id: &ApprovalId,
+        approved: bool,
+    ) -> CowResult<Approval>;
+    async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>>;
+    async fn clear_session_decisions(&self) -> CowResult<()>;
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>>;
     async fn get_template(&self, id: &str) -> CowResult<Option<TemplateDocument>>;
