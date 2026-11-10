@@ -191,6 +191,8 @@ pub trait Client: Send + Sync {
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;
+    /// Tasks created by the run that `task_id` started.
+    async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>>;
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>>;
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;

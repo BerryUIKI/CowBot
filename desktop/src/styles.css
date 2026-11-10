@@ -2356,6 +2356,53 @@ button {
   font-size: 12px;
 }
 
+.run-task-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: rgba(46, 44, 39, 0.35);
+  color: var(--paper);
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.run-task-row:hover {
+  background: var(--ink-hover);
+  border-color: var(--rule-strong);
+}
+
+.run-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.run-task-agent {
+  color: var(--paper-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
 .assignment,
 .run {
   margin-bottom: 10px;

@@ -62,6 +62,11 @@ impl TaskService {
         self.store.get_task(id).await
     }
 
+    /// Tasks that belong to the run started by `task_id`.
+    pub async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>> {
+        self.store.list_tasks_by_run_group(task_id).await
+    }
+
     /// Cancel the task's active root assignment; task status follows the
     /// assignment lifecycle.
     pub async fn cancel(&self, task_id: &TaskId, reason: impl Into<String>) -> CowResult<()> {

@@ -381,7 +381,7 @@ pub async fn run_task(
 
     tauri::async_runtime::spawn(async move {
         let outcome = async {
-            let mut crew = build_standard_crew(&task.description, &llm, &tools, &model);
+            let mut crew = build_standard_crew(&task, &llm, &tools, &model);
             client
                 .run_crew_with_options(
                     &mut crew,
@@ -417,12 +417,17 @@ pub async fn run_task(
 
 /// Build the Planner/Coder/Reviewer pipeline used by the CLI, with the
 /// submitted task's description as the objective.
+///
+/// Every crew task carries the submitted task's id as its run group, so the
+/// run has one owning task for background cards and worktrees.
 fn build_standard_crew(
-    objective: &str,
+    submitted: &Task,
     llm: &std::sync::Arc<dyn cowbot_llm::LlmProvider>,
     tools: &cowbot_tools::ToolRegistry,
     model: &str,
 ) -> Crew {
+    let objective = submitted.description.as_str();
+    let run_group = submitted.id.clone();
     let planner_profile = StandardRoles::planner();
     let planner_id = planner_profile.id.clone();
     let planner = AgentInstance::new(planner_profile, llm.clone(), tools.clone(), model);
@@ -444,7 +449,8 @@ fn build_standard_crew(
         format!("Analyze objective and formulate architecture plan: {objective}"),
         "A clear, step-by-step implementation and verification plan.",
     )
-    .assign_to(planner_id);
+    .assign_to(planner_id)
+    .in_run_group(run_group.clone());
     let plan_id = plan_task.id.clone();
 
     let code_task = Task::new(
@@ -452,14 +458,16 @@ fn build_standard_crew(
         "Working source code and sandbox execution results.",
     )
     .assign_to(coder_id)
-    .with_context_task(plan_id);
+    .with_context_task(plan_id)
+    .in_run_group(run_group.clone());
 
     let review_task = Task::new(
         "Review implementation, tests, and diffs for correctness and edge cases.",
         "Comprehensive review findings and final approval status.",
     )
     .assign_to(reviewer_id)
-    .with_context_task(code_task.id.clone());
+    .with_context_task(code_task.id.clone())
+    .in_run_group(run_group);
 
     crew.add_task(plan_task);
     crew.add_task(code_task);
@@ -472,6 +480,18 @@ pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String>
     state
         .client
         .list_tasks()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_run_tasks(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Vec<Task>, String> {
+    state
+        .client
+        .list_run_tasks(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
 }

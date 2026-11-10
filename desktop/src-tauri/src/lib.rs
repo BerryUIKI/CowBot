@@ -213,6 +213,7 @@ pub fn run() {
             commands::create_task,
             commands::run_task,
             commands::list_tasks,
+            commands::list_run_tasks,
             commands::cancel_task,
             commands::archive_task,
             commands::unarchive_task,

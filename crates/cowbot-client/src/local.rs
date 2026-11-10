@@ -480,6 +480,10 @@ impl Client for LocalClient {
         self.tasks.list(&self.session.workspace.id).await
     }
 
+    async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>> {
+        self.tasks.list_run_tasks(task_id).await
+    }
+
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>> {
         self.tasks.get(task_id).await
     }

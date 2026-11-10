@@ -46,6 +46,7 @@ import {
   listChannels,
   listMessages,
   listProjects,
+  listRunTasks,
   listRuns,
   listTasks,
   listTemplates,
@@ -242,6 +243,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
+  const [taskRunTasks, setTaskRunTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [templates, setTemplates] = useState<TemplateDocument[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
@@ -378,12 +380,14 @@ export default function App() {
     if (!taskId) {
       setTaskAssignments([]);
       setTaskRuns([]);
+      setTaskRunTasks([]);
       return;
     }
 
-    const [assignments, runs] = await Promise.all([
+    const [assignments, runs, runTasks] = await Promise.all([
       listAssignments(taskId),
       listRuns(taskId),
+      listRunTasks(taskId),
     ]);
     const [assignmentsWithEvents, runsWithCalls] = await Promise.all([
       Promise.all(
@@ -401,6 +405,7 @@ export default function App() {
     ]);
     setTaskAssignments(assignmentsWithEvents);
     setTaskRuns(runsWithCalls);
+    setTaskRunTasks(runTasks);
   }, []);
 
   const refreshApprovals = useCallback(async () => {
@@ -1168,6 +1173,12 @@ export default function App() {
     setView("chat");
     setCreatingChannel(true);
     setError(null);
+  }
+
+  function openTask(taskId: string) {
+    setView("tasks");
+    setCreatingTask(false);
+    setSelectedTaskId(taskId);
   }
 
   function startCreatingTask() {
@@ -2485,6 +2496,8 @@ export default function App() {
               task={selectedTask}
               assignments={taskAssignments}
               runs={taskRuns}
+              runTasks={taskRunTasks}
+              onOpenTask={openTask}
               cancelling={busy === "cancel-task"}
               onCancel={handleCancelTask}
               running={runningTasks.has(selectedTask.id)}
