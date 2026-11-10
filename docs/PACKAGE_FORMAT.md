@@ -21,6 +21,7 @@ context_events.jsonl
 tasks.json
 runs.jsonl
 audit.jsonl
+permission_rules.jsonl
 ```
 
 JSON files hold a single document; `.jsonl` files hold one JSON value per line
@@ -62,7 +63,12 @@ serialize.
 - `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
   attribution).
 - `runs.jsonl`: one run per line.
-- `audit.jsonl`: one audit event per line, newest first.
+- `audit.jsonl`: one audit event per line, newest first; optional `source`
+  records whether a decision came from a rule, model, session, human, policy,
+  or the system (ADR-0003).
+- `permission_rules.jsonl`: one workspace allow / ask / deny rule per line
+  (ADR-0003). Rules carry their tool, optional command glob, decision, enabled
+  flag, and source.
 
 ## What is never written
 
@@ -78,6 +84,8 @@ and any environment variables. Credentials are reconfigured after import.
 - Package files written before agent direct conversations existed have no
   `agent_id` on their channels; they import as group channels, and the desktop
   provisions the missing conversations on first launch.
+- Imported permission rules are created disabled and marked `imported`; the
+  user reviews and enables each rule before it can decide a tool call.
 - The four conversation files are optional on import. Packages written before
   ADR-0030 do not contain them; their channels import without conversation
   settings or context.

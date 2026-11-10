@@ -189,6 +189,8 @@ from templates; a standalone agent editor is not part of this release.
   menu: Auto, Manual, Accept edits, Plan, and Bypass permissions. It applies
   to answers in that conversation and uses the same policies as tasks, so a
   risky tool call raised while an agent answers appears in **Approvals**.
+  Settings → Approvals also manages workspace allow / ask / deny rules and
+  session decisions; Settings → Audit filters decisions by source.
 - A direct message or a mention becomes a task for that agent: it is listed in
   **Tasks** with its assignment, run, and tool calls, and it can be cancelled
   there. The answer is also posted back to the conversation as a message from
@@ -249,9 +251,12 @@ compacting the context never deletes messages.
 - **Plan** — run only read-only tools and deny everything else.
 - **Bypass permissions** — run every tool call except critical actions.
 
-Approvals appear in **Approvals**. Each decision is recorded in the audit log.
-Approval is a guardrail, not OS isolation: the subprocess sandbox runs commands
-with your user permissions, so treat model-generated commands as untrusted.
+Approvals appear in **Approvals**. Workspace rules in Settings → Approvals are
+evaluated before the model evaluator: Deny wins over Ask, and Ask over Allow.
+Each decision records its source in the audit log, and Settings → Audit filters
+by rule, model, session, human, policy, or system. Approval is a guardrail, not
+OS isolation: the subprocess sandbox runs commands with your user permissions,
+so treat model-generated commands as untrusted.
 
 ## Data and backups
 
