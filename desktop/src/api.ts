@@ -19,6 +19,7 @@ import type {
   OnboardingState,
   ProviderProtocol,
   Run,
+  SessionDecisionEntry,
   Task,
   TemplateDocument,
   ToolCallRecord,
@@ -219,8 +220,20 @@ export function pendingApprovals(): Promise<Approval[]> {
   return invoke<Approval[]>("pending_approvals");
 }
 
-export function decideApproval(approvalId: string, approved: boolean): Promise<Approval> {
-  return invoke<Approval>("decide_approval", { approvalId, approved });
+export function decideApproval(
+  approvalId: string,
+  approved: boolean,
+  forSession = false,
+): Promise<Approval> {
+  return invoke<Approval>("decide_approval", { approvalId, approved, forSession });
+}
+
+export function getSessionDecisions(): Promise<SessionDecisionEntry[]> {
+  return invoke<SessionDecisionEntry[]>("session_decisions");
+}
+
+export function clearSessionDecisions(): Promise<void> {
+  return invoke<void>("clear_session_decisions");
 }
 
 export function getModelSettings(): Promise<ModelSettings> {

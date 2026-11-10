@@ -264,6 +264,11 @@ export interface Approval {
   created_at: string;
 }
 
+export interface SessionDecisionEntry {
+  key: string;
+  decision: "approved" | "rejected" | "unknown";
+}
+
 export interface AgentProfile {
   id: string;
   name: string;

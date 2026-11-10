@@ -20,6 +20,7 @@ use tokio::time::{sleep, Instant};
 use crate::permissions::{
     PermissionDecision, PermissionDecisionKind, PermissionEvaluator, PermissionRequest,
 };
+use crate::session_decisions::{session_key, SessionDecisions};
 
 /// Policy outcome before a tool call executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,7 @@ pub struct ApprovalService {
     workspace_id: WorkspaceId,
     timeout: Duration,
     evaluator: Option<Arc<dyn PermissionEvaluator>>,
+    session_decisions: Option<Arc<SessionDecisions>>,
 }
 
 impl ApprovalService {
@@ -99,6 +101,7 @@ impl ApprovalService {
             workspace_id,
             timeout: Duration::from_secs(300),
             evaluator: None,
+            session_decisions: None,
         }
     }
 
@@ -109,6 +112,11 @@ impl ApprovalService {
 
     pub fn with_evaluator(mut self, evaluator: Option<Arc<dyn PermissionEvaluator>>) -> Self {
         self.evaluator = evaluator;
+        self
+    }
+
+    pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
+        self.session_decisions = decisions;
         self
     }
 
@@ -130,8 +138,13 @@ impl ApprovalService {
             &call.name,
             &assessment.rule_id,
         );
+        let session_decision = self
+            .session_decisions
+            .as_ref()
+            .and_then(|decisions| decisions.lookup(call));
 
-        let model_decision = if base == ApprovalDecision::RequireApproval
+        let model_decision = if session_decision.is_none()
+            && base == ApprovalDecision::RequireApproval
             && assignment.approval_level == ApprovalLevel::SafeAuto
             && assessment.level != RiskLevel::Critical
             && call.name != "delete_channel"
@@ -178,20 +191,43 @@ impl ApprovalService {
             None
         };
 
-        let decision = match model_decision.as_ref().map(|decision| decision.decision) {
-            Some(PermissionDecisionKind::Allow) => ApprovalDecision::AutoApprove,
-            Some(PermissionDecisionKind::Deny) => ApprovalDecision::Deny,
-            Some(PermissionDecisionKind::Ask) => ApprovalDecision::RequireApproval,
-            None => base,
+        let decision = match session_decision {
+            Some(ApprovalStatus::Approved) if base != ApprovalDecision::Deny => {
+                ApprovalDecision::AutoApprove
+            }
+            Some(ApprovalStatus::Rejected) if base != ApprovalDecision::Deny => {
+                ApprovalDecision::Deny
+            }
+            _ => match model_decision.as_ref().map(|decision| decision.decision) {
+                Some(PermissionDecisionKind::Allow) => ApprovalDecision::AutoApprove,
+                Some(PermissionDecisionKind::Deny) => ApprovalDecision::Deny,
+                Some(PermissionDecisionKind::Ask) => ApprovalDecision::RequireApproval,
+                None => base,
+            },
         };
 
         match decision {
             ApprovalDecision::AutoApprove => {
-                self.record_audit(&agent_id.0, "tool.auto_approved", call, &assessment)
-                    .await?;
+                if session_decision == Some(ApprovalStatus::Approved) {
+                    self.record_session_audit(&agent_id.0, "tool.session_approved", call)
+                        .await?;
+                } else {
+                    self.record_audit(&agent_id.0, "tool.auto_approved", call, &assessment)
+                        .await?;
+                }
                 Ok(ToolAuthorization::Approved { approved_by: None })
             }
             ApprovalDecision::Deny => {
+                if session_decision == Some(ApprovalStatus::Rejected) {
+                    self.record_session_audit(&agent_id.0, "tool.session_denied", call)
+                        .await?;
+                    return Ok(ToolAuthorization::Denied {
+                        reason: format!(
+                            "the tool call was rejected for this session ({})",
+                            session_key(call)
+                        ),
+                    });
+                }
                 self.record_audit(&agent_id.0, "tool.denied", call, &assessment)
                     .await?;
                 let reason = model_decision
@@ -209,6 +245,9 @@ impl ApprovalService {
             ApprovalDecision::RequireApproval => {
                 let approval = Approval::new(assignment.task_id.clone(), call.id.clone());
                 self.store.create_approval(&approval).await?;
+                if let Some(decisions) = &self.session_decisions {
+                    decisions.record_pending(&approval.id, call);
+                }
                 let reason = model_decision
                     .as_ref()
                     .map(|decision| {
@@ -305,6 +344,21 @@ impl ApprovalService {
             ))
             .await?;
         Ok(approval)
+    }
+
+    /// Decide an approval and remember the decision for the process lifetime.
+    pub async fn decide_for_session(
+        &self,
+        approval_id: &ApprovalId,
+        status: ApprovalStatus,
+        decided_by: &str,
+    ) -> CowResult<Approval> {
+        if let Some(decisions) = &self.session_decisions {
+            if let Some(call) = decisions.take_pending(approval_id) {
+                decisions.remember(&call, status);
+            }
+        }
+        self.decide(approval_id, status, decided_by).await
     }
 
     pub async fn pending_for_task(&self, task_id: &TaskId) -> CowResult<Vec<Approval>> {
@@ -443,6 +497,27 @@ impl ApprovalService {
                 format!(
                     "{} ({}) fell back to human approval: {error}",
                     call.name, call.id
+                ),
+            ))
+            .await
+    }
+
+    async fn record_session_audit(
+        &self,
+        actor: &str,
+        action: &str,
+        call: &ToolCall,
+    ) -> CowResult<()> {
+        self.store
+            .append_audit_event(&AuditEvent::new(
+                self.workspace_id.clone(),
+                actor,
+                action,
+                format!(
+                    "{} ({}) session_key={}",
+                    call.name,
+                    call.id,
+                    session_key(call)
                 ),
             ))
             .await

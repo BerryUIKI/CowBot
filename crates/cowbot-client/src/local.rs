@@ -23,7 +23,8 @@ use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
     ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, TaskService, TemplateService,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, SessionDecisions, TaskService,
+    TemplateService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -31,7 +32,8 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, WorkspaceImport,
+    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, SessionDecisionView,
+    WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -47,6 +49,7 @@ pub struct LocalClient {
     assignments: AssignmentService,
     approvals: ApprovalService,
     agents: AgentService,
+    session_decisions: Arc<SessionDecisions>,
 }
 
 impl LocalClient {
@@ -69,17 +72,21 @@ impl LocalClient {
     }
 
     async fn build(store: Store, bus: EventBus, context: LocalContext) -> CowResult<Self> {
+        let session_decisions = SessionDecisions::new();
         let assignments = AssignmentService::new(store.clone(), bus.clone());
         assignments.reconcile_on_startup().await?;
         let approvals =
-            ApprovalService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+            ApprovalService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
         approvals.reconcile_on_startup().await?;
 
         let channels = ChannelService::new(store.clone(), bus.clone());
         let channel_agents =
-            ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+            ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
         let conversations =
-            ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+            ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
+                .with_session_decisions(Some(session_decisions.clone()));
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
@@ -104,6 +111,7 @@ impl LocalClient {
             assignments,
             approvals,
             agents,
+            session_decisions,
         })
     }
 
@@ -196,6 +204,7 @@ impl LocalClient {
         options: CrewRunOptions,
     ) -> CowResult<HashMap<TaskId, String>> {
         CrewRunner::new(self.store.clone(), self.bus.clone())
+            .with_session_decisions(self.session_decisions.clone())
             .run_with_options(
                 crew,
                 &self.session.workspace.id,
@@ -527,6 +536,38 @@ impl Client for LocalClient {
         self.approvals
             .decide(approval_id, status, &self.session.user.id.0)
             .await
+    }
+
+    async fn decide_approval_for_session(
+        &self,
+        approval_id: &ApprovalId,
+        approved: bool,
+    ) -> CowResult<Approval> {
+        let status = if approved {
+            ApprovalStatus::Approved
+        } else {
+            ApprovalStatus::Rejected
+        };
+        self.approvals
+            .decide_for_session(approval_id, status, &self.session.user.id.0)
+            .await
+    }
+
+    async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>> {
+        Ok(self
+            .session_decisions
+            .entries()
+            .into_iter()
+            .map(|entry| SessionDecisionView {
+                key: entry.key,
+                decision: entry.decision,
+            })
+            .collect())
+    }
+
+    async fn clear_session_decisions(&self) -> CowResult<()> {
+        self.session_decisions.clear();
+        Ok(())
     }
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>> {

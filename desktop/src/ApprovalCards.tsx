@@ -7,7 +7,11 @@ interface ApprovalCardsProps {
   toolCalls: Record<string, ToolCallDetail>;
   risks: Record<string, ApprovalRisk>;
   decidingId: string | null;
-  onDecide: (approval: Approval, approved: boolean) => void;
+  onDecide: (
+    approval: Approval,
+    approved: boolean,
+    forSession?: boolean,
+  ) => void;
 }
 
 export default function ApprovalCards({

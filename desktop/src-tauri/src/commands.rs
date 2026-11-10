@@ -564,10 +564,36 @@ pub async fn decide_approval(
     state: State<'_, AppState>,
     approval_id: String,
     approved: bool,
+    for_session: Option<bool>,
 ) -> Result<Approval, String> {
+    let approval_id = ApprovalId::new(approval_id);
+    let result = if for_session.unwrap_or(false) {
+        state
+            .client
+            .decide_approval_for_session(&approval_id, approved)
+            .await
+    } else {
+        state.client.decide_approval(&approval_id, approved).await
+    };
+    result.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn session_decisions(
+    state: State<'_, AppState>,
+) -> Result<Vec<cowbot_client::SessionDecisionView>, String> {
     state
         .client
-        .decide_approval(&ApprovalId::new(approval_id), approved)
+        .session_decisions()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_session_decisions(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .client
+        .clear_session_decisions()
         .await
         .map_err(|error| error.to_string())
 }

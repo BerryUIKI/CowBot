@@ -17,6 +17,7 @@ use cowbot_tools::ToolRegistry;
 use crate::channels::ChannelService;
 use crate::conversations::ConversationService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::session_decisions::SessionDecisions;
 
 /// How many channel messages are used as conversation context for one turn.
 const HISTORY_LIMIT: u32 = 20;
@@ -72,6 +73,7 @@ pub struct ChannelAgentService {
     workspace_id: WorkspaceId,
     channels: ChannelService,
     conversations: ConversationService,
+    session_decisions: Option<Arc<SessionDecisions>>,
 }
 
 impl ChannelAgentService {
@@ -85,7 +87,14 @@ impl ChannelAgentService {
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
+            session_decisions: None,
         }
+    }
+
+    pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
+        self.session_decisions = decisions.clone();
+        self.conversations = self.conversations.with_session_decisions(decisions);
+        self
     }
 
     /// Answer `message` on behalf of every agent it mentions.
@@ -203,7 +212,8 @@ impl ChannelAgentService {
             options.max_concurrency,
         )
         .with_scope()
-        .with_model_permissions(options.use_model_permissions);
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(self.session_decisions.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
