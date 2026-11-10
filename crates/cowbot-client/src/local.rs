@@ -11,6 +11,7 @@ use cowbot_core::approval::{
 };
 use cowbot_core::assignment::{
     Assignment, AssignmentEvent, AssignmentId, AssignmentOrigin, AssignmentRequester,
+    AssignmentStatus,
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
@@ -249,6 +250,24 @@ impl LocalClient {
                 "task '{}' is not assigned to agent '{}'",
                 stored.id, agent.profile.id
             )));
+        }
+
+        // A task created from the desktop already has a queued root. Reuse it
+        // but apply the approval level the user selected for this run.
+        let queued = self
+            .store
+            .list_assignments_for_task(&stored.id)
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                assignment.parent_id.is_none() && assignment.status == AssignmentStatus::Queued
+            });
+        if let Some(queued) = queued {
+            if queued.approval_level != options.approval_level {
+                self.store
+                    .set_assignment_approval_level(&queued.id, options.approval_level)
+                    .await?;
+            }
         }
 
         let mut scheduler = AssignmentScheduler::new(
@@ -1181,7 +1200,9 @@ mod tests {
         let client = LocalClient::initialize(store, EventBus::default_bus())
             .await
             .unwrap();
-        let workspace_id = client.session().await.unwrap().workspace.id;
+        let session = client.session().await.unwrap();
+        let workspace_id = session.workspace.id;
+        let user_id = session.user.id.0;
         let profile = AgentProfile::new("Tester", "Engineer", "Ship", "Terse");
         client
             .store
@@ -1221,6 +1242,16 @@ mod tests {
             .create_task(&workspace_id, None, &plan_task)
             .await
             .unwrap();
+        let queued = Assignment::new_root(
+            plan_task.id.clone(),
+            AssignmentOrigin::User,
+            AssignmentRequester::User(user_id),
+            profile.id.clone(),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        client.store.create_assignment(&queued).await.unwrap();
         client
             .run_existing_task(
                 &plan_task,
@@ -1241,5 +1272,12 @@ mod tests {
         let planned = client.store.get_task(&plan_task.id).await.unwrap().unwrap();
         assert!(planned.plan.is_some());
         assert!(!planned.plan_approved);
+        let updated = client
+            .store
+            .get_assignment(&queued.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.approval_level, ApprovalLevel::PlanOnly);
     }
 }
