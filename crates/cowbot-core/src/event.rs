@@ -1,5 +1,6 @@
 use crate::agent::{AgentId, AgentProfile};
 use crate::approval::Approval;
+use crate::assignment::{AssignmentEventKind, AssignmentId, AssignmentStatus};
 use crate::channel::{Channel, ChannelId, ChannelMessage};
 use crate::permission::PermissionRuleMatch;
 use crate::risk::RiskLevel;
@@ -34,11 +35,24 @@ pub enum EventPayload {
     TaskCompleted { task_id: TaskId, output: String },
     /// A task failed during execution
     TaskFailed { task_id: TaskId, error: String },
+    /// An assignment changed lifecycle state
+    AssignmentUpdated {
+        assignment_id: AssignmentId,
+        task_id: TaskId,
+        status: AssignmentStatus,
+        kind: AssignmentEventKind,
+        detail: Option<String>,
+    },
     /// An agent requested a tool invocation (e.g. Code execution)
-    ToolCallRequested { agent_id: AgentId, call: ToolCall },
+    ToolCallRequested {
+        agent_id: AgentId,
+        task_id: TaskId,
+        call: ToolCall,
+    },
     /// Tool execution result returned
     ToolCallExecuted {
         agent_id: AgentId,
+        task_id: TaskId,
         result: ToolResult,
     },
     /// A task's git worktree changed lifecycle state

@@ -598,7 +598,9 @@ export default function App() {
         type === "TaskUpdated" ||
         type === "TaskAssigned" ||
         type === "TaskCompleted" ||
-        type === "TaskFailed"
+        type === "TaskFailed" ||
+        type === "AssignmentUpdated" ||
+        type === "WorktreeUpdated"
       ) {
         refreshTasks().catch((err) => setError(errorMessage(err)));
         if (selectedTaskId) {

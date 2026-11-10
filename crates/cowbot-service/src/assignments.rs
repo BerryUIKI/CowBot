@@ -50,6 +50,7 @@ impl AssignmentService {
         );
         self.store.create_assignment(&assignment).await?;
         self.publish_task_created(task);
+        self.publish_assignment_updated(&assignment, AssignmentEventKind::Enqueued, None);
         self.publish_task_assigned(task, &assignment);
         Ok(assignment)
     }
@@ -103,6 +104,7 @@ impl AssignmentService {
         );
         self.store.create_assignment(&child).await?;
         self.publish_task_created(task);
+        self.publish_assignment_updated(&child, AssignmentEventKind::Enqueued, None);
         self.publish_task_assigned(task, &child);
         Ok(child)
     }
@@ -129,13 +131,12 @@ impl AssignmentService {
                 error: "execution budget exhausted".to_string(),
             });
             assignment.updated_at = Utc::now();
-            self.store
-                .save_assignment(
-                    &assignment,
-                    AssignmentEventKind::BudgetExhausted,
-                    Some("execution budget exhausted".to_string()),
-                )
-                .await?;
+            self.save_assignment(
+                &assignment,
+                AssignmentEventKind::BudgetExhausted,
+                Some("execution budget exhausted".to_string()),
+            )
+            .await?;
             self.store
                 .update_task_status(
                     &assignment.task_id,
@@ -153,8 +154,7 @@ impl AssignmentService {
         assignment.status = AssignmentStatus::Running;
         assignment.executions += 1;
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::Started, None)
+        self.save_assignment(&assignment, AssignmentEventKind::Started, None)
             .await?;
         self.store
             .update_task_status(&assignment.task_id, &TaskStatus::InProgress)
@@ -172,8 +172,7 @@ impl AssignmentService {
         }
         assignment.status = AssignmentStatus::Waiting;
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::Waiting, None)
+        self.save_assignment(&assignment, AssignmentEventKind::Waiting, None)
             .await?;
         Ok(assignment)
     }
@@ -191,8 +190,7 @@ impl AssignmentService {
         }
         assignment.status = AssignmentStatus::Resume;
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::Resumed, None)
+        self.save_assignment(&assignment, AssignmentEventKind::Resumed, None)
             .await?;
         Ok(assignment)
     }
@@ -211,8 +209,7 @@ impl AssignmentService {
         }
         assignment.status = AssignmentStatus::NeedsInput;
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::NeedsInput, detail)
+        self.save_assignment(&assignment, AssignmentEventKind::NeedsInput, detail)
             .await?;
         Ok(assignment)
     }
@@ -235,8 +232,7 @@ impl AssignmentService {
             output: output.clone(),
         });
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::Completed, None)
+        self.save_assignment(&assignment, AssignmentEventKind::Completed, None)
             .await?;
         self.store
             .update_task_status(
@@ -268,8 +264,7 @@ impl AssignmentService {
             error: error.clone(),
         });
         assignment.updated_at = Utc::now();
-        self.store
-            .save_assignment(&assignment, AssignmentEventKind::Failed, None)
+        self.save_assignment(&assignment, AssignmentEventKind::Failed, None)
             .await?;
         self.store
             .update_task_status(
@@ -305,13 +300,12 @@ impl AssignmentService {
                         reason: reason.clone(),
                     });
                     assignment.updated_at = Utc::now();
-                    self.store
-                        .save_assignment(
-                            &assignment,
-                            AssignmentEventKind::Cancelled,
-                            Some(reason.clone()),
-                        )
-                        .await?;
+                    self.save_assignment(
+                        &assignment,
+                        AssignmentEventKind::Cancelled,
+                        Some(reason.clone()),
+                    )
+                    .await?;
                     self.store
                         .update_task_status(&assignment.task_id, &TaskStatus::Cancelled)
                         .await?;
@@ -336,35 +330,32 @@ impl AssignmentService {
             assignment.updated_at = Utc::now();
             if has_started_children {
                 assignment.status = AssignmentStatus::Waiting;
-                self.store
-                    .save_assignment(
-                        &assignment,
-                        AssignmentEventKind::Waiting,
-                        Some("restart: children in flight".to_string()),
-                    )
-                    .await?;
+                self.save_assignment(
+                    &assignment,
+                    AssignmentEventKind::Waiting,
+                    Some("restart: children in flight".to_string()),
+                )
+                .await?;
             } else if assignment.restarts < 1 {
                 assignment.restarts += 1;
                 assignment.status = AssignmentStatus::Queued;
-                self.store
-                    .save_assignment(
-                        &assignment,
-                        AssignmentEventKind::Restarted,
-                        Some("restart: rerun once".to_string()),
-                    )
-                    .await?;
+                self.save_assignment(
+                    &assignment,
+                    AssignmentEventKind::Restarted,
+                    Some("restart: rerun once".to_string()),
+                )
+                .await?;
             } else {
                 assignment.status = AssignmentStatus::Failed;
                 assignment.outcome = Some(AssignmentOutcome::Failed {
                     error: "interrupted after restart".to_string(),
                 });
-                self.store
-                    .save_assignment(
-                        &assignment,
-                        AssignmentEventKind::Failed,
-                        Some("restart: interrupted".to_string()),
-                    )
-                    .await?;
+                self.save_assignment(
+                    &assignment,
+                    AssignmentEventKind::Failed,
+                    Some("restart: interrupted".to_string()),
+                )
+                .await?;
                 self.store
                     .update_task_status(
                         &assignment.task_id,
@@ -420,8 +411,7 @@ impl AssignmentService {
             assignment.outcome = Some(AssignmentOutcome::Failed {
                 error: reason.clone(),
             });
-            self.store
-                .save_assignment(&assignment, AssignmentEventKind::Stalled, Some(reason))
+            self.save_assignment(&assignment, AssignmentEventKind::Stalled, Some(reason))
                 .await?;
         } else {
             self.store.update_assignment_progress(&assignment).await?;
@@ -490,13 +480,12 @@ impl AssignmentService {
             parent.outcome = Some(AssignmentOutcome::Failed {
                 error: "wake budget exhausted".to_string(),
             });
-            self.store
-                .save_assignment(
-                    &parent,
-                    AssignmentEventKind::BudgetExhausted,
-                    Some("wake budget exhausted".to_string()),
-                )
-                .await?;
+            self.save_assignment(
+                &parent,
+                AssignmentEventKind::BudgetExhausted,
+                Some("wake budget exhausted".to_string()),
+            )
+            .await?;
             self.store
                 .update_task_status(
                     &parent.task_id,
@@ -510,19 +499,51 @@ impl AssignmentService {
 
         parent.status = AssignmentStatus::Resume;
         parent.wakes += 1;
-        self.store
-            .save_assignment(
-                &parent,
-                AssignmentEventKind::Resumed,
-                Some(format!("child '{}' settled", child.id)),
-            )
-            .await?;
+        self.save_assignment(
+            &parent,
+            AssignmentEventKind::Resumed,
+            Some(format!("child '{}' settled", child.id)),
+        )
+        .await?;
         Ok(())
     }
 
     fn publish_task_created(&self, task: &Task) {
         self.bus
             .publish(Event::new(EventPayload::TaskCreated(task.clone())));
+    }
+
+    /// Persist an assignment transition and publish it to the event stream.
+    ///
+    /// Every transition goes through here so background cards never miss a
+    /// status change.
+    async fn save_assignment(
+        &self,
+        assignment: &Assignment,
+        kind: AssignmentEventKind,
+        detail: Option<String>,
+    ) -> CowResult<()> {
+        self.store
+            .save_assignment(assignment, kind, detail.clone())
+            .await?;
+        self.publish_assignment_updated(assignment, kind, detail);
+        Ok(())
+    }
+
+    fn publish_assignment_updated(
+        &self,
+        assignment: &Assignment,
+        kind: AssignmentEventKind,
+        detail: Option<String>,
+    ) {
+        self.bus
+            .publish(Event::new(EventPayload::AssignmentUpdated {
+                assignment_id: assignment.id.clone(),
+                task_id: assignment.task_id.clone(),
+                status: assignment.status,
+                kind,
+                detail,
+            }));
     }
 
     fn publish_task_assigned(&self, task: &Task, assignment: &Assignment) {
