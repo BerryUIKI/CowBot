@@ -269,7 +269,7 @@ Progress refreshes from live events; all history persists across restarts.
 
 ### Background tasks
 
-Running work is visible without opening Tasks.
+Running work is visible without leaving Chat.
 
 - **Sidebar cards** — under a group channel, up to two compact cards show that
   channel's active runs: status dot, title, latest activity (`Reading …`,
