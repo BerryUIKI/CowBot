@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import ApprovalCards from "./ApprovalCards";
 import BackgroundTasksContent from "./BackgroundTasksContent";
 import type {
@@ -10,13 +12,14 @@ import type {
 } from "./types";
 import { isActiveOverviewStatus } from "./types";
 
-export type InspectorTab = "approvals" | "background";
+export type InspectorTab = "approvals" | "background" | "task";
 
 interface InspectorProps {
   tab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   onClose: () => void;
   inert?: boolean;
+  taskPanel?: ReactNode | null;
   overview: TaskOverviewEntry[];
   agents: AgentProfile[];
   now: number;
@@ -33,7 +36,7 @@ interface InspectorProps {
   ) => void;
 }
 
-const tabs: { id: InspectorTab; label: string }[] = [
+const baseTabs: { id: InspectorTab; label: string }[] = [
   { id: "approvals", label: "Approvals" },
   { id: "background", label: "Background" },
 ];
@@ -43,6 +46,7 @@ export default function Inspector({
   onTabChange,
   onClose,
   inert = false,
+  taskPanel = null,
   overview,
   agents,
   now,
@@ -58,6 +62,12 @@ export default function Inspector({
     isActiveOverviewStatus(entry.status),
   ).length;
 
+  const tabs = taskPanel
+    ? [{ id: "task" as const, label: "Task" }, ...baseTabs]
+    : baseTabs;
+  const activeTab: InspectorTab =
+    taskPanel || tab !== "task" ? tab : "approvals";
+
   return (
     <aside className="inspector" aria-label="Inspector" inert={inert}>
       <header className="inspector-head">
@@ -68,9 +78,9 @@ export default function Inspector({
               type="button"
               role="tab"
               id={`inspector-tab-${item.id}`}
-              aria-selected={tab === item.id}
+              aria-selected={activeTab === item.id}
               aria-controls={`inspector-panel-${item.id}`}
-              className={`inspector-tab${tab === item.id ? " is-active" : ""}`}
+              className={`inspector-tab${activeTab === item.id ? " is-active" : ""}`}
               onClick={() => onTabChange(item.id)}
             >
               {item.label}
@@ -95,12 +105,23 @@ export default function Inspector({
       </header>
 
       <div className="inspector-body">
+        {taskPanel ? (
+          <div
+            className="inspector-pane"
+            role="tabpanel"
+            id="inspector-panel-task"
+            aria-labelledby="inspector-tab-task"
+            hidden={activeTab !== "task"}
+          >
+            {taskPanel}
+          </div>
+        ) : null}
         <div
           className="inspector-pane"
           role="tabpanel"
           id="inspector-panel-approvals"
           aria-labelledby="inspector-tab-approvals"
-          hidden={tab !== "approvals"}
+          hidden={activeTab !== "approvals"}
         >
           <ApprovalCards
             embedded
@@ -117,7 +138,7 @@ export default function Inspector({
           role="tabpanel"
           id="inspector-panel-background"
           aria-labelledby="inspector-tab-background"
-          hidden={tab !== "background"}
+          hidden={activeTab !== "background"}
         >
           <BackgroundTasksContent
             overview={overview}

@@ -1352,9 +1352,10 @@ export default function App() {
   }
 
   function openTask(taskId: string) {
-    setView("tasks");
+    setView("chat");
     setCreatingTask(false);
     setSelectedTaskId(taskId);
+    setInspectorTab("task");
   }
 
   function toggleInspector(tab: InspectorTab) {
@@ -1362,6 +1363,7 @@ export default function App() {
   }
 
   function startCreatingTask() {
+    setInspectorTab(null);
     setView("tasks");
     setCreatingTask(true);
     setError(null);
@@ -1404,6 +1406,8 @@ export default function App() {
       setProjectBranches(null);
       await refreshTasks(task.id);
       setSelectedTaskId(task.id);
+      setView("chat");
+      setInspectorTab("task");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -1692,6 +1696,27 @@ export default function App() {
       ]
     : [];
 
+  const taskInspectorPanel = selectedTask ? (
+    <TaskDetail
+      task={selectedTask}
+      assignments={taskAssignments}
+      runs={taskRuns}
+      runTasks={taskRunTasks}
+      worktree={taskWorktree}
+      discardingWorktree={busy === "discard-worktree"}
+      onDiscardWorktree={() => void handleDiscardWorktree()}
+      onOpenTask={openTask}
+      cancelling={busy === "cancel-task"}
+      onCancel={handleCancelTask}
+      running={runningTasks.has(selectedTask.id)}
+      onRun={() => handleRunTask(selectedTask.id)}
+      onApprovePlan={() => void handleApprovePlan(selectedTask.id)}
+      approvingPlan={busy === "approve-plan"}
+      onToggleArchive={() => void handleToggleArchive(selectedTask)}
+      archiveBusy={busy === "archive-task"}
+    />
+  ) : null;
+
   return (
     <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
@@ -1724,8 +1749,8 @@ export default function App() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={view === "tasks" ? "Search tasks" : "Search"}
-              aria-label={view === "tasks" ? "Search tasks" : "Search conversations"}
+              placeholder="Search conversations and tasks"
+              aria-label="Search conversations and tasks"
             />
           </label>
         ) : null}
@@ -2040,6 +2065,89 @@ export default function App() {
                   </button>
                 )}
               </section>
+
+              <section className="sidebar-section" aria-label="Tasks">
+                <div className="nav-heading">
+                  <span>Tasks</span>
+                  <button type="button" className="text-button" onClick={startCreatingTask}>
+                    New
+                  </button>
+                </div>
+                <div className="task-filter" role="group" aria-label="Task filter">
+                  {(["active", "archived", "all"] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      className="task-filter-item"
+                      aria-pressed={taskFilter === filter}
+                      onClick={() => setTaskFilter(filter)}
+                    >
+                      {filter === "active"
+                        ? "Active"
+                        : filter === "archived"
+                          ? "Archived"
+                          : "All"}
+                    </button>
+                  ))}
+                </div>
+                <ul className="contact-list">
+                  {visibleTasks.map((task) => {
+                    const kind = taskStatusKind(task.status);
+                    return (
+                      <li key={task.id} className="task-row">
+                        <button
+                          type="button"
+                          className="contact-row"
+                          aria-current={
+                            task.id === selectedTaskId &&
+                            inspectorTab === "task" &&
+                            !creatingTask
+                              ? "page"
+                              : undefined
+                          }
+                          onClick={() => openTask(task.id)}
+                        >
+                          <Avatar
+                            name={agentName(agents, task.assigned_agent)}
+                            kind="agent"
+                            size="small"
+                          />
+                          <span className="contact-text">
+                            <span className="contact-top">
+                              <span className="contact-name">
+                                {task.title || task.description}
+                              </span>
+                            </span>
+                            <span className="contact-snippet">
+                              <span className={`status-dot status-${kind}`} />{" "}
+                              {taskStatusLabel(task.status)} ·{" "}
+                              {agentName(agents, task.assigned_agent)}
+                              {task.archived ? " · Archived" : ""}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="contact-more"
+                          title="Task actions"
+                          aria-label={`Actions for ${task.title || task.description}`}
+                          onClick={(event) => openTaskMenu(event, task)}
+                        >
+                          ⋯
+                        </button>
+                      </li>
+                    );
+                  })}
+                  {visibleTasks.length === 0 ? (
+                    <li className="nav-empty">
+                      {tasks.length === 0 ? "No tasks yet." : "No tasks match."}
+                    </li>
+                  ) : null}
+                </ul>
+                <button type="button" className="new-channel-button" onClick={startCreatingTask}>
+                  <span aria-hidden="true">+</span> New task
+                </button>
+              </section>
             </>
           ) : view === "tasks" ? (
             <section className="sidebar-section" aria-label="Tasks">
@@ -2077,10 +2185,7 @@ export default function App() {
                         aria-current={
                           task.id === selectedTaskId && !creatingTask ? "page" : undefined
                         }
-                        onClick={() => {
-                          setSelectedTaskId(task.id);
-                          setCreatingTask(false);
-                        }}
+                        onClick={() => openTask(task.id)}
                       >
                         <Avatar
                           name={agentName(agents, task.assigned_agent)}
@@ -2161,14 +2266,6 @@ export default function App() {
               onClick={() => setView("chat")}
             >
               Chat
-            </button>
-            <button
-              type="button"
-              className="footer-nav-item"
-              aria-current={view === "tasks" ? "page" : undefined}
-              onClick={() => setView("tasks")}
-            >
-              Tasks
             </button>
             <button
               type="button"
@@ -2812,7 +2909,10 @@ export default function App() {
                     <button
                       type="button"
                       className="ghost-button"
-                      onClick={() => setCreatingTask(false)}
+                      onClick={() => {
+                        setCreatingTask(false);
+                        setView("chat");
+                      }}
                     >
                       Cancel
                     </button>
@@ -2874,6 +2974,7 @@ export default function App() {
           tab={inspectorTab}
           onTabChange={setInspectorTab}
           onClose={() => setInspectorTab(null)}
+          taskPanel={taskInspectorPanel}
           overview={overview}
           agents={agents}
           now={overviewNow}
