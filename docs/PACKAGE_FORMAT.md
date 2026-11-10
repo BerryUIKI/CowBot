@@ -75,6 +75,12 @@ serialize.
 Passwords and password hashes, API tokens, session tokens, model credentials,
 and any environment variables. Credentials are reconfigured after import.
 
+Local project registry entries (repository paths) and task worktree records
+(checkout paths, branches, and status) describe one machine and are not
+exported either; a task's optional `run_group` link is part of the task record
+and does export. Worktrees are recreated only by running the task on a machine
+where the project is registered.
+
 ## Import semantics (v1)
 
 - The archive is read completely, every path is checked against the v1 layout,
