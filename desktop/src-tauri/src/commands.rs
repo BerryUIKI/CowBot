@@ -1,9 +1,7 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{
-    Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy,
-};
+use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
