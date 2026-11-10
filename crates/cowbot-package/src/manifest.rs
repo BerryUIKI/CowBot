@@ -22,6 +22,7 @@ pub const CONTEXT_EVENTS_PATH: &str = "context_events.jsonl";
 pub const TASKS_PATH: &str = "tasks.json";
 pub const RUNS_PATH: &str = "runs.jsonl";
 pub const AUDIT_PATH: &str = "audit.jsonl";
+pub const PERMISSION_RULES_PATH: &str = "permission_rules.jsonl";
 
 /// What a package contains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
