@@ -710,6 +710,7 @@ async fn run_crew(
                 channel_id,
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
+                capture_plan_task: None,
             },
         )
         .await?;

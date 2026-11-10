@@ -17,7 +17,10 @@ mod tests {
     use cowbot_core::task::Task;
     use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
     use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder, TokenUsage};
-    use cowbot_llm::{ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall, MockLlmProvider};
+    use cowbot_llm::{
+        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, LlmProvider,
+        LlmToolCall, MockLlmProvider,
+    };
     use cowbot_tools::{CodeExecutionTool, SubprocessSandbox, ToolRegistry};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -341,5 +344,72 @@ mod tests {
         assert_eq!(recorded[1].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(recorded[2].role, ChatRole::Assistant);
         assert_eq!(recorded[2].content, "final answer");
+    }
+
+    struct RecordingLlm {
+        requests: Mutex<Vec<ChatCompletionRequest>>,
+    }
+
+    impl RecordingLlm {
+        fn new() -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<ChatCompletionRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingLlm {
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        async fn chat_complete(
+            &self,
+            request: &ChatCompletionRequest,
+        ) -> CowResult<ChatCompletionResponse> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(ChatCompletionResponse {
+                content: Some("planned".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: Some("stop".to_string()),
+                usage: None,
+                raw_usage: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mode_instruction_is_included_in_caller_assembled_messages() {
+        let llm = Arc::new(RecordingLlm::new());
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm.clone(),
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        agent.set_mode_instruction(Some("You are in Plan mode.".to_string()));
+
+        let task = Task::new("Reply in the conversation", "An answer");
+        let messages = vec![
+            ChatMessage::system("system prompt"),
+            ChatMessage::user("latest question"),
+        ];
+        agent
+            .execute_messages(&task, messages, &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let requests = llm.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages[0].role, ChatRole::System);
+        assert_eq!(requests[0].messages[0].content, "system prompt");
+        assert_eq!(requests[0].messages[1].role, ChatRole::System);
+        assert_eq!(requests[0].messages[1].content, "You are in Plan mode.");
+        assert_eq!(requests[0].messages[2].content, "latest question");
     }
 }

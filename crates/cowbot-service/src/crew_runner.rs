@@ -67,8 +67,16 @@ impl CrewRunner {
         workspace_id: &WorkspaceId,
         requester: AssignmentRequester,
         origin: AssignmentOrigin,
-        options: CrewRunOptions,
+        mut options: CrewRunOptions,
     ) -> CowResult<HashMap<TaskId, String>> {
+        // A pipeline runs one planning artifact: capture the first task's
+        // output rather than every root's.
+        if options.capture_plan_task.is_none() && options.approval_level == ApprovalLevel::PlanOnly
+        {
+            if let Some(first) = crew.tasks.first() {
+                options.capture_plan_task = Some(first.id.clone());
+            }
+        }
         let mut scheduler = AssignmentScheduler::new(
             self.assignments.store().clone(),
             self.assignments.bus().clone(),

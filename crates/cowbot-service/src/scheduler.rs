@@ -55,6 +55,10 @@ pub struct CrewRunOptions {
     pub max_concurrency: usize,
     /// Let Auto mode ask the active model for permission decisions.
     pub use_model_permissions: bool,
+    /// Capture this task's Plan-mode output as its plan. Crew runs that plan
+    /// with one agent set the planning task; pipeline runs leave it unset so
+    /// coder and reviewer outputs are not shown as plans.
+    pub capture_plan_task: Option<TaskId>,
 }
 
 impl Default for CrewRunOptions {
@@ -64,6 +68,7 @@ impl Default for CrewRunOptions {
             channel_id: None,
             max_concurrency: 4,
             use_model_permissions: false,
+            capture_plan_task: None,
         }
     }
 }
@@ -176,6 +181,8 @@ pub struct AssignmentScheduler {
     session_decisions: Option<Arc<SessionDecisions>>,
     /// Model requests prepared for conversation turns, keyed by task id.
     prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
+    /// Tasks whose completed Plan-mode output becomes their stored plan.
+    plan_tasks: Arc<StdMutex<HashSet<TaskId>>>,
 }
 
 enum Claim {
@@ -208,6 +215,7 @@ impl AssignmentScheduler {
             use_model_permissions: false,
             session_decisions: None,
             prepared: Arc::new(StdMutex::new(HashMap::new())),
+            plan_tasks: Arc::new(StdMutex::new(HashSet::new())),
         }
     }
 
@@ -281,6 +289,11 @@ impl AssignmentScheduler {
         origin: AssignmentOrigin,
         options: &CrewRunOptions,
     ) -> CowResult<Assignment> {
+        if options.capture_plan_task.as_ref() == Some(&task.id) {
+            if let Ok(mut plan_tasks) = self.plan_tasks.lock() {
+                plan_tasks.insert(task.id.clone());
+            }
+        }
         let assignment = self
             .enqueue_untracked(task, requester, origin, options)
             .await?;
@@ -645,7 +658,11 @@ impl AssignmentScheduler {
                     .update_run_status(&run.id, RunStatus::Completed, Some(Utc::now()))
                     .await?;
                 self.assignments.complete(&assignment.id, &output).await?;
-                if assignment.parent_id.is_none()
+                if self
+                    .plan_tasks
+                    .lock()
+                    .map(|tasks| tasks.contains(&task.id))
+                    .unwrap_or(false)
                     && assignment.approval_level == ApprovalLevel::PlanOnly
                     && !output.trim().is_empty()
                 {

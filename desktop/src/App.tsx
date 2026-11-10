@@ -1511,6 +1511,7 @@ export default function App() {
     try {
       await approveTaskPlan(taskId);
       setTaskApproval("ask");
+      setChannelApproval("ask");
       await handleRunTask(taskId, "ask");
       await refreshTasks();
       if (selectedTaskId) await refreshTaskDetail(selectedTaskId);

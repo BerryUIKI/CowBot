@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cowbot_agent::Crew;
+use cowbot_agent::{AgentInstance, Crew};
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{
@@ -11,6 +11,7 @@ use cowbot_core::approval::{
 };
 use cowbot_core::assignment::{
     Assignment, AssignmentEvent, AssignmentId, AssignmentOrigin, AssignmentRequester,
+    AssignmentStatus,
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
@@ -25,8 +26,8 @@ use cowbot_core::template::TemplateDocument;
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
-    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
-    ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
+    bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
+    AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
     ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
     SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
@@ -225,6 +226,75 @@ impl LocalClient {
             )
             .await
     }
+
+    /// Execute an existing stored task with its assignee through the
+    /// assignment scheduler.
+    ///
+    /// Used by the desktop for Plan-mode runs and for "Approve plan and
+    /// continue": the task keeps its identity, status, plan, and history
+    /// instead of spawning a fresh crew. The caller supplies the agent
+    /// instance because the LLM and tool handles live in the desktop runtime.
+    pub async fn run_existing_task(
+        &self,
+        task: &Task,
+        agent: AgentInstance,
+        options: CrewRunOptions,
+    ) -> CowResult<String> {
+        let stored = self
+            .store
+            .get_task(&task.id)
+            .await?
+            .ok_or_else(|| CowError::Task(format!("task '{}' was not found", task.id)))?;
+        if stored.assigned_agent.as_ref() != Some(&agent.profile.id) {
+            return Err(CowError::Task(format!(
+                "task '{}' is not assigned to agent '{}'",
+                stored.id, agent.profile.id
+            )));
+        }
+
+        // A task created from the desktop already has a queued root. Reuse it
+        // but apply the approval level the user selected for this run.
+        let queued = self
+            .store
+            .list_assignments_for_task(&stored.id)
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                assignment.parent_id.is_none() && assignment.status == AssignmentStatus::Queued
+            });
+        if let Some(queued) = queued {
+            if queued.approval_level != options.approval_level {
+                self.store
+                    .set_assignment_approval_level(&queued.id, options.approval_level)
+                    .await?;
+            }
+        }
+
+        let mut scheduler = AssignmentScheduler::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.session.workspace.id.clone(),
+            1,
+        )
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(Some(self.session_decisions.clone()));
+        scheduler.register_instance(&agent);
+        scheduler
+            .enqueue(
+                &stored,
+                AssignmentRequester::User(self.session.user.id.0.clone()),
+                AssignmentOrigin::User,
+                &options,
+            )
+            .await?;
+        let completed = scheduler.run_until_idle().await?;
+        completed
+            .get(&stored.id)
+            .cloned()
+            .ok_or_else(|| CowError::Task(format!("task '{}' did not complete", stored.id)))
+    }
+
     /// Ensure every workspace agent has a direct conversation channel.
     ///
     /// Idempotent: existing conversations are reused, missing ones are created
@@ -738,7 +808,7 @@ mod tests {
         AssignmentEventKind, AssignmentMode, AssignmentOrigin, ReplyMode,
     };
     use cowbot_core::run::RunStatus;
-    use cowbot_core::task::Task;
+    use cowbot_core::task::{Task, TaskStatus};
     use cowbot_llm::MockLlmProvider;
     use serde_json::json;
 
@@ -1122,5 +1192,92 @@ mod tests {
         assert!(cleared >= 2);
         let context = client.conversation_context(&channel.id).await.unwrap();
         assert_eq!(context.projection.active_entries, 0);
+    }
+
+    #[tokio::test]
+    async fn run_existing_task_uses_its_assignee_and_captures_the_plan() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+        let session = client.session().await.unwrap();
+        let workspace_id = session.workspace.id;
+        let user_id = session.user.id.0;
+        let profile = AgentProfile::new("Tester", "Engineer", "Ship", "Terse");
+        client
+            .store
+            .upsert_agent(&workspace_id, &profile)
+            .await
+            .unwrap();
+
+        let task = Task::new("Do the work", "Output").assign_to(profile.id.clone());
+        client
+            .store
+            .create_task(&workspace_id, None, &task)
+            .await
+            .unwrap();
+        let output = client
+            .run_existing_task(
+                &task,
+                AgentInstance::new(
+                    profile.clone(),
+                    Arc::new(MockLlmProvider::echo()),
+                    ToolRegistry::new(),
+                    "mock-model",
+                ),
+                CrewRunOptions {
+                    approval_level: ApprovalLevel::Ask,
+                    ..CrewRunOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(output.starts_with("Mock response to:"));
+        let completed = client.store.get_task(&task.id).await.unwrap().unwrap();
+        assert!(matches!(completed.status, TaskStatus::Completed { .. }));
+
+        let plan_task = Task::new("Plan the work", "A plan").assign_to(profile.id.clone());
+        client
+            .store
+            .create_task(&workspace_id, None, &plan_task)
+            .await
+            .unwrap();
+        let queued = Assignment::new_root(
+            plan_task.id.clone(),
+            AssignmentOrigin::User,
+            AssignmentRequester::User(user_id),
+            profile.id.clone(),
+            AssignmentMode::Work,
+            ReplyMode::Resume,
+            ApprovalLevel::Ask,
+        );
+        client.store.create_assignment(&queued).await.unwrap();
+        client
+            .run_existing_task(
+                &plan_task,
+                AgentInstance::new(
+                    profile,
+                    Arc::new(MockLlmProvider::echo()),
+                    ToolRegistry::new(),
+                    "mock-model",
+                ),
+                CrewRunOptions {
+                    approval_level: ApprovalLevel::PlanOnly,
+                    capture_plan_task: Some(plan_task.id.clone()),
+                    ..CrewRunOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let planned = client.store.get_task(&plan_task.id).await.unwrap().unwrap();
+        assert!(planned.plan.is_some());
+        assert!(!planned.plan_approved);
+        let updated = client
+            .store
+            .get_assignment(&queued.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.approval_level, ApprovalLevel::PlanOnly);
     }
 }

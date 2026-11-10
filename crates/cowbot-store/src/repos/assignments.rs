@@ -1,3 +1,4 @@
+use chrono::Utc;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{
@@ -469,6 +470,22 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
+        Ok(())
+    }
+
+    /// Change the approval level of a queued assignment before it starts.
+    pub async fn set_assignment_approval_level(
+        &self,
+        id: &AssignmentId,
+        approval_level: ApprovalLevel,
+    ) -> CowResult<()> {
+        sqlx::query("UPDATE assignments SET approval_level = ?, updated_at = ? WHERE id = ?")
+            .bind(approval_level_to_str(approval_level))
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
         Ok(())
     }
 

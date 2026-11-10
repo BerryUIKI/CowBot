@@ -223,6 +223,7 @@ impl ChannelAgentService {
             channel_id: Some(channel.id.clone()),
             max_concurrency: options.max_concurrency,
             use_model_permissions: options.use_model_permissions,
+            capture_plan_task: None,
         };
 
         // History excludes this turn's own notices, so an "@Nobody" notice
@@ -234,12 +235,16 @@ impl ChannelAgentService {
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
             let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
+            let mut task_options = run_options.clone();
+            if options.approval_level == ApprovalLevel::PlanOnly {
+                task_options.capture_plan_task = Some(task.id.clone());
+            }
             scheduler
                 .enqueue(
                     &task,
                     requester.clone(),
                     AssignmentOrigin::User,
-                    &run_options,
+                    &task_options,
                 )
                 .await?;
             tasks.push(task.id);
