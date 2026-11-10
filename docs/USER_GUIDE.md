@@ -316,7 +316,8 @@ compacting the context never deletes messages.
   follow Manual.
 - **Plan** — run only read-only tools and deny everything else. The agent is
   asked to answer with a plan; it is stored with the task, and **Approve plan
-  and continue** switches the next run to Manual.
+  and continue** re-runs that task in Manual mode with the approved plan as
+  context. Plan mode also applies to conversation and channel turns.
 - **Bypass permissions** — run every tool call. Critical-risk calls follow
   **Settings → Approvals → Critical calls under Bypass**: Allow (default), Ask
   with a red approval card, or Block. Destructive channel deletion always asks,
