@@ -5,6 +5,7 @@ use crate::permission::PermissionRuleMatch;
 use crate::risk::RiskLevel;
 use crate::task::{Task, TaskId};
 use crate::tool::{ToolCall, ToolResult};
+use crate::worktree::WorktreeStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -39,6 +40,11 @@ pub enum EventPayload {
     ToolCallExecuted {
         agent_id: AgentId,
         result: ToolResult,
+    },
+    /// A task's git worktree changed lifecycle state
+    WorktreeUpdated {
+        task_id: TaskId,
+        status: WorktreeStatus,
     },
     /// A tool call is waiting for a human decision
     ApprovalRequested {

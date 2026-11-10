@@ -17,6 +17,7 @@ mod scheduler;
 mod session_decisions;
 mod task_service;
 mod templates;
+mod worktrees;
 
 pub use agents::{AgentService, AgentUpdate};
 pub use approvals::{
@@ -37,3 +38,4 @@ pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
 pub use templates::{builtin_templates, TemplateService};
+pub use worktrees::{slug_for, WorktreeService};
