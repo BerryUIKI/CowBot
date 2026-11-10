@@ -22,12 +22,13 @@ use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentService,
     ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
     ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
-    SessionDecisions, TaskService, TemplateService,
+    SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -54,6 +55,7 @@ pub struct LocalClient {
     agents: AgentService,
     permissions: PermissionService,
     session_decisions: Arc<SessionDecisions>,
+    worktrees: WorktreeService,
 }
 
 impl LocalClient {
@@ -95,6 +97,8 @@ impl LocalClient {
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
+        let worktrees = WorktreeService::new(store.clone(), bus.clone());
+        worktrees.reconcile().await?;
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -118,6 +122,7 @@ impl LocalClient {
             agents,
             permissions,
             session_decisions,
+            worktrees,
         })
     }
 
@@ -264,6 +269,47 @@ impl LocalClient {
         model: &str,
     ) -> CowResult<CompactionOutcome> {
         self.conversations.compact(channel_id, llm, model).await
+    }
+
+    /// Record that a task wants a git worktree.
+    ///
+    /// Local-only: the checkout lives on this machine and is not part of the
+    /// transport-neutral protocol.
+    pub async fn request_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree> {
+        self.worktrees
+            .request(task_id, project_id, project_path, base_branch)
+            .await
+    }
+
+    /// Create the branch and checkout for a requested worktree.
+    pub async fn prepare_worktree(&self, task_id: &TaskId) -> CowResult<TaskWorktree> {
+        self.worktrees.prepare(task_id).await
+    }
+
+    pub async fn task_worktree(&self, task_id: &TaskId) -> CowResult<Option<TaskWorktree>> {
+        self.worktrees.get(task_id).await
+    }
+
+    pub async fn list_worktrees(&self) -> CowResult<Vec<TaskWorktree>> {
+        self.worktrees.list().await
+    }
+
+    pub async fn discard_worktree(&self, task_id: &TaskId) -> CowResult<TaskWorktree> {
+        self.worktrees.discard(task_id).await
+    }
+
+    pub async fn worktree_diff(&self, task_id: &TaskId) -> CowResult<TaskWorktreeDiff> {
+        self.worktrees.diff(task_id).await
+    }
+
+    pub async fn reconcile_worktrees(&self) -> CowResult<Vec<TaskWorktree>> {
+        self.worktrees.reconcile().await
     }
 }
 
@@ -904,6 +950,71 @@ mod tests {
         let again = client.ensure_agent_channels().await.unwrap();
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].id, channels[0].id);
+    }
+
+    #[tokio::test]
+    async fn worktree_operations_roundtrip_through_the_client() {
+        use cowbot_core::worktree::WorktreeStatus;
+
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let workspace_id = client.session().await.unwrap().workspace.id;
+
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write(repo.join("README.md"), "initial\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+
+        let task = Task::new("Client worktree", "Output");
+        client
+            .store
+            .create_task(&workspace_id, None, &task)
+            .await
+            .unwrap();
+
+        let requested = client
+            .request_worktree(&task.id, "project-1", repo.to_str().unwrap(), "main")
+            .await
+            .unwrap();
+        assert_eq!(requested.status, WorktreeStatus::Requested);
+
+        let ready = client.prepare_worktree(&task.id).await.unwrap();
+        assert_eq!(ready.status, WorktreeStatus::Ready);
+        assert_eq!(
+            client
+                .task_worktree(&task.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .branch,
+            ready.branch
+        );
+
+        let diff = client.worktree_diff(&task.id).await.unwrap();
+        assert!(diff.status.is_empty());
+        assert!(!diff.truncated);
+        assert_eq!(client.list_worktrees().await.unwrap().len(), 1);
+
+        let removed = client.discard_worktree(&task.id).await.unwrap();
+        assert_eq!(removed.status, WorktreeStatus::Removed);
+        assert!(!std::path::Path::new(&ready.worktree_path).exists());
     }
 
     #[tokio::test]

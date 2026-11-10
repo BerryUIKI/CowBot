@@ -15,6 +15,7 @@ pub mod task;
 pub mod template;
 pub mod tool;
 pub mod usage;
+pub mod worktree;
 
 pub use agent::{AgentId, AgentProfile};
 pub use approval::{
@@ -55,3 +56,4 @@ pub use usage::{
     estimate_json_tokens, estimate_tokens, LlmCallKind, LlmCallRecord, LlmCallUsage,
     LlmUsageRecorder, TokenUsage, UsageTotals,
 };
+pub use worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus, WORKTREE_PATCH_LIMIT};

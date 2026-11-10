@@ -8,3 +8,4 @@ pub(crate) mod permissions;
 pub(crate) mod policies;
 pub(crate) mod tasks;
 pub(crate) mod usage;
+pub(crate) mod worktrees;

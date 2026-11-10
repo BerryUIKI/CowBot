@@ -22,3 +22,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 cowbot-tools = { workspace = true }
+tempfile = { workspace = true }
