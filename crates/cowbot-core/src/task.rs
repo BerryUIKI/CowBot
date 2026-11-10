@@ -69,6 +69,13 @@ pub struct Task {
     /// Whether the task was archived by the user
     #[serde(default)]
     pub archived: bool,
+    /// Plan artifact produced by a Plan-mode run, stored with the task until
+    /// the user approves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether the stored plan was approved to continue in Manual mode.
+    #[serde(default)]
+    pub plan_approved: bool,
 }
 
 impl Task {
@@ -84,6 +91,8 @@ impl Task {
             context_tasks: Vec::new(),
             status: TaskStatus::Pending,
             archived: false,
+            plan: None,
+            plan_approved: false,
         }
     }
 

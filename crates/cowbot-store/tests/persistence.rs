@@ -448,3 +448,32 @@ async fn task_title_and_archive_roundtrip() {
     let restored = store.get_task(&task.id).await.unwrap().unwrap();
     assert!(!restored.archived);
 }
+
+#[tokio::test]
+async fn task_plan_roundtrip_and_approval() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let task = Task::new("Plan the change", "A plan");
+    store.create_task(&workspace.id, None, &task).await.unwrap();
+    let loaded = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(loaded.plan.is_none());
+    assert!(!loaded.plan_approved);
+
+    store
+        .set_task_plan(&task.id, "1. Inspect\n2. Implement")
+        .await
+        .unwrap();
+    let planned = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(planned.plan.as_deref(), Some("1. Inspect\n2. Implement"));
+    assert!(!planned.plan_approved);
+
+    store.approve_task_plan(&task.id).await.unwrap();
+    let approved = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(approved.plan_approved);
+
+    store.set_task_plan(&task.id, "Revised plan").await.unwrap();
+    let revised = store.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(revised.plan.as_deref(), Some("Revised plan"));
+    assert!(!revised.plan_approved);
+}
