@@ -114,23 +114,19 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
   );
 }
 
-interface BackgroundTasksPanelProps {
+interface BackgroundTasksContentProps {
   overview: TaskOverviewEntry[];
   agents: AgentProfile[];
   now: number;
-  inert?: boolean;
-  onClose: () => void;
   onOpenTask: (runId: string) => void;
 }
 
-export default function BackgroundTasksPanel({
+export default function BackgroundTasksContent({
   overview,
   agents,
   now,
-  inert = false,
-  onClose,
   onOpenTask,
-}: BackgroundTasksPanelProps) {
+}: BackgroundTasksContentProps) {
   const active = overview.filter((entry) =>
     isActiveOverviewStatus(entry.status),
   );
@@ -139,86 +135,73 @@ export default function BackgroundTasksPanel({
     .slice(0, 20);
 
   return (
-    <aside className="background-panel" aria-label="Background tasks" inert={inert}>
-      <header className="background-panel-head">
-        <h2 className="background-panel-title">Background tasks</h2>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Close background tasks"
-          onClick={onClose}
-        >
-          ×
-        </button>
-      </header>
-      <div className="background-panel-scroll">
-        <section aria-label="Running tasks">
-          <h3 className="background-panel-heading">Running {active.length}</h3>
-          {active.length === 0 ? (
-            <p className="background-panel-empty">
-              Nothing running. Start a task and it will appear here.
-            </p>
-          ) : (
-            active.map((entry) => (
-              <ActiveRun
-                key={entry.run_id}
-                entry={entry}
-                agents={agents}
-                now={now}
-                onOpenTask={onOpenTask}
-              />
-            ))
-          )}
-        </section>
+    <div className="background-panel-scroll">
+      <section aria-label="Running tasks">
+        <h3 className="background-panel-heading">Running {active.length}</h3>
+        {active.length === 0 ? (
+          <p className="background-panel-empty">
+            Nothing running. Start a task and it will appear here.
+          </p>
+        ) : (
+          active.map((entry) => (
+            <ActiveRun
+              key={entry.run_id}
+              entry={entry}
+              agents={agents}
+              now={now}
+              onOpenTask={onOpenTask}
+            />
+          ))
+        )}
+      </section>
 
-        <section aria-label="Finished tasks">
-          <details className="background-finished">
-            <summary>
-              <span>Finished {finished.length}</span>
-              <span className="muted">Last 20</span>
-            </summary>
-            {finished.length === 0 ? (
-              <p className="background-panel-empty">No finished runs yet.</p>
-            ) : (
-              <ul className="background-finished-list">
-                {finished.map((entry) => {
-                  const snippet = outcomeSnippet(entry);
-                  return (
-                    <li key={entry.run_id}>
-                      <button
-                        type="button"
-                        className="background-finished-row"
-                        onClick={() => onOpenTask(entry.run_id)}
-                      >
-                        <span
-                          className={`status-dot status-${entry.status}`}
-                          aria-hidden="true"
-                        />
-                        <span className="background-finished-text">
-                          <span className="background-finished-title">
-                            {entry.title}
+      <section aria-label="Finished tasks">
+        <details className="background-finished">
+          <summary>
+            <span>Finished {finished.length}</span>
+            <span className="muted">Last 20</span>
+          </summary>
+          {finished.length === 0 ? (
+            <p className="background-panel-empty">No finished runs yet.</p>
+          ) : (
+            <ul className="background-finished-list">
+              {finished.map((entry) => {
+                const snippet = outcomeSnippet(entry);
+                return (
+                  <li key={entry.run_id}>
+                    <button
+                      type="button"
+                      className="background-finished-row"
+                      onClick={() => onOpenTask(entry.run_id)}
+                    >
+                      <span
+                        className={`status-dot status-${entry.status}`}
+                        aria-hidden="true"
+                      />
+                      <span className="background-finished-text">
+                        <span className="background-finished-title">
+                          {entry.title}
+                        </span>
+                        {snippet ? (
+                          <span className="background-finished-snippet">
+                            {snippet}
                           </span>
-                          {snippet ? (
-                            <span className="background-finished-snippet">
-                              {snippet}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="background-finished-meta">
-                          {formatElapsed(
-                            entry.started_at,
-                            new Date(entry.updated_at).getTime(),
-                          )}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </details>
-        </section>
-      </div>
-    </aside>
+                        ) : null}
+                      </span>
+                      <span className="background-finished-meta">
+                        {formatElapsed(
+                          entry.started_at,
+                          new Date(entry.updated_at).getTime(),
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </details>
+      </section>
+    </div>
   );
 }

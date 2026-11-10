@@ -5,12 +5,12 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from "react";
 
-import ApprovalCards from "./ApprovalCards";
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
-import BackgroundTasksPanel from "./BackgroundTasksPanel";
+import Inspector from "./Inspector";
+import type { InspectorTab } from "./Inspector";
 import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -103,7 +103,7 @@ import {
 } from "./types";
 import { useUpdater } from "./updater";
 
-type View = "chat" | "tasks" | "approvals" | "settings";
+type View = "chat" | "tasks" | "settings";
 
 interface PendingReply {
   channelId: string;
@@ -324,11 +324,19 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [overview, setOverview] = useState<TaskOverviewEntry[]>([]);
   const [overviewNow, setOverviewNow] = useState(() => Date.now());
-  const [backgroundOpen, setBackgroundOpen] = useState(() => {
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab | null>(() => {
     try {
-      return window.localStorage.getItem("cowbot.background-panel") === "open";
+      const stored = window.localStorage.getItem("cowbot.inspector-tab");
+      if (stored === "approvals" || stored === "background") return stored;
+      if (stored === "closed") return null;
+      if (
+        window.localStorage.getItem("cowbot.background-panel") === "open"
+      ) {
+        return "background";
+      }
+      return null;
     } catch {
-      return false;
+      return null;
     }
   });
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
@@ -505,13 +513,14 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        "cowbot.background-panel",
-        backgroundOpen ? "open" : "closed",
+        "cowbot.inspector-tab",
+        inspectorTab ?? "closed",
       );
+      window.localStorage.removeItem("cowbot.background-panel");
     } catch {
       // Storage can be unavailable in restricted webviews; the panel still works.
     }
-  }, [backgroundOpen]);
+  }, [inspectorTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1348,6 +1357,10 @@ export default function App() {
     setSelectedTaskId(taskId);
   }
 
+  function toggleInspector(tab: InspectorTab) {
+    setInspectorTab((current) => (current === tab ? null : tab));
+  }
+
   function startCreatingTask() {
     setView("tasks");
     setCreatingTask(true);
@@ -1680,7 +1693,7 @@ export default function App() {
     : [];
 
   return (
-    <div className={`app${backgroundOpen ? " with-background-panel" : ""}`}>
+    <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
         <div className="sidebar-head">
           <img className="wordmark" src={wordmark} alt="CowBot" />
@@ -2110,17 +2123,6 @@ export default function App() {
                 <span aria-hidden="true">+</span> New task
               </button>
             </section>
-          ) : view === "approvals" ? (
-            <section className="sidebar-section" aria-label="Approvals">
-              <div className="nav-heading">
-                <span>Approvals</span>
-                <span className="nav-count-soft">{approvals.length}</span>
-              </div>
-              <p className="nav-note">
-                Pending tool calls appear in the main pane. Agents request approval while a task
-                runs.
-              </p>
-            </section>
           ) : view === "settings" ? (
             <section className="sidebar-section" aria-label="Settings sections">
               <div className="nav-heading">
@@ -2167,26 +2169,6 @@ export default function App() {
               onClick={() => setView("tasks")}
             >
               Tasks
-            </button>
-            <button
-              type="button"
-              className="footer-nav-item"
-              aria-current={view === "approvals" ? "page" : undefined}
-              onClick={() => setView("approvals")}
-            >
-              Approvals
-              {approvals.length > 0 ? <span className="nav-count">{approvals.length}</span> : null}
-            </button>
-            <button
-              type="button"
-              className="footer-nav-item"
-              aria-pressed={backgroundOpen}
-              onClick={() => setBackgroundOpen((open) => !open)}
-            >
-              Background
-              {activeOverviewCount > 0 ? (
-                <span className="nav-count">{activeOverviewCount}</span>
-              ) : null}
             </button>
             <button
               type="button"
@@ -2288,6 +2270,59 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
+                  <div className="inspector-triggers">
+                    <button
+                      type="button"
+                      className={`inspector-trigger${
+                        inspectorTab === "approvals" ? " is-active" : ""
+                      }`}
+                      title="Approvals"
+                      aria-label={`Approvals (${approvals.length} pending)`}
+                      aria-pressed={inspectorTab === "approvals"}
+                      onClick={() => toggleInspector("approvals")}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        aria-hidden="true"
+                      >
+                        <path d="M9 11l3 3L22 4" />
+                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                      </svg>
+                      {approvals.length > 0 ? (
+                        <span className="inspector-trigger-count">
+                          {approvals.length}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      className={`inspector-trigger${
+                        inspectorTab === "background" ? " is-active" : ""
+                      }`}
+                      title="Background tasks"
+                      aria-label={`Background tasks (${activeOverviewCount} active)`}
+                      aria-pressed={inspectorTab === "background"}
+                      onClick={() => toggleInspector("background")}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 12h4l3-8 4 16 3-8h4" />
+                      </svg>
+                      {activeOverviewCount > 0 ? (
+                        <span className="inspector-trigger-count">
+                          {activeOverviewCount}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
                   {selectedChannel.kind === "conversation" ? (
                     <>
                       {conversationContext ? (
@@ -2813,15 +2848,6 @@ export default function App() {
               </button>
             </div>
           )
-        ) : view === "approvals" ? (
-          <ApprovalCards
-            approvals={approvals}
-            tasks={tasks}
-            toolCalls={toolCallDetails}
-            risks={approvalDetails}
-            decidingId={busy}
-            onDecide={handleDecideApproval}
-          />
         ) : (
           <SettingsView
             session={session}
@@ -2843,14 +2869,22 @@ export default function App() {
         )}
       </main>
 
-      {backgroundOpen ? (
-        <BackgroundTasksPanel
+      {inspectorTab ? (
+        <Inspector
+          tab={inspectorTab}
+          onTabChange={setInspectorTab}
+          onClose={() => setInspectorTab(null)}
           overview={overview}
           agents={agents}
           now={overviewNow}
           inert={onboardingOpen}
-          onClose={() => setBackgroundOpen(false)}
           onOpenTask={openTask}
+          approvals={approvals}
+          tasks={tasks}
+          toolCalls={toolCallDetails}
+          risks={approvalDetails}
+          decidingId={busy}
+          onDecide={handleDecideApproval}
         />
       ) : null}
 
