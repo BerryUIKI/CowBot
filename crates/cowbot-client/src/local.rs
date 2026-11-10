@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use cowbot_agent::Crew;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
+use cowbot_core::approval::{
+    Approval, ApprovalId, ApprovalLevel, ApprovalStatus, BypassCritical, WorkspacePolicy,
+};
 use cowbot_core::assignment::{
     Assignment, AssignmentEvent, AssignmentId, AssignmentOrigin, AssignmentRequester,
 };
@@ -554,6 +556,17 @@ impl Client for LocalClient {
 
     async fn delete_permission_rule(&self, id: &str) -> CowResult<()> {
         self.permissions.delete(id).await
+    }
+
+    async fn workspace_policy(&self) -> CowResult<WorkspacePolicy> {
+        self.permissions.policy().await
+    }
+
+    async fn set_bypass_critical(
+        &self,
+        bypass_critical: BypassCritical,
+    ) -> CowResult<WorkspacePolicy> {
+        self.permissions.set_bypass_critical(bypass_critical).await
     }
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>> {

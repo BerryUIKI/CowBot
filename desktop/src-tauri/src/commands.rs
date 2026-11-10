@@ -1,7 +1,9 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{AgentUpdate, Client, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
+use cowbot_core::approval::{
+    Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy,
+};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
@@ -658,6 +660,27 @@ pub async fn delete_permission_rule(
     state
         .client
         .delete_permission_rule(&rule_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workspace_policy(state: State<'_, AppState>) -> Result<WorkspacePolicy, String> {
+    state
+        .client
+        .workspace_policy()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_bypass_critical(
+    state: State<'_, AppState>,
+    bypass_critical: BypassCritical,
+) -> Result<WorkspacePolicy, String> {
+    state
+        .client
+        .set_bypass_critical(bypass_critical)
         .await
         .map_err(|error| error.to_string())
 }

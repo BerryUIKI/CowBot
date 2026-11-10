@@ -229,6 +229,8 @@ pub fn run() {
             commands::create_permission_rule,
             commands::set_permission_rule_enabled,
             commands::delete_permission_rule,
+            commands::get_workspace_policy,
+            commands::set_bypass_critical,
             commands::list_audit_events,
             commands::get_model_settings,
             commands::save_model_provider,

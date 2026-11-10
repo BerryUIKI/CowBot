@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel};
+use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
 use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
@@ -226,6 +226,11 @@ pub trait Client: Send + Sync {
         enabled: bool,
     ) -> CowResult<PermissionRule>;
     async fn delete_permission_rule(&self, id: &str) -> CowResult<()>;
+    async fn workspace_policy(&self) -> CowResult<WorkspacePolicy>;
+    async fn set_bypass_critical(
+        &self,
+        bypass_critical: BypassCritical,
+    ) -> CowResult<WorkspacePolicy>;
 
     async fn pending_approvals(&self) -> CowResult<Vec<Approval>>;
     async fn decide_approval(
