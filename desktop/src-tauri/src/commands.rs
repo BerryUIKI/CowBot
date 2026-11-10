@@ -508,7 +508,10 @@ pub async fn unarchive_task(state: State<'_, AppState>, task_id: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn approve_task_plan(state: State<'_, AppState>, task_id: String) -> Result<Task, String> {
+pub async fn approve_task_plan(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Task, String> {
     state
         .client
         .approve_task_plan(&TaskId::new(task_id))
