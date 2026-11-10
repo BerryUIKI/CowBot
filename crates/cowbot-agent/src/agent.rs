@@ -5,7 +5,7 @@ use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::task::Task;
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolCallRecorder, ToolGate};
 use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use cowbot_llm::{ChatCompletionRequest, ChatMessage, ChatRole, LlmProvider};
 use cowbot_tools::ToolRegistry;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -134,13 +134,24 @@ impl AgentInstance {
     pub async fn execute_messages(
         &mut self,
         task: &Task,
-        messages: Vec<ChatMessage>,
+        mut messages: Vec<ChatMessage>,
         bus: &EventBus,
     ) -> CowResult<String> {
         if messages.is_empty() {
             return Err(CowError::Agent(
                 "a task needs at least one message to execute".to_string(),
             ));
+        }
+        if let Some(instruction) = &self.mode_instruction {
+            let insert_at = if messages
+                .first()
+                .is_some_and(|message| message.role == ChatRole::System)
+            {
+                1
+            } else {
+                0
+            };
+            messages.insert(insert_at, ChatMessage::system(instruction.clone()));
         }
         self.run_loop(task, messages, bus).await
     }
