@@ -541,7 +541,12 @@ export default function App() {
       }
       if (type === "ApprovalRequested") {
         const payload = event.payload.payload as
-          | { approval?: { id?: string }; risk?: string; reason?: string }
+          | {
+              approval?: { id?: string };
+              risk?: string;
+              reason?: string;
+              rule?: { rule_id?: string; description?: string; decision?: string } | null;
+            }
           | undefined;
         const approval = payload?.approval;
         if (approval?.id) {
@@ -550,6 +555,18 @@ export default function App() {
             [approval.id as string]: {
               risk: payload?.risk ?? "unknown",
               reason: payload?.reason ?? "",
+              rule:
+                payload?.rule && payload.rule.description
+                  ? {
+                      rule_id: payload.rule.rule_id ?? "",
+                      description: payload.rule.description,
+                      decision:
+                        (payload.rule.decision as
+                          | "allow"
+                          | "ask"
+                          | "deny") ?? "ask",
+                    }
+                  : null,
             },
           }));
         }

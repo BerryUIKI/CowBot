@@ -2654,6 +2654,67 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  align-items: center;
+}
+
+.settings-card-actions .settings-meta-inline {
+  margin-right: auto;
+}
+
+.settings-subsection {
+  margin-top: 26px;
+}
+
+.settings-rule-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.settings-rule-form .field {
+  flex: 1 1 170px;
+}
+
+.rule-allow {
+  border-color: var(--sage);
+  color: var(--sage);
+}
+
+.rule-ask {
+  border-color: var(--brass);
+  color: var(--brass);
+}
+
+.rule-deny {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+.settings-audit-filter {
+  max-width: 220px;
+  margin-bottom: 14px;
+}
+
+.audit-target {
+  margin: 8px 0 0;
+  color: var(--paper-dim);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-rule {
+  margin: 6px 0 0;
+  color: var(--brass);
+  font-size: 12px;
 }
 
 .settings-form {

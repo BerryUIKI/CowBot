@@ -252,6 +252,39 @@ export interface ToolCallDetail {
 export interface ApprovalRisk {
   risk: string;
   reason: string;
+  rule?: ApprovalRuleMatch | null;
+}
+
+export interface ApprovalRuleMatch {
+  rule_id: string;
+  description: string;
+  decision: RuleDecision;
+}
+
+export type RuleDecision = "allow" | "ask" | "deny";
+
+export type RuleSource = "local" | "imported";
+
+export interface PermissionRule {
+  id: string;
+  workspace_id: string;
+  tool: string;
+  command: string | null;
+  decision: RuleDecision;
+  enabled: boolean;
+  source: RuleSource;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  workspace_id: string;
+  actor: string;
+  action: string;
+  target: string;
+  source?: string | null;
+  created_at: string;
 }
 
 export interface Approval {

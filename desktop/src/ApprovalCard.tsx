@@ -76,6 +76,12 @@ export default function ApprovalCard({
           {risk.reason ? ` — ${risk.reason}` : ""}
         </p>
       ) : null}
+      {risk?.rule ? (
+        <p className="approval-rule">
+          Workspace rule <code>{risk.rule.description}</code> —{" "}
+          {risk.rule.decision}
+        </p>
+      ) : null}
       <div className="approval-actions">
         <button
           type="button"
