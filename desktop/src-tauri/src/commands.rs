@@ -238,6 +238,7 @@ pub async fn post_message(
     let reply_id = message.id.clone();
     let running = state.replies.clone();
     let use_model_permissions = state.uses_remote_model();
+    let platform_context = project_platform_context(&state);
     if !running.lock().insert(reply_id.clone()) {
         return Ok(message);
     }
@@ -254,6 +255,7 @@ pub async fn post_message(
                     approval_level,
                     max_concurrency: 4,
                     use_model_permissions,
+                    platform_context,
                 },
             )
             .await;
@@ -461,9 +463,11 @@ pub async fn run_task(
     let client = state.client.clone();
     let (llm, model) = state.runtime_model();
     let tools = match &worktree {
-        Some(record) => {
-            AppState::rooted_tools(Path::new(&record.worktree_path), state.client.clone())
-        }
+        Some(record) => AppState::rooted_tools(
+            Path::new(&record.worktree_path),
+            state.config_path.clone(),
+            state.client.clone(),
+        ),
         None => state.tools.clone(),
     };
     let run_id = task_id.clone();
@@ -1094,6 +1098,27 @@ pub struct ModelSettings {
 fn load_config(state: &AppState) -> Result<config::AppConfig, String> {
     config::load(&state.config_path)
         .map_err(|error| format!("failed to read {}: {error}", state.config_path.display()))
+}
+
+/// Registered projects and their current branches for the assistant context.
+fn project_platform_context(state: &AppState) -> Option<String> {
+    let config = load_config(state).ok()?;
+    if config.projects.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "Registered git projects (create_task with project and base_branch runs the task in a worktree):"
+            .to_string(),
+    ];
+    for project in &config.projects {
+        let branch = config::project_current_branch(&project.path)
+            .unwrap_or_else(|| "unavailable".to_string());
+        lines.push(format!(
+            "- {} — current branch {} — {}",
+            project.name, branch, project.path
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 fn persist_config(

@@ -450,6 +450,7 @@ async fn reply_to_mentions(
                 approval_level: settings.approval.into(),
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
+                platform_context: None,
             },
         )
         .await?;
