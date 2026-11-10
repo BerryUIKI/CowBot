@@ -688,6 +688,12 @@ impl AssignmentScheduler {
                 }
             }
         }
+        // An approved plan is the instruction for the follow-up Manual run.
+        if assignment.approval_level != ApprovalLevel::PlanOnly && task.plan_approved {
+            if let Some(plan) = task.plan.as_deref().filter(|plan| !plan.trim().is_empty()) {
+                context.push(format!("Approved plan to implement:\n{plan}"));
+            }
+        }
         Ok(context)
     }
 

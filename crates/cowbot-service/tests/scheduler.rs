@@ -446,3 +446,63 @@ async fn plan_mode_stores_the_output_as_a_task_plan() {
     assert!(!stored.plan_approved);
     assert!(matches!(stored.status, TaskStatus::Completed { .. }));
 }
+
+#[tokio::test]
+async fn approved_plan_is_injected_into_the_continue_run() {
+    let (store, workspace_id) = setup().await;
+    let planner = StandardRoles::planner();
+    let planner_id = planner.id.clone();
+    let continue_planner = planner.clone();
+    let task = Task::new("Design the change", "A plan").assign_to(planner_id);
+
+    let mut plan_run = AssignmentScheduler::new(
+        store.clone(),
+        EventBus::default_bus(),
+        workspace_id.clone(),
+        1,
+    );
+    plan_run.register_agent(
+        planner,
+        Arc::new(MockLlmProvider::echo()),
+        ToolRegistry::new(),
+        "mock-model",
+    );
+    let mut plan_options = options(1);
+    plan_options.approval_level = ApprovalLevel::PlanOnly;
+    plan_run
+        .enqueue(&task, requester(), AssignmentOrigin::User, &plan_options)
+        .await
+        .unwrap();
+    plan_run.run_until_idle().await.unwrap();
+
+    let planned = store.get_task(&task.id).await.unwrap().unwrap();
+    let plan = planned.plan.clone().expect("stored plan");
+    store.approve_task_plan(&task.id).await.unwrap();
+
+    let mut continue_run =
+        AssignmentScheduler::new(store.clone(), EventBus::default_bus(), workspace_id, 1);
+    continue_run.register_agent(
+        continue_planner,
+        Arc::new(MockLlmProvider::echo()),
+        ToolRegistry::new(),
+        "mock-model",
+    );
+    let mut continue_options = options(1);
+    continue_options.approval_level = ApprovalLevel::Ask;
+    continue_run
+        .enqueue(
+            &task,
+            requester(),
+            AssignmentOrigin::User,
+            &continue_options,
+        )
+        .await
+        .unwrap();
+    let completed = continue_run.run_until_idle().await.unwrap();
+    let output = completed.get(&task.id).expect("continue output");
+    assert!(output.contains("Approved plan to implement"));
+    assert!(output.contains(&plan));
+    let finished = store.get_task(&task.id).await.unwrap().unwrap();
+    assert!(finished.plan_approved);
+    assert_eq!(finished.plan.as_deref(), Some(plan.as_str()));
+}
