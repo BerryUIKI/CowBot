@@ -154,6 +154,7 @@ export function createTask(input: {
   assignee: string;
   channelId: string | null;
   approvalLevel: ApprovalLevel;
+  worktree: { projectId: string; baseBranch: string } | null;
 }): Promise<Task> {
   return invoke<Task>("create_task", {
     description: input.description,
@@ -161,6 +162,7 @@ export function createTask(input: {
     assignee: input.assignee,
     channelId: input.channelId,
     approvalLevel: input.approvalLevel,
+    worktree: input.worktree,
   });
 }
 

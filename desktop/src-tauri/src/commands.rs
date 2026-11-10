@@ -16,6 +16,7 @@ use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
 use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
+use cowbot_core::worktree::{TaskWorktree, WorktreeStatus};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::ChannelTurnOptions;
 use serde::{Deserialize, Serialize};
@@ -332,6 +333,14 @@ pub async fn instantiate_agents(
         .map_err(|error| error.to_string())
 }
 
+/// Project and base branch chosen for a worktree task.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSelection {
+    pub project_id: String,
+    pub base_branch: String,
+}
+
 #[tauri::command]
 pub async fn create_task(
     state: State<'_, AppState>,
@@ -340,18 +349,60 @@ pub async fn create_task(
     assignee: String,
     channel_id: Option<String>,
     approval_level: ApprovalLevel,
+    worktree: Option<WorktreeSelection>,
 ) -> Result<Task, String> {
+    // Resolve the project and branch before creating anything, so a bad
+    // selection leaves no orphaned task behind.
+    let requested_worktree = match &worktree {
+        Some(selection) => {
+            let config = load_config(&state)?;
+            let project = config
+                .project(&selection.project_id)
+                .cloned()
+                .ok_or_else(|| format!("project '{}' is not registered", selection.project_id))?;
+            let branches = config::project_branches(&project.path)
+                .map_err(|error| format!("project '{}' is not available: {error}", project.name))?;
+            if selection.base_branch.trim().is_empty() {
+                return Err("Choose a base branch for the worktree.".to_string());
+            }
+            if !branches
+                .branches
+                .iter()
+                .any(|branch| branch == &selection.base_branch)
+            {
+                return Err(format!(
+                    "base branch '{}' does not exist in '{}'. Available branches: {}",
+                    selection.base_branch,
+                    project.name,
+                    branches.branches.join(", ")
+                ));
+            }
+            Some((project, selection.base_branch.clone()))
+        }
+        None => None,
+    };
+
     let mut task = NewTask::new(description, expected_output, AgentId::new(assignee));
     if let Some(channel_id) = channel_id {
         task = task.in_channel(ChannelId::new(channel_id));
     }
     task = task.with_approval_level(approval_level);
 
-    state
+    let created = state
         .client
         .create_task(&task)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    if let Some((project, base_branch)) = requested_worktree {
+        state
+            .client
+            .request_worktree(&created.id, &project.id, &project.path, &base_branch)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(created)
 }
 
 #[tauri::command]
@@ -368,6 +419,38 @@ pub async fn run_task(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("task '{task_id}' was not found"))?;
 
+    // A worktree task is prepared before spawning so a git failure rejects
+    // the run and the task stays pending.
+    let worktree = match state
+        .client
+        .task_worktree(&task.id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(record) => match record.status {
+            WorktreeStatus::Requested | WorktreeStatus::Ready => Some(
+                state
+                    .client
+                    .prepare_worktree(&task.id)
+                    .await
+                    .map_err(|error| format!("The worktree could not be prepared: {error}"))?,
+            ),
+            WorktreeStatus::Removed => {
+                return Err(
+                    "This task's worktree was discarded. Create a new task to run in a worktree."
+                        .to_string(),
+                )
+            }
+            WorktreeStatus::Missing => {
+                return Err(
+                    "This task's worktree folder is missing. Discard the worktree and create a new task."
+                        .to_string(),
+                )
+            }
+        },
+        None => None,
+    };
+
     let running = state.running.clone();
     if !running.lock().insert(task_id.clone()) {
         return Err(format!("task '{task_id}' is already running"));
@@ -375,13 +458,18 @@ pub async fn run_task(
 
     let client = state.client.clone();
     let (llm, model) = state.runtime_model();
-    let tools = state.tools.clone();
+    let tools = match &worktree {
+        Some(record) => {
+            AppState::rooted_tools(Path::new(&record.worktree_path), state.client.clone())
+        }
+        None => state.tools.clone(),
+    };
     let run_id = task_id.clone();
     let use_model_permissions = state.uses_remote_model();
 
     tauri::async_runtime::spawn(async move {
         let outcome = async {
-            let mut crew = build_standard_crew(&task, &llm, &tools, &model);
+            let mut crew = build_standard_crew(&task, worktree.as_ref(), &llm, &tools, &model);
             client
                 .run_crew_with_options(
                     &mut crew,
@@ -422,12 +510,22 @@ pub async fn run_task(
 /// run has one owning task for background cards and worktrees.
 fn build_standard_crew(
     submitted: &Task,
+    worktree: Option<&TaskWorktree>,
     llm: &std::sync::Arc<dyn cowbot_llm::LlmProvider>,
     tools: &cowbot_tools::ToolRegistry,
     model: &str,
 ) -> Crew {
     let objective = submitted.description.as_str();
     let run_group = submitted.id.clone();
+    let checkout_note = worktree
+        .map(|worktree| {
+            format!(
+                "\n\nRun in the git worktree at {} on branch {} (base branch {}). \
+                 File and command tools are rooted there; do not modify the main checkout.",
+                worktree.worktree_path, worktree.branch, worktree.base_branch
+            )
+        })
+        .unwrap_or_default();
     let planner_profile = StandardRoles::planner();
     let planner_id = planner_profile.id.clone();
     let planner = AgentInstance::new(planner_profile, llm.clone(), tools.clone(), model);
@@ -446,7 +544,7 @@ fn build_standard_crew(
     crew.add_agent(reviewer);
 
     let plan_task = Task::new(
-        format!("Analyze objective and formulate architecture plan: {objective}"),
+        format!("Analyze objective and formulate architecture plan: {objective}{checkout_note}"),
         "A clear, step-by-step implementation and verification plan.",
     )
     .assign_to(planner_id)
@@ -454,7 +552,9 @@ fn build_standard_crew(
     let plan_id = plan_task.id.clone();
 
     let code_task = Task::new(
-        "Execute code implementation and verify functionality in the sandbox.",
+        format!(
+            "Execute code implementation and verify functionality in the sandbox.{checkout_note}"
+        ),
         "Working source code and sandbox execution results.",
     )
     .assign_to(coder_id)
@@ -462,7 +562,9 @@ fn build_standard_crew(
     .in_run_group(run_group.clone());
 
     let review_task = Task::new(
-        "Review implementation, tests, and diffs for correctness and edge cases.",
+        format!(
+            "Review implementation, tests, and diffs for correctness and edge cases.{checkout_note}"
+        ),
         "Comprehensive review findings and final approval status.",
     )
     .assign_to(reviewer_id)
