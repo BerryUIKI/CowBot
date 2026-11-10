@@ -286,7 +286,7 @@ compacting the context never deletes messages.
   latest message. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is
   a danger colour, and 100% blocks sending.
 - Percentages need a context window. Set **Context window** (and optionally
-  **Max output**) for the model in **Settings → Models**. Without it the ring
+  **Max output**) for the model in **Settings → Model**. Without it the ring
   shows absolute tokens only.
 - **Cache hit rate** for the last turn and the whole conversation comes from
   the usage the provider reports. Providers without prompt caching show no
