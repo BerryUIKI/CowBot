@@ -1,6 +1,6 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use cowbot_core::agent::{AgentId, AgentProfile};
-use cowbot_core::approval::Approval;
+use cowbot_core::approval::{Approval, BypassCritical, WorkspacePolicy};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::identity::{
@@ -476,4 +476,33 @@ async fn task_plan_roundtrip_and_approval() {
     let revised = store.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(revised.plan.as_deref(), Some("Revised plan"));
     assert!(!revised.plan_approved);
+}
+
+#[tokio::test]
+async fn workspace_policy_defaults_to_allow_and_roundtrips() {
+    let store = test_store().await;
+    let (_user, workspace) = seed_workspace(&store).await;
+
+    let default = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(default.bypass_critical, BypassCritical::Allow);
+
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace.id.clone(),
+            bypass_critical: BypassCritical::Ask,
+        })
+        .await
+        .unwrap();
+    let saved = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(saved.bypass_critical, BypassCritical::Ask);
+
+    store
+        .save_workspace_policy(&WorkspacePolicy {
+            workspace_id: workspace.id.clone(),
+            bypass_critical: BypassCritical::Block,
+        })
+        .await
+        .unwrap();
+    let updated = store.get_workspace_policy(&workspace.id).await.unwrap();
+    assert_eq!(updated.bypass_critical, BypassCritical::Block);
 }

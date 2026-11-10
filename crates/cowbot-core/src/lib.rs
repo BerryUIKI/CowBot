@@ -17,7 +17,9 @@ pub mod tool;
 pub mod usage;
 
 pub use agent::{AgentId, AgentProfile};
-pub use approval::{Approval, ApprovalId, ApprovalLevel, ApprovalStatus};
+pub use approval::{
+    Approval, ApprovalId, ApprovalLevel, ApprovalStatus, BypassCritical, WorkspacePolicy,
+};
 pub use assignment::{
     inherit_approval_level, Assignment, AssignmentBudgets, AssignmentEvent, AssignmentEventKind,
     AssignmentId, AssignmentMode, AssignmentOrigin, AssignmentOutcome, AssignmentRequester,
