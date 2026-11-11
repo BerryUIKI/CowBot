@@ -328,6 +328,10 @@ export default function ContextMeter({
                     ))}
                   </select>
                 </label>
+                <p className="context-hint">
+                  Participants are fixed at creation. Start a new conversation
+                  for a different team.
+                </p>
               </div>
             ) : null}
 
