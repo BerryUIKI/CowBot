@@ -125,6 +125,23 @@ impl Store {
         Ok(())
     }
 
+    /// Whether an agent belongs to the given workspace.
+    pub async fn agent_in_workspace(
+        &self,
+        id: &AgentId,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_profiles WHERE id = ? AND workspace_id = ?",
+        )
+        .bind(&id.0)
+        .bind(&workspace_id.0)
+        .fetch_one(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(count > 0)
+    }
+
     pub async fn get_agent(&self, id: &AgentId) -> CowResult<Option<AgentProfile>> {
         let row = sqlx::query_as::<_, AgentRow>(
             "SELECT id, name, role, goal, backstory, model, tools,
