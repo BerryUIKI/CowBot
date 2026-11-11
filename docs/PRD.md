@@ -211,6 +211,7 @@ CowBot follows a "single core, two forms" model:
 8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
 9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
 10. Group conversations with several agent participants, mention-scoped routing, opt-in automatic routing, and a default responder are implemented as M3 (ADR-0032). Single-agent conversations remain the default; group channels keep their mention-only behavior. See the [M3 plan](plans/M3-group-conversations-and-routing.md).
+11. Agent memory and shared notes are planned as M4: inspectable, workspace-scoped Markdown notes and memory entries with deterministic FTS5 recall, explicit capture, a `remember` tool, and opt-in reviewed extraction. Embeddings and cross-workspace memory remain out of scope. See the [M4 plan](plans/M4-agent-memory-and-shared-notes.md).
 
 ### 7.3 Open Questions
 
