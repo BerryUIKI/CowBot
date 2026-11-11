@@ -1,20 +1,35 @@
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { formatTokens } from "./format";
-import type { CacheUsageSummary, ConversationContext } from "./types";
+import type {
+  CacheUsageSummary,
+  ConversationContext,
+  ConversationParticipantView,
+} from "./types";
 
 interface ContextMeterProps {
   context: ConversationContext;
   busy: boolean;
-  onCompact: () => void;
-  onClear: () => void;
+  onCompact: (agentId?: string) => void;
+  onClear: (agentId?: string) => void;
   onAutoCompactChange: (enabled: boolean) => void;
   onThresholdChange: (threshold: number) => void;
+  onRouterChange: (enabled: boolean) => void;
+  onDefaultResponderChange: (agentId: string) => void;
   onNewConversation: () => void;
 }
 
 const RADIUS = 13;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+const stateRank: Record<ConversationParticipantView["state"], number> = {
+  unknown: 0,
+  neutral: 1,
+  warning: 2,
+  danger: 3,
+  full: 4,
+};
 
 function cacheRate(summary: CacheUsageSummary): number | null {
   if (summary.total_input_tokens <= 0) return null;
@@ -29,11 +44,31 @@ function cacheLabel(summary: CacheUsageSummary): string {
   )} of ${formatTokens(summary.total_input_tokens)} input`;
 }
 
+/** View values for a backend that predates per-participant contexts. */
+function fallbackParticipant(context: ConversationContext): ConversationParticipantView {
+  return {
+    agent_id: context.agent_id,
+    agent_name: "",
+    system_tokens: context.system_tokens,
+    tool_tokens: context.tool_tokens,
+    history_tokens: context.history_tokens,
+    latest_tokens: context.latest_tokens,
+    total_tokens: context.total_tokens,
+    active_entries: context.active_entries,
+    excluded_entries: context.excluded_entries,
+    percent_used: context.percent_used,
+    state: context.state,
+    cache_last_run: context.cache_last_turn,
+    cache_conversation: context.cache_conversation,
+  };
+}
+
 /**
  * Context ring and popover for a user-created conversation.
  *
- * Known windows show percent used with neutral/warning/danger colours at the
- * 70/90 thresholds. Unknown windows show absolute tokens only.
+ * The ring shows the highest occupancy among participants. The popover lists
+ * one tab per participant with that branch's token breakdown, cache figures,
+ * routing settings, and per-branch compaction actions.
  */
 export default function ContextMeter({
   context,
@@ -42,9 +77,12 @@ export default function ContextMeter({
   onClear,
   onAutoCompactChange,
   onThresholdChange,
+  onRouterChange,
+  onDefaultResponderChange,
   onNewConversation,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -63,10 +101,43 @@ export default function ContextMeter({
     };
   }, [open]);
 
-  const percent = context.percent_used;
+  const participants =
+    context.participants.length > 0
+      ? context.participants
+      : [fallbackParticipant(context)];
+  const group = participants.length > 1;
+  const index = Math.min(activeIndex, participants.length - 1);
+  const current = participants[index];
+  const worst = participants.reduce(
+    (selected, participant) =>
+      stateRank[participant.state] > stateRank[selected.state] ? participant : selected,
+    participants[0],
+  );
+
+  const percent = worst.percent_used;
   const fraction = percent === null ? 0 : Math.min(percent, 100) / 100;
-  const state = context.state;
-  const full = state === "full";
+  const state = worst.state;
+  const full = current.state === "full";
+  const tabId = (position: number) => `context-tab-${context.channel_id}-${position}`;
+  const panelId = `context-panel-${context.channel_id}`;
+
+  function focusTab(position: number) {
+    window.requestAnimationFrame(() => {
+      document.getElementById(tabId(position))?.focus();
+    });
+  }
+
+  function handleTabKey(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    position: number,
+  ) {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowRight" ? 1 : -1;
+    const next = (position + delta + participants.length) % participants.length;
+    setActiveIndex(next);
+    focusTab(next);
+  }
 
   return (
     <div className="context-meter-wrap" ref={rootRef}>
@@ -76,15 +147,19 @@ export default function ContextMeter({
         aria-label="Conversation context usage"
         aria-expanded={open}
         title={
-          percent === null
-            ? `${formatTokens(context.total_tokens)} tokens in context`
-            : `${Math.round(percent)}% of the usable context window`
+          group
+            ? percent === null
+              ? `${formatTokens(worst.total_tokens)} tokens in the fullest branch (${current.agent_name})`
+              : `${Math.round(percent)}% used in the fullest participant branch`
+            : percent === null
+              ? `${formatTokens(worst.total_tokens)} tokens in context`
+              : `${Math.round(percent)}% of the usable context window`
         }
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
         {percent === null ? (
           <span className="context-absolute">
-            <strong>{formatTokens(context.total_tokens)}</strong> tokens
+            <strong>{formatTokens(worst.total_tokens)}</strong> tokens
           </span>
         ) : (
           <>
@@ -105,7 +180,11 @@ export default function ContextMeter({
       </button>
 
       {open ? (
-        <div className="context-popover" role="dialog" aria-label="Context usage">
+        <div
+          className="context-popover"
+          role="dialog"
+          aria-label="Context usage"
+        >
           <div className="context-popover-head">
             <h3>Context</h3>
             <span className={`context-state context-${state}`}>
@@ -118,126 +197,216 @@ export default function ContextMeter({
             </span>
           </div>
 
-          <p className="context-ratio">
-            {context.usable_tokens !== null
-              ? `${formatTokens(context.total_tokens)} / ${formatTokens(
-                  context.usable_tokens,
-                )} usable tokens`
-              : `${formatTokens(context.total_tokens)} tokens · set the model context window in Settings → Models to see a percentage`}
-          </p>
-
-          {full ? (
-            <div className="context-full-warning" role="alert">
-              <strong>Context full.</strong> Sending is blocked until you compact,
-              clear, or start a new conversation.
-              <div className="context-actions">
+          {group ? (
+            <div className="context-tabs" role="tablist" aria-label="Participants">
+              {participants.map((participant, position) => (
                 <button
+                  key={participant.agent_id}
+                  id={tabId(position)}
                   type="button"
-                  className="primary-button"
-                  disabled={busy}
-                  onClick={onCompact}
+                  role="tab"
+                  aria-selected={position === index}
+                  aria-controls={panelId}
+                  tabIndex={position === index ? 0 : -1}
+                  className={`context-tab context-${participant.state}${
+                    position === index ? " is-active" : ""
+                  }`}
+                  onClick={() => setActiveIndex(position)}
+                  onKeyDown={(event) => handleTabKey(event, position)}
                 >
-                  Compact now
+                  {participant.agent_name || "Participant"}
                 </button>
-                <button type="button" className="ghost-button" onClick={onNewConversation}>
-                  New conversation
-                </button>
-              </div>
+              ))}
             </div>
           ) : null}
 
-          <dl className="context-breakdown">
-            <div>
-              <dt>System prompt</dt>
-              <dd>{formatTokens(context.system_tokens)}</dd>
-            </div>
-            <div>
-              <dt>Tools</dt>
-              <dd>{formatTokens(context.tool_tokens)}</dd>
-            </div>
-            <div>
-              <dt>History</dt>
-              <dd>{formatTokens(context.history_tokens)}</dd>
-            </div>
-            <div>
-              <dt>Latest message</dt>
-              <dd>{formatTokens(context.latest_tokens)}</dd>
-            </div>
-          </dl>
-
-          <div className="context-cache">
-            <h4>Cache</h4>
-            <p>
-              <span>Last turn</span>
-              {cacheLabel(context.cache_last_turn)}
+          <div
+            id={panelId}
+            role={group ? "tabpanel" : undefined}
+            aria-labelledby={group ? tabId(index) : undefined}
+          >
+            <p className="context-ratio">
+              {context.usable_tokens !== null
+                ? `${formatTokens(current.total_tokens)} / ${formatTokens(
+                    context.usable_tokens,
+                  )} usable tokens`
+                : `${formatTokens(current.total_tokens)} tokens · set the model context window in Settings → Models to see a percentage`}
             </p>
-            <p>
-              <span>Conversation</span>
-              {cacheLabel(context.cache_conversation)}
-            </p>
-          </div>
 
-          <div className="context-settings">
-            <label className="context-toggle">
-              <input
-                type="checkbox"
-                checked={context.auto_compact}
+            {full ? (
+              <div className="context-full-warning" role="alert">
+                <strong>Context full.</strong>{" "}
+                {group
+                  ? `${current.agent_name || "This participant"} is skipped until this branch is compacted or cleared.`
+                  : "Sending is blocked until you compact, clear, or start a new conversation."}
+                <div className="context-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={busy}
+                    onClick={() => onCompact(group ? current.agent_id : undefined)}
+                  >
+                    Compact now
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={onNewConversation}
+                  >
+                    New conversation
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <dl className="context-breakdown">
+              <div>
+                <dt>System prompt</dt>
+                <dd>{formatTokens(current.system_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Tools</dt>
+                <dd>{formatTokens(current.tool_tokens)}</dd>
+              </div>
+              <div>
+                <dt>History</dt>
+                <dd>{formatTokens(current.history_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Latest message</dt>
+                <dd>{formatTokens(current.latest_tokens)}</dd>
+              </div>
+            </dl>
+
+            <div className="context-cache">
+              <h4>Cache</h4>
+              <p>
+                <span>{group ? "Latest run" : "Last turn"}</span>
+                {cacheLabel(current.cache_last_run)}
+              </p>
+              <p>
+                <span>{group ? "Conversation total" : "Conversation"}</span>
+                {cacheLabel(current.cache_conversation)}
+              </p>
+            </div>
+
+            {group ? (
+              <div className="context-routing">
+                <h4>Routing</h4>
+                <label className="context-toggle">
+                  <input
+                    type="checkbox"
+                    checked={context.router_enabled}
+                    disabled={busy}
+                    onChange={(event) => onRouterChange(event.target.checked)}
+                  />
+                  <span>Route unaddressed messages with the model</span>
+                </label>
+                <label className="context-default-responder">
+                  <span>Default responder</span>
+                  <select
+                    value={context.default_responder ?? ""}
+                    disabled={busy}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        onDefaultResponderChange(event.target.value);
+                      }
+                    }}
+                  >
+                    {context.default_responder === null ? (
+                      <option value="" disabled>
+                        None (unaddressed messages stay silent)
+                      </option>
+                    ) : null}
+                    {participants.map((participant) => (
+                      <option
+                        key={participant.agent_id}
+                        value={participant.agent_id}
+                      >
+                        {participant.agent_name || participant.agent_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : null}
+
+            <div className="context-settings">
+              <label className="context-toggle">
+                <input
+                  type="checkbox"
+                  checked={context.auto_compact}
+                  disabled={busy}
+                  onChange={(event) => onAutoCompactChange(event.target.checked)}
+                />
+                <span>Compact automatically</span>
+              </label>
+              <label className="context-threshold">
+                <span>at</span>
+                <select
+                  value={context.compact_threshold}
+                  disabled={busy || !context.auto_compact}
+                  onChange={(event) => onThresholdChange(Number(event.target.value))}
+                  aria-label="Automatic compaction threshold percent"
+                >
+                  {[60, 70, 80, 90].map((threshold) => (
+                    <option key={threshold} value={threshold}>
+                      {threshold}%
+                    </option>
+                  ))}
+                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
+                    <option value={context.compact_threshold}>
+                      {context.compact_threshold}%
+                    </option>
+                  )}
+                </select>
+              </label>
+            </div>
+
+            <p className="context-meta">
+              {context.model}
+              {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
+              {current.active_entries} active
+              {current.excluded_entries > 0
+                ? `, ${current.excluded_entries} excluded`
+                : ""}
+            </p>
+
+            <div className="context-actions">
+              <button
+                type="button"
+                className="primary-button"
                 disabled={busy}
-                onChange={(event) => onAutoCompactChange(event.target.checked)}
-              />
-              <span>Compact automatically</span>
-            </label>
-            <label className="context-threshold">
-              <span>at</span>
-              <select
-                value={context.compact_threshold}
-                disabled={busy || !context.auto_compact}
-                onChange={(event) => onThresholdChange(Number(event.target.value))}
-                aria-label="Automatic compaction threshold percent"
+                onClick={() => onCompact(group ? current.agent_id : undefined)}
               >
-                {[60, 70, 80, 90].map((threshold) => (
-                  <option key={threshold} value={threshold}>
-                    {threshold}%
-                  </option>
-                ))}
-                {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
-                  <option value={context.compact_threshold}>
-                    {context.compact_threshold}%
-                  </option>
-                )}
-              </select>
-            </label>
-          </div>
-
-          <p className="context-meta">
-            {context.model}
-            {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
-            {context.active_entries} active
-            {context.excluded_entries > 0
-              ? `, ${context.excluded_entries} excluded`
-              : ""}
-          </p>
-
-          <div className="context-actions">
-            <button
-              type="button"
-              className="primary-button"
-              disabled={busy}
-              onClick={onCompact}
-            >
-              {busy ? "Compacting…" : "Compact now"}
-            </button>
-            <button
-              type="button"
-              className="ghost-button"
-              disabled={busy}
-              onClick={onClear}
-            >
-              Clear context
-            </button>
-            <button type="button" className="ghost-button" onClick={onNewConversation}>
-              New conversation
-            </button>
+                {busy ? "Compacting…" : "Compact now"}
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={busy}
+                onClick={() => onClear(group ? current.agent_id : undefined)}
+              >
+                {group ? "Clear this branch" : "Clear context"}
+              </button>
+              {group ? (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={busy}
+                  onClick={() => onClear()}
+                >
+                  Clear all
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={onNewConversation}
+              >
+                New conversation
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
