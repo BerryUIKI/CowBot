@@ -444,7 +444,7 @@ impl ConversationService {
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
         .with_session_decisions(self.session_decisions.clone());
-        scheduler.register_agent(agent.clone(), llm, tools, settings.model.clone());
+        scheduler.register_agent(agent.clone(), llm.clone(), tools, settings.model.clone());
 
         let mut run_options = CrewRunOptions {
             approval_level: options.approval_level,
@@ -469,8 +469,24 @@ impl ConversationService {
             .await?;
 
         let outcome = scheduler.run_until_idle().await;
-        self.channels.post_task_outcome(channel, &task_id).await?;
+        let reply = self.channels.post_task_outcome(channel, &task_id).await?;
         outcome?;
+
+        // A settled turn may contribute pending memory candidates. Extraction
+        // is opt-in and best-effort, so it never changes the reply outcome.
+        if let Some(reply) = reply {
+            self.memory
+                .extract_after_turn(
+                    channel,
+                    llm,
+                    &settings.model,
+                    message.content.trim(),
+                    &reply,
+                    Some(&agent.id),
+                    &message.id,
+                )
+                .await;
+        }
 
         Ok(ChannelTurnReport {
             agents: vec![agent.id],
@@ -826,6 +842,35 @@ impl ConversationService {
         turn.mirrored_at = Some(chrono::Utc::now());
         self.store.update_conversation_turn(&turn).await?;
 
+        // One aggregate extraction per settled group turn. The entry is
+        // conversation-shared because several participants may have answered.
+        if !settlement.replies.is_empty() {
+            let replies = settlement
+                .replies
+                .iter()
+                .map(|(agent_id, content)| {
+                    let name = participants
+                        .iter()
+                        .find(|participant| &participant.id == agent_id)
+                        .map(|participant| participant.name.clone())
+                        .unwrap_or_else(|| format!("Agent {}", agent_id.0));
+                    format!("{name}: {content}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            self.memory
+                .extract_after_turn(
+                    channel,
+                    llm,
+                    &settings.model,
+                    message.content.trim(),
+                    &replies,
+                    None,
+                    &turn.id.0,
+                )
+                .await;
+        }
+
         Ok(ChannelTurnReport {
             agents: responders
                 .iter()
@@ -853,11 +898,14 @@ impl ConversationService {
                 .settle_group_task(&channel, &task_id, &participants)
                 .await
             {
-                Ok(Some((agent_id, replied))) => {
-                    if replied {
-                        settlement.replied.push(agent_id);
+                Ok(Some(settled)) => {
+                    if settled.replied {
+                        settlement.replied.push(settled.agent_id.clone());
+                        if let Some(content) = settled.content {
+                            settlement.replies.push((settled.agent_id, content));
+                        }
                     } else {
-                        settlement.failed.push(agent_id);
+                        settlement.failed.push(settled.agent_id);
                     }
                 }
                 Ok(None) => {}
@@ -878,7 +926,7 @@ impl ConversationService {
         channel: &Channel,
         task_id: &TaskId,
         participants: &[AgentProfile],
-    ) -> CowResult<Option<(AgentId, bool)>> {
+    ) -> CowResult<Option<SettledGroupReply>> {
         let Some(task) = self.store.get_task(task_id).await? else {
             return Ok(None);
         };
@@ -927,13 +975,21 @@ impl ConversationService {
                     );
                     self.store.append_context_entry(&peer).await?;
                 }
-                Ok(Some((assignee, true)))
+                Ok(Some(SettledGroupReply {
+                    agent_id: assignee,
+                    replied: true,
+                    content: Some(content.to_string()),
+                }))
             }
             cowbot_core::task::TaskStatus::Failed { error } => {
                 self.channels
                     .post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
                     .await?;
-                Ok(Some((assignee, false)))
+                Ok(Some(SettledGroupReply {
+                    agent_id: assignee,
+                    replied: false,
+                    content: None,
+                }))
             }
             _ => Ok(None),
         }
@@ -1729,6 +1785,15 @@ pub(crate) fn assemble_group_messages(
 struct GroupSettlement {
     replied: Vec<AgentId>,
     failed: Vec<AgentId>,
+    /// Reply text posted by each agent, in settle order.
+    replies: Vec<(AgentId, String)>,
+}
+
+/// One settled group task and what was posted for it.
+struct SettledGroupReply {
+    agent_id: AgentId,
+    replied: bool,
+    content: Option<String>,
 }
 
 /// System prompt for a conversation turn.

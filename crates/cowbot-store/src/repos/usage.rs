@@ -134,6 +134,24 @@ impl Store {
         rows.into_iter().map(LlmCallRow::into_domain).collect()
     }
 
+    /// Every recorded call attributed to a conversation channel.
+    pub async fn list_llm_calls_for_channel(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<Vec<LlmCallRecord>> {
+        let rows = sqlx::query_as::<_, LlmCallRow>(
+            "SELECT id, run_id, task_id, channel_id, agent_id, call_kind, model,
+                    uncached_input_tokens, cached_input_tokens, cache_write_input_tokens,
+                    output_tokens, reasoning_tokens, raw_usage, created_at
+             FROM llm_calls WHERE channel_id = ? ORDER BY created_at, id",
+        )
+        .bind(&channel_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(LlmCallRow::into_domain).collect()
+    }
+
     pub async fn sum_llm_usage_for_task(&self, task_id: &TaskId) -> CowResult<UsageTotals> {
         let row = sqlx::query_as::<_, UsageTotalsRow>(
             "SELECT COUNT(*) AS calls,

@@ -28,6 +28,7 @@ use tokio::task::JoinSet;
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
 use crate::permissions::ModelPermissionEvaluator;
+use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
@@ -610,13 +611,29 @@ impl AssignmentScheduler {
                 .await?;
             return Err(CowError::Task(reason));
         };
-        let Some(executor) = self.executions.get(&assignment.assignee).cloned() else {
+        let Some(mut executor) = self.executions.get(&assignment.assignee).cloned() else {
             let reason = format!("no executor registered for agent '{}'", assignment.assignee);
             self.assignments
                 .fail(&assignment.id, reason.clone())
                 .await?;
             return Err(CowError::Agent(reason));
         };
+        // `remember` is scoped to this assignment: the entry belongs to the
+        // calling agent and to the task's channel. Agents that do not list the
+        // tool never see it because definitions follow the profile's tools.
+        if executor
+            .profile
+            .tools
+            .iter()
+            .any(|tool| tool == REMEMBER_TOOL_NAME)
+        {
+            executor.tools.register(Arc::new(RememberTool::new(
+                self.assignments.store().clone(),
+                self.workspace_id.clone(),
+                assignment.assignee.clone(),
+                task.channel_id.clone(),
+            )));
+        }
         let context = self.context_for(&assignment, &task).await?;
         let prepared = self
             .prepared
