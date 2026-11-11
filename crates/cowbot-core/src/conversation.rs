@@ -4,7 +4,17 @@ use uuid::Uuid;
 
 use crate::agent::AgentId;
 use crate::channel::ChannelId;
+use crate::task::TaskId;
 use crate::usage::estimate_tokens;
+
+/// Fewest participants that make a conversation a group.
+pub const MIN_GROUP_PARTICIPANTS: usize = 2;
+
+/// Most participants a group conversation may have.
+pub const MAX_GROUP_PARTICIPANTS: usize = 8;
+
+/// Most participants a router may select for one turn.
+pub const MAX_ROUTED_AGENTS: usize = 3;
 
 /// What a channel in the workspace represents.
 ///
@@ -51,6 +61,9 @@ impl std::str::FromStr for ChannelKind {
 pub struct ChannelParticipant {
     pub channel_id: ChannelId,
     pub agent_id: AgentId,
+    /// Position in the group's ordered participant roster.
+    #[serde(default)]
+    pub position: u32,
     pub joined_at: DateTime<Utc>,
 }
 
@@ -59,8 +72,15 @@ impl ChannelParticipant {
         Self {
             channel_id,
             agent_id,
+            position: 0,
             joined_at: Utc::now(),
         }
+    }
+
+    /// Set the position in the group's ordered participant roster.
+    pub fn with_position(mut self, position: u32) -> Self {
+        self.position = position;
+        self
     }
 }
 
@@ -94,6 +114,21 @@ impl std::str::FromStr for ConversationMode {
     }
 }
 
+impl ConversationMode {
+    /// The mode implied by a participant count.
+    ///
+    /// One participant is a single conversation; two or more are a group. The
+    /// service validates bounds separately because zero is invalid for a
+    /// conversation.
+    pub fn for_participant_count(count: usize) -> Self {
+        if count >= MIN_GROUP_PARTICIPANTS {
+            Self::Group
+        } else {
+            Self::Single
+        }
+    }
+}
+
 /// Default automatic compaction threshold, as a percentage of the usable window.
 pub const DEFAULT_COMPACT_THRESHOLD: u32 = 80;
 
@@ -110,7 +145,10 @@ pub struct ConversationSettings {
     pub provider_id: Option<String>,
     /// Model every turn of this conversation uses.
     pub model: String,
-    /// Reserved for group conversations (M3); always false for single.
+    /// Participant that answers an unaddressed message, when one is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_responder: Option<AgentId>,
+    /// Whether an unaddressed group message may be routed by the model.
     pub router_enabled: bool,
     /// Whether the runtime may compact the context automatically.
     pub auto_compact: bool,
@@ -132,12 +170,29 @@ impl ConversationSettings {
             mode: ConversationMode::Single,
             provider_id,
             model: model.into(),
+            default_responder: None,
             router_enabled: false,
             auto_compact: false,
             compact_threshold: DEFAULT_COMPACT_THRESHOLD,
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Create settings for a group conversation.
+    ///
+    /// The default responder must already be one of the group's participants;
+    /// the service validates the roster before persisting the settings.
+    pub fn group(
+        channel_id: ChannelId,
+        provider_id: Option<String>,
+        model: impl Into<String>,
+        default_responder: Option<AgentId>,
+    ) -> Self {
+        let mut settings = Self::new(channel_id, provider_id, model);
+        settings.mode = ConversationMode::Group;
+        settings.default_responder = default_responder;
+        settings
     }
 }
 
@@ -146,6 +201,11 @@ impl ConversationSettings {
 pub struct ConversationSettingsUpdate {
     pub auto_compact: Option<bool>,
     pub compact_threshold: Option<u32>,
+    /// Turn automatic routing on or off; single conversations ignore it.
+    pub router_enabled: Option<bool>,
+    /// Replace the participant that answers unaddressed messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_responder: Option<AgentId>,
 }
 
 /// Role of one context entry when it is assembled into a model request.
@@ -229,6 +289,13 @@ pub struct ContextEntry {
     pub id: String,
     pub channel_id: ChannelId,
     pub agent_id: AgentId,
+    /// Speaker when this entry mirrors another participant's reply.
+    ///
+    /// Mirrored entries use the user role so they fit a chat transcript, but
+    /// they are not the user's own words. Keeping the speaker separate lets
+    /// projection and summarization treat them as history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_agent_id: Option<AgentId>,
     /// Monotonic position inside the `(channel, agent)` branch.
     pub seq: i64,
     pub role: ContextRole,
@@ -258,6 +325,7 @@ impl ContextEntry {
             id: Uuid::new_v4().to_string(),
             channel_id,
             agent_id,
+            author_agent_id: None,
             seq: 0,
             role,
             kind: ContextEntryKind::Message,
@@ -273,6 +341,28 @@ impl ContextEntry {
     pub fn summary(channel_id: ChannelId, agent_id: AgentId, content: impl Into<String>) -> Self {
         let mut entry = Self::new(channel_id, agent_id, ContextRole::System, content);
         entry.kind = ContextEntryKind::Summary;
+        entry
+    }
+
+    /// Mirror another participant's reply into `agent_id`'s branch.
+    ///
+    /// The entry belongs to the reader's branch, uses the user role, and
+    /// records the speaker separately from the user. The content carries the
+    /// speaker's display name so the model can attribute it.
+    pub fn peer(
+        channel_id: ChannelId,
+        agent_id: AgentId,
+        author: AgentId,
+        author_name: &str,
+        content: impl Into<String>,
+    ) -> Self {
+        let mut entry = Self::new(
+            channel_id,
+            agent_id,
+            ContextRole::User,
+            format!("[{author_name}] {}", content.into().trim()),
+        );
+        entry.author_agent_id = Some(author);
         entry
     }
 
@@ -393,7 +483,7 @@ pub fn project_context(
         .collect::<Vec<_>>();
     let latest_index = active
         .iter()
-        .rposition(|entry| entry.role == ContextRole::User);
+        .rposition(|entry| entry.role == ContextRole::User && entry.author_agent_id.is_none());
     let latest_tokens = latest_index.map(|index| active[index].tokens).unwrap_or(0);
     let history_tokens = active
         .iter()
@@ -413,16 +503,32 @@ pub fn project_context(
     }
 }
 
+/// One participant's context meter inside a group conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationParticipantContext {
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub projection: ContextProjection,
+    /// Cache summary of the agent's latest run in this conversation.
+    pub cache_last_run: CacheUsageSummary,
+    /// Cache summary of every call in this agent's branch.
+    pub cache_conversation: CacheUsageSummary,
+}
+
 /// Everything the desktop needs to render a conversation's context meter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationContext {
     pub channel_id: ChannelId,
+    /// First participant; kept for single-conversation clients.
     pub agent_id: AgentId,
     pub model: String,
     pub provider_id: Option<String>,
     pub projection: ContextProjection,
     pub cache_last_turn: CacheUsageSummary,
     pub cache_conversation: CacheUsageSummary,
+    /// One entry per participant, in participant order.
+    #[serde(default)]
+    pub participants: Vec<ConversationParticipantContext>,
 }
 
 /// Result of a manual or automatic compaction.
@@ -433,6 +539,112 @@ pub struct CompactionOutcome {
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub summary: Option<String>,
+}
+
+/// Why a group message selected the participants it did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteSource {
+    /// The user mentioned the selected participants.
+    Mention,
+    /// The router selected the participants.
+    Router,
+    /// No participant was mentioned; the default responder answers.
+    Default,
+    /// No participant was mentioned and no default responder is configured.
+    Silent,
+    /// The message mentioned only names outside the participant roster.
+    Unmatched,
+}
+
+impl RouteSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mention => "mention",
+            Self::Router => "router",
+            Self::Default => "default",
+            Self::Silent => "silent",
+            Self::Unmatched => "unmatched",
+        }
+    }
+}
+
+impl std::str::FromStr for RouteSource {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mention" => Ok(Self::Mention),
+            "router" => Ok(Self::Router),
+            "default" => Ok(Self::Default),
+            "silent" => Ok(Self::Silent),
+            "unmatched" => Ok(Self::Unmatched),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Unique identifier for one routed group message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TurnId(pub String);
+
+impl TurnId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn random() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+}
+
+impl std::fmt::Display for TurnId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Persisted routing decision for one group user message.
+///
+/// The row is the group turn record: it links the message, the selection
+/// source, the selected participants, and the tasks created for them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    pub id: TurnId,
+    pub channel_id: ChannelId,
+    pub message_id: String,
+    pub source: RouteSource,
+    #[serde(default)]
+    pub selected_agents: Vec<AgentId>,
+    #[serde(default)]
+    pub unknown_mentions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router_call_id: Option<String>,
+    #[serde(default)]
+    pub task_ids: Vec<TaskId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl ConversationTurn {
+    pub fn new(channel_id: ChannelId, message_id: impl Into<String>, source: RouteSource) -> Self {
+        Self {
+            id: TurnId::random(),
+            channel_id,
+            message_id: message_id.into(),
+            source,
+            selected_agents: Vec::new(),
+            unknown_mentions: Vec::new(),
+            reason: None,
+            router_call_id: None,
+            task_ids: Vec::new(),
+            mirrored_at: None,
+            created_at: Utc::now(),
+        }
+    }
 }
 
 /// The context-window input a model can actually use for a request.
@@ -680,5 +892,166 @@ mod tests {
         let projection = project_context(0, 0, &entries);
         assert_eq!(projection.latest_tokens, 0);
         assert_eq!(projection.history_tokens, 12);
+    }
+
+    #[test]
+    fn participant_positions_round_trip_and_default_for_old_payloads() {
+        let participant =
+            ChannelParticipant::new(ChannelId::new("c"), AgentId::new("a")).with_position(3);
+        assert_eq!(participant.position, 3);
+
+        let json = serde_json::to_string(&participant).unwrap();
+        assert!(json.contains("\"position\":3"));
+        let restored: ChannelParticipant = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.position, 3);
+
+        let old: ChannelParticipant = serde_json::from_str(
+            r#"{"channel_id":"c","agent_id":"a","joined_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.position, 0);
+    }
+
+    #[test]
+    fn conversation_mode_follows_participant_count() {
+        assert_eq!(
+            ConversationMode::for_participant_count(1),
+            ConversationMode::Single
+        );
+        assert_eq!(
+            ConversationMode::for_participant_count(MIN_GROUP_PARTICIPANTS),
+            ConversationMode::Group
+        );
+        assert_eq!(
+            ConversationMode::for_participant_count(MAX_GROUP_PARTICIPANTS),
+            ConversationMode::Group
+        );
+    }
+
+    #[test]
+    fn group_settings_record_the_mode_and_default_responder() {
+        let settings = ConversationSettings::group(
+            ChannelId::new("c"),
+            Some("provider-1".into()),
+            "model-1",
+            Some(AgentId::new("main")),
+        );
+
+        assert_eq!(settings.mode, ConversationMode::Group);
+        assert_eq!(
+            settings
+                .default_responder
+                .as_ref()
+                .map(|agent| agent.0.as_str()),
+            Some("main")
+        );
+        assert!(!settings.router_enabled);
+        assert!(!settings.auto_compact);
+    }
+
+    #[test]
+    fn settings_update_accepts_router_and_default_responder() {
+        let update = ConversationSettingsUpdate {
+            router_enabled: Some(true),
+            default_responder: Some(AgentId::new("main")),
+            ..ConversationSettingsUpdate::default()
+        };
+
+        assert_eq!(update.router_enabled, Some(true));
+        assert_eq!(
+            update
+                .default_responder
+                .as_ref()
+                .map(|agent| agent.0.as_str()),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn peer_entries_are_history_not_the_latest_user_message() {
+        let user = entry(ContextRole::User, 10);
+        let mut peer = entry(ContextRole::User, 30);
+        peer.author_agent_id = Some(AgentId::new("teammate"));
+
+        let projection = project_context(0, 0, &[user, peer]);
+        assert_eq!(projection.latest_tokens, 10);
+        assert_eq!(projection.history_tokens, 30);
+    }
+
+    #[test]
+    fn peer_entries_carry_an_attributed_speaker() {
+        let peer = ContextEntry::peer(
+            ChannelId::new("c"),
+            AgentId::new("reader"),
+            AgentId::new("author"),
+            "Planner",
+            "The plan is ready.",
+        );
+
+        assert_eq!(peer.role, ContextRole::User);
+        assert_eq!(peer.author_agent_id, Some(AgentId::new("author")));
+        assert_eq!(peer.content, "[Planner] The plan is ready.");
+        assert!(peer.tokens > 0);
+    }
+
+    #[test]
+    fn context_entries_default_their_author_for_old_payloads() {
+        let json = r#"{"id":"e","channel_id":"c","agent_id":"a","seq":1,
+            "role":"user","kind":"message","content":"hi","excluded":false,
+            "tokens":1,"created_at":"2026-01-01T00:00:00Z"}"#;
+        let entry: ContextEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.author_agent_id, None);
+    }
+
+    #[test]
+    fn conversation_turns_round_trip_and_sources_parse() {
+        let turn = ConversationTurn::new(ChannelId::new("c"), "m1", RouteSource::Router);
+        let json = serde_json::to_string(&turn).unwrap();
+        assert!(json.contains("\"source\":\"router\""));
+        let restored: ConversationTurn = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, turn.id);
+        assert_eq!(restored.message_id, "m1");
+        assert_eq!(restored.source, RouteSource::Router);
+
+        for source in [
+            RouteSource::Mention,
+            RouteSource::Router,
+            RouteSource::Default,
+            RouteSource::Silent,
+            RouteSource::Unmatched,
+        ] {
+            assert_eq!(source.as_str().parse::<RouteSource>(), Ok(source));
+        }
+        assert!("unknown".parse::<RouteSource>().is_err());
+    }
+
+    #[test]
+    fn participant_contexts_default_to_empty_for_old_payloads() {
+        let json = serde_json::json!({
+            "channel_id": "c",
+            "agent_id": "a",
+            "model": "m",
+            "provider_id": null,
+            "projection": {
+                "system_tokens": 0,
+                "tool_tokens": 0,
+                "history_tokens": 0,
+                "latest_tokens": 0,
+                "active_entries": 0,
+                "excluded_entries": 0
+            },
+            "cache_last_turn": {
+                "calls": 0,
+                "cached_input_tokens": 0,
+                "total_input_tokens": 0
+            },
+            "cache_conversation": {
+                "calls": 0,
+                "cached_input_tokens": 0,
+                "total_input_tokens": 0
+            }
+        });
+        let context: ConversationContext = serde_json::from_value(json).unwrap();
+        assert!(context.participants.is_empty());
     }
 }

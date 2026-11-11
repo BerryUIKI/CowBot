@@ -2,6 +2,7 @@ use crate::agent::{AgentId, AgentProfile};
 use crate::approval::Approval;
 use crate::assignment::{AssignmentEventKind, AssignmentId, AssignmentStatus};
 use crate::channel::{Channel, ChannelId, ChannelMessage};
+use crate::conversation::ConversationTurn;
 use crate::permission::PermissionRuleMatch;
 use crate::risk::RiskLevel;
 use crate::task::{Task, TaskId};
@@ -23,6 +24,8 @@ pub enum EventPayload {
     ChannelUpdated(Channel),
     /// A channel was deleted
     ChannelDeleted { channel_id: ChannelId },
+    /// A group conversation message was routed to its responders
+    ConversationRouted(ConversationTurn),
     /// An agent profile was updated
     AgentUpdated(AgentProfile),
     /// A new task has been created

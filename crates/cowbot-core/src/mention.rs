@@ -5,8 +5,18 @@
 
 use crate::agent::AgentProfile;
 
-/// Names that address every agent in the workspace.
-const BROADCAST_NAMES: &[&str] = &["team", "all", "everyone", "here"];
+/// Names that address every agent in the resolved roster.
+///
+/// A group channel resolves them against the workspace agents; a user-created
+/// group conversation resolves them against its participants.
+pub const BROADCAST_MENTIONS: &[&str] = &["team", "all", "everyone", "here"];
+
+/// Whether `name` addresses the whole resolved roster.
+pub fn is_broadcast_mention(name: &str) -> bool {
+    BROADCAST_MENTIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+}
 
 /// Agents addressed by a message plus the names that matched nothing.
 #[derive(Debug, Clone, Default)]
@@ -88,10 +98,7 @@ pub fn resolve_mentions(content: &str, agents: &[AgentProfile]) -> MentionResolu
 
     let mut seen: Vec<&str> = Vec::new();
     for mention in mentions {
-        if BROADCAST_NAMES
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&mention))
-        {
+        if is_broadcast_mention(&mention) {
             for agent in agents {
                 if seen
                     .iter()
@@ -177,6 +184,26 @@ mod tests {
             .map(|agent| agent.name.as_str())
             .collect();
         assert_eq!(names, vec!["Planner", "Writer"]);
+    }
+
+    #[test]
+    fn broadcast_mentions_can_be_scoped_to_a_participant_roster() {
+        let participants = vec![agent("Planner", "Architect"), agent("Coder", "Engineer")];
+
+        let resolution = resolve_mentions("@team, where are we?", &participants);
+        let names: Vec<&str> = resolution
+            .agents
+            .iter()
+            .map(|agent| agent.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Planner", "Coder"]);
+    }
+
+    #[test]
+    fn broadcast_names_are_recognized_case_insensitively() {
+        assert!(is_broadcast_mention("Team"));
+        assert!(is_broadcast_mention("EVERYONE"));
+        assert!(!is_broadcast_mention("Planner"));
     }
 
     #[test]

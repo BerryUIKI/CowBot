@@ -1156,6 +1156,8 @@ mod tests {
                 &cowbot_core::conversation::ConversationSettingsUpdate {
                     auto_compact: Some(true),
                     compact_threshold: Some(70),
+                    router_enabled: None,
+                    default_responder: None,
                 },
             )
             .await
