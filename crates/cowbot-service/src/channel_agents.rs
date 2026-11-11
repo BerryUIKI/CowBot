@@ -302,11 +302,31 @@ impl ChannelAgentService {
         // every root and the per-task status decides what gets posted.
         let outcome = scheduler.run_until_idle().await;
 
+        let mut posted = Vec::new();
         for task_id in &tasks {
-            self.post_outcome(&channel, task_id).await?;
+            if let Some(reply) = self.post_outcome(&channel, task_id).await? {
+                posted.push(reply);
+            }
         }
 
         outcome?;
+
+        // Direct conversations extract one aggregate candidate set per settled
+        // turn; plain channel mention turns keep their current behavior.
+        if direct && !posted.is_empty() {
+            self.memory
+                .extract_after_turn(
+                    &channel,
+                    llm,
+                    model,
+                    message.content.trim(),
+                    &posted.join("\n\n"),
+                    channel.agent_id.as_ref(),
+                    &message.id,
+                )
+                .await;
+        }
+
         Ok(ChannelTurnReport {
             agents: addressees.iter().map(|agent| agent.id.clone()).collect(),
             unknown_mentions: Vec::new(),
@@ -412,12 +432,12 @@ impl ChannelAgentService {
         .assign_to(agent.id.clone())
     }
 
-    async fn post_outcome(&self, channel: &Channel, task_id: &TaskId) -> CowResult<()> {
+    async fn post_outcome(&self, channel: &Channel, task_id: &TaskId) -> CowResult<Option<String>> {
         let Some(task) = self.store.get_task(task_id).await? else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(assignee) = task.assigned_agent.clone() else {
-            return Ok(());
+            return Ok(None);
         };
         let name = self
             .store
@@ -446,19 +466,21 @@ impl ChannelAgentService {
                         self.post_notice(channel, &format!("{name} finished without a reply."))
                             .await?;
                     }
+                    Ok(None)
                 } else {
                     self.channels
                         .post_message(&channel.id, Sender::Agent(assignee), content.to_string())
                         .await?;
+                    Ok(Some(content.to_string()))
                 }
             }
             TaskStatus::Failed { error } => {
                 self.post_notice(channel, &format!("{name} could not answer: {error}"))
                     .await?;
+                Ok(None)
             }
-            _ => {}
+            _ => Ok(None),
         }
-        Ok(())
     }
 
     async fn render_history(

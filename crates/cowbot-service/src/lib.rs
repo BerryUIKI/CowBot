@@ -14,6 +14,7 @@ mod crew_runner;
 mod memory;
 mod permissions;
 mod permissions_rules;
+mod remember;
 mod scheduler;
 mod session_decisions;
 mod task_service;
@@ -33,14 +34,15 @@ pub use channels::ChannelService;
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
 pub use memory::{
-    MemoryFilter, MemorySave, MemoryService, MemorySettingsUpdate, MemoryUpdate, NewMemory,
-    NoteSave, RecalledMemory,
+    parse_extraction_response, ExtractionCandidate, MemoryFilter, MemorySave, MemoryService,
+    MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave, RecalledMemory,
 };
 pub use permissions::{
     ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
     PermissionRequest,
 };
 pub use permissions_rules::PermissionService;
+pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;

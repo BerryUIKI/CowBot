@@ -102,6 +102,11 @@ fn tool_classes() -> Vec<(&'static str, ToolCall, RiskLevel)> {
             RiskLevel::High,
         ),
         (
+            "memory remember",
+            call("remember", json!({ "content": "x", "kind": "fact" })),
+            RiskLevel::Medium,
+        ),
+        (
             "unknown tool",
             call("mystery_tool", json!({ "input": "x" })),
             RiskLevel::High,

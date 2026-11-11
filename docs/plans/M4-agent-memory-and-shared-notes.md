@@ -1,6 +1,6 @@
 # M4 — Agent memory and shared notes
 
-- Status: In progress (M4.1–M4.3 complete; M4.4 next)
+- Status: In progress (M4.1–M4.4 complete; M4.5 next)
 - Date: 2026-11-11
 - Related: [ADR-0029](../ADR/0029-token-usage-accounting.md),
   [ADR-0030](../ADR/0030-conversation-sessions-and-context.md),
@@ -284,7 +284,8 @@ When `extraction_enabled` is on and a conversation turn settles:
 - validation: non-empty content, at most 400 characters each, kind in the
   allowed set, secrets redacted, duplicates of existing active entries in the
   same scope skipped;
-- storage: `status = pending`, `source = extraction`, `source_ref = turn id`,
+- storage: `status = pending`, `source = extraction`, `source_ref = turn id` (a
+  group turn's id, or the user message id for single and direct turns),
   `channel_id = conversation`, and `agent_id = the single responder` for
   single/direct turns or `NULL` for group turns;
 - usage: one `LlmCallKind::MemoryExtract` call with the conversation channel and

@@ -5,6 +5,9 @@
 //! block use [`MemoryService::recall_for_prompt`], which logs and continues
 //! without memory when the store fails.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use chrono::Utc;
 use cowbot_core::agent::AgentId;
 use cowbot_core::channel::{Channel, ChannelId};
@@ -12,10 +15,12 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{
     rank_memories, redact_secrets, render_memory_block, render_notes_for_prompt,
-    select_recalled_entries, MemoryEntry, MemoryKind, MemorySettings, MemorySource, MemoryStatus,
-    Note, ScoredMemory, MEMORY_ENTRY_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
+    select_recalled_entries, truncate_to_tokens, MemoryEntry, MemoryKind, MemorySettings,
+    MemorySource, MemoryStatus, Note, ScoredMemory, MEMORY_ENTRY_MAX_CHARS,
+    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
 };
-use cowbot_core::usage::estimate_tokens;
+use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord};
+use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
 use cowbot_store::Store;
 
 /// How a memory-relevant turn query is truncated before recall.
@@ -23,6 +28,31 @@ const RECALL_QUERY_MAX_CHARS: usize = 500;
 
 /// Most pinned and matched entries considered for one recall.
 const RECALL_CANDIDATE_LIMIT: u32 = 20;
+
+/// Most pending candidates one extraction may create.
+const MAX_EXTRACTION_CANDIDATES: usize = 3;
+
+/// Token budget for the transcript sent to the extractor.
+const EXTRACTION_INPUT_TOKENS: u32 = 4_000;
+
+/// Share of the transcript budget kept for the user message.
+const EXTRACTION_USER_TOKENS: u32 = 1_000;
+
+/// Instruction for the opt-in extraction call.
+const EXTRACTION_SYSTEM_PROMPT: &str = "You maintain the long-term memory of a local agent \
+workspace. Read one conversation turn and return the durable facts, user preferences, and \
+decisions that will still matter in later conversations. Reply with one JSON object only: \
+{\"memories\": [{\"content\": \"one self-contained sentence\", \"kind\": \"fact\"}]}. Kind is \
+one of fact, preference, or decision. Return at most three entries. Skip transient details, \
+restatements, and anything already listed as known memory. Return {\"memories\": []} when \
+nothing is durable. Do not add any other text.";
+
+/// One candidate parsed from an extraction response, before validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionCandidate {
+    pub content: String,
+    pub kind: MemoryKind,
+}
 
 /// Parameters for creating a memory entry.
 #[derive(Debug, Clone)]
@@ -429,6 +459,145 @@ impl MemoryService {
         }))
     }
 
+    /// Extract up to three pending candidates from a settled conversation turn.
+    ///
+    /// Opt-in per workspace. The call is best-effort: a disabled setting, an
+    /// empty reply set, or a provider, parse, or storage failure is logged and
+    /// skipped, and never fails the turn. Candidates are stored as `pending`
+    /// with the turn as their source reference, so nothing is injected until a
+    /// user approves it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn extract_after_turn(
+        &self,
+        channel: &Channel,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+        user_message: &str,
+        replies: &str,
+        responder: Option<&AgentId>,
+        source_ref: &str,
+    ) -> Vec<MemoryEntry> {
+        let settings = match self.settings().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(error = %error, "Memory extraction skipped: settings unavailable");
+                return Vec::new();
+            }
+        };
+        if !settings.extraction_enabled {
+            return Vec::new();
+        }
+        if replies.trim().is_empty() {
+            return Vec::new();
+        }
+
+        let transcript = extraction_transcript(channel, user_message, replies);
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages: vec![
+                ChatMessage::system(EXTRACTION_SYSTEM_PROMPT),
+                ChatMessage::user(transcript),
+            ],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+        };
+
+        let response = match llm.chat_complete(&request).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(error = %error, "Memory extraction call failed");
+                return Vec::new();
+            }
+        };
+        self.record_extraction_usage(channel, model, responder, &response)
+            .await;
+
+        let Some(content) = response
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|content| !content.is_empty())
+        else {
+            tracing::warn!("Memory extraction returned no text");
+            return Vec::new();
+        };
+        let Some(candidates) = parse_extraction_response(content) else {
+            tracing::warn!("Memory extraction returned no usable JSON");
+            return Vec::new();
+        };
+
+        let existing = match self
+            .store
+            .list_memory_entries(
+                &self.workspace_id,
+                Some(MemoryStatus::Active),
+                responder,
+                Some(&channel.id),
+            )
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(error = %error, "Memory extraction could not read existing entries");
+                return Vec::new();
+            }
+        };
+        let mut known = existing
+            .iter()
+            .filter(|entry| entry.agent_id.as_ref() == responder)
+            .map(|entry| normalize_extracted_content(&entry.content))
+            .collect::<HashSet<_>>();
+
+        let mut created = Vec::new();
+        for candidate in candidates {
+            if created.len() >= MAX_EXTRACTION_CANDIDATES {
+                break;
+            }
+            if candidate.content.chars().count() > MEMORY_EXTRACTED_MAX_CHARS {
+                continue;
+            }
+            let redaction = redact_secrets(&candidate.content);
+            let content = redaction.content.trim().to_string();
+            if content.is_empty() || !known.insert(normalize_extracted_content(&content)) {
+                continue;
+            }
+            let mut entry = MemoryEntry::candidate(
+                self.workspace_id.clone(),
+                responder.cloned(),
+                Some(channel.id.clone()),
+                candidate.kind,
+                content,
+            );
+            entry.source_ref = Some(source_ref.to_string());
+            if let Err(error) = self.store.insert_memory_entry(&entry).await {
+                tracing::warn!(error = %error, "Failed to store an extracted memory candidate");
+                continue;
+            }
+            created.push(entry);
+        }
+        created
+    }
+
+    async fn record_extraction_usage(
+        &self,
+        channel: &Channel,
+        model: &str,
+        responder: Option<&AgentId>,
+        response: &ChatCompletionResponse,
+    ) {
+        let mut record = LlmCallRecord::new(LlmCallKind::MemoryExtract, model.to_string());
+        record.channel_id = Some(channel.id.clone());
+        record.agent_id = responder.cloned();
+        record.usage = response.usage.clone();
+        record.raw_usage = response.raw_usage.clone();
+        if let Err(error) = self.store.record_llm_call(&record).await {
+            tracing::warn!(
+                error = %error,
+                "Failed to record memory extraction usage"
+            );
+        }
+    }
+
     async fn set_status(&self, id: &str, status: MemoryStatus) -> CowResult<MemoryEntry> {
         let mut entry = self.require_entry(id).await?;
         entry.status = status;
@@ -507,6 +676,63 @@ impl MemoryService {
         }
         Ok(())
     }
+}
+
+/// Parse an extractor response, keeping well-formed candidates only.
+///
+/// Code fences around the JSON are tolerated. Returns `None` when the reply is
+/// not a JSON object with a `memories` array; individual invalid entries are
+/// dropped so one bad candidate cannot discard the others.
+pub fn parse_extraction_response(content: &str) -> Option<Vec<ExtractionCandidate>> {
+    let start = content.find('{')?;
+    let end = content.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(&content[start..=end]).ok()?;
+    let memories = value.get("memories")?.as_array()?;
+    Some(
+        memories
+            .iter()
+            .filter_map(|item| {
+                let content = item.get("content")?.as_str()?.trim();
+                if content.is_empty() {
+                    return None;
+                }
+                let kind = match item.get("kind")?.as_str()? {
+                    "fact" => MemoryKind::Fact,
+                    "preference" => MemoryKind::Preference,
+                    "decision" => MemoryKind::Decision,
+                    _ => return None,
+                };
+                Some(ExtractionCandidate {
+                    content: content.to_string(),
+                    kind,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Render the bounded extraction input: conversation name, user message, replies.
+fn extraction_transcript(channel: &Channel, user_message: &str, replies: &str) -> String {
+    let (user_message, _) = truncate_to_tokens(user_message.trim(), EXTRACTION_USER_TOKENS);
+    let reply_budget = EXTRACTION_INPUT_TOKENS.saturating_sub(EXTRACTION_USER_TOKENS);
+    let (replies, _) = truncate_to_tokens(replies.trim(), reply_budget);
+    let transcript = format!(
+        "Conversation: {name}\n\nUser message:\n{user_message}\n\nReplies:\n{replies}",
+        name = channel.name,
+    );
+    truncate_to_tokens(&transcript, EXTRACTION_INPUT_TOKENS).0
+}
+
+/// Compare candidate text after whitespace and case normalization.
+fn normalize_extracted_content(content: &str) -> String {
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn validate_content(content: &str, max: usize, label: &str) -> CowResult<String> {
