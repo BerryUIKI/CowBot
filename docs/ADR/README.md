@@ -35,6 +35,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0029](0029-token-usage-accounting.md) | Token usage accounting |
 | [0030](0030-conversation-sessions-and-context.md) | Conversation sessions and context accounting |
 | [0031](0031-task-worktrees-and-background-cards.md) | Task worktrees and background task cards |
+| [0032](0032-group-conversations-and-routing.md) | Group conversations and routing |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

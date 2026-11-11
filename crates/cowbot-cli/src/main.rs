@@ -457,7 +457,13 @@ async fn reply_to_mentions(
         .await?;
 
     if report.is_empty() {
-        println!("No agent was mentioned; nothing to answer.");
+        match report.route.map(|route| route.as_str()) {
+            Some("silent") => {
+                println!("No participant answered; no default responder is configured.")
+            }
+            Some("unmatched") => println!("No participant matched the mentioned names."),
+            _ => println!("No agent was mentioned; nothing to answer."),
+        }
         return Ok(());
     }
     println!(
@@ -465,6 +471,15 @@ async fn reply_to_mentions(
         report.agents.len(),
         message.channel_id
     );
+    if let Some(route) = report.route {
+        println!(
+            "  route: {} · {} replied, {} failed, {} skipped",
+            route.as_str(),
+            report.replied.len(),
+            report.failed.len(),
+            report.skipped.len()
+        );
+    }
     for name in &report.unknown_mentions {
         println!("  no agent matched @{name}");
     }
