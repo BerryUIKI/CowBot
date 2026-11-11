@@ -1457,6 +1457,7 @@ fn context_view_from_parts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn participant_view(
     agent_id: String,
     agent_name: String,
