@@ -29,6 +29,8 @@ pub struct AgentInstance {
     usage_recorder: Option<Arc<dyn LlmUsageRecorder>>,
     conversation_recorder: Option<Arc<dyn ConversationRecorder>>,
     mode_instruction: Option<String>,
+    /// Reference data injected as a system message before a task's instructions.
+    memory_block: Option<String>,
 }
 
 impl AgentInstance {
@@ -48,6 +50,7 @@ impl AgentInstance {
             usage_recorder: None,
             conversation_recorder: None,
             mode_instruction: None,
+            memory_block: None,
         }
     }
 
@@ -88,6 +91,14 @@ impl AgentInstance {
         self.mode_instruction = instruction;
     }
 
+    /// Add recalled memory as reference data before a task's instructions.
+    ///
+    /// Conversation turns assemble memory into their own request, so only task
+    /// executions set this block.
+    pub fn set_memory_block(&mut self, block: Option<String>) {
+        self.memory_block = block;
+    }
+
     pub fn id(&self) -> &AgentId {
         &self.profile.id
     }
@@ -107,6 +118,9 @@ impl AgentInstance {
         let mut messages = vec![ChatMessage::system(system_prompt)];
         if let Some(instruction) = &self.mode_instruction {
             messages.push(ChatMessage::system(instruction.clone()));
+        }
+        if let Some(memory) = &self.memory_block {
+            messages.push(ChatMessage::system(memory.clone()));
         }
 
         // Inject prerequisite context if any exists

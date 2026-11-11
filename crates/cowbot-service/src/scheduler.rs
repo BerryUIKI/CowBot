@@ -27,6 +27,7 @@ use tokio::task::JoinSet;
 
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
+use crate::memory::MemoryService;
 use crate::permissions::ModelPermissionEvaluator;
 use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
@@ -99,6 +100,7 @@ impl AgentExecution {
         usage_recorder: Arc<dyn LlmUsageRecorder>,
         conversation: Option<Vec<ChatMessage>>,
         plan_mode: bool,
+        memory: Option<String>,
     ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
@@ -109,6 +111,7 @@ impl AgentExecution {
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
         agent.set_usage_recorder(Some(usage_recorder));
+        agent.set_memory_block(memory);
         if plan_mode {
             agent.set_mode_instruction(Some(PLAN_MODE_INSTRUCTION.to_string()));
         }
@@ -175,8 +178,11 @@ pub struct AssignmentScheduler {
     assignments: AssignmentService,
     approvals: ApprovalService,
     workspace_id: WorkspaceId,
+    memory: MemoryService,
     executions: HashMap<AgentId, AgentExecution>,
     max_concurrency: usize,
+    /// Inject notes and recalled memory into task executions.
+    task_memory: bool,
     /// When set, only assignments rooted in a task enqueued here are claimed.
     scope: Option<Arc<StdMutex<HashSet<AssignmentId>>>>,
     /// Ask the active model for Auto-mode permission decisions.
@@ -209,12 +215,15 @@ impl AssignmentScheduler {
     ) -> Self {
         let assignments = AssignmentService::new(store.clone(), bus.clone());
         let approvals = ApprovalService::new(store, bus, workspace_id.clone());
+        let memory = MemoryService::new(assignments.store().clone(), workspace_id.clone());
         Self {
             assignments,
             approvals,
+            memory,
             workspace_id,
             executions: HashMap::new(),
             max_concurrency,
+            task_memory: false,
             scope: None,
             use_model_permissions: false,
             session_decisions: None,
@@ -226,6 +235,17 @@ impl AssignmentScheduler {
     /// Enable model-decided Auto mode for assignments run by this scheduler.
     pub fn with_model_permissions(mut self, enabled: bool) -> Self {
         self.use_model_permissions = enabled;
+        self
+    }
+
+    /// Inject notes and recalled memory into every task execution.
+    ///
+    /// The block uses the assignee and the task description as the query, and
+    /// the task channel scopes the conversation note and its entries.
+    /// Conversation turns assemble memory into their own request, so the
+    /// schedulers that run them leave this off.
+    pub fn with_task_memory(mut self) -> Self {
+        self.task_memory = true;
         self
     }
 
@@ -641,6 +661,21 @@ impl AssignmentScheduler {
             .ok()
             .and_then(|mut prepared| prepared.remove(&task.id));
 
+        // Task executions get their own memory block as a system message before
+        // the task instructions. Prepared conversation turns already assembled
+        // memory into their request, so they are skipped here.
+        let memory = if self.task_memory && prepared.is_none() {
+            self.memory
+                .recall_for_prompt(
+                    task.channel_id.as_ref(),
+                    &assignment.assignee,
+                    &task.description,
+                )
+                .await
+        } else {
+            None
+        };
+
         self.assignments.start(&assignment.id).await?;
 
         let run = Run::new(task.id.clone(), assignment.assignee.clone());
@@ -681,6 +716,7 @@ impl AssignmentScheduler {
                 usage_recorder,
                 messages,
                 plan_mode,
+                memory,
             )
             .await
         {

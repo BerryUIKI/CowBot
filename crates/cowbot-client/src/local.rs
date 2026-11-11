@@ -279,7 +279,8 @@ impl LocalClient {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(Some(self.session_decisions.clone()));
+        .with_session_decisions(Some(self.session_decisions.clone()))
+        .with_task_memory();
         scheduler.register_instance(&agent);
         scheduler
             .enqueue(

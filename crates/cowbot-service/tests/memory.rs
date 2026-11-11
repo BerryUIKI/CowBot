@@ -4,17 +4,20 @@ use async_trait::async_trait;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentProfile;
 use cowbot_core::approval::ApprovalLevel;
+use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::Sender;
 use cowbot_core::error::CowResult;
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySource, MemoryStatus};
+use cowbot_core::task::Task;
 use cowbot_core::usage::{LlmCallKind, TokenUsage};
 use cowbot_llm::{
     ChatCompletionRequest, ChatCompletionResponse, ChatRole, LlmProvider, LlmToolCall,
 };
 use cowbot_service::{
-    bootstrap_local, ChannelAgentService, ChannelService, ChannelTurnOptions, ConversationService,
-    MemoryFilter, MemoryService, MemorySettingsUpdate, MemoryUpdate, NewMemory,
+    bootstrap_local, AssignmentScheduler, ChannelAgentService, ChannelService, ChannelTurnOptions,
+    ConversationService, CrewRunOptions, MemoryFilter, MemoryService, MemorySettingsUpdate,
+    MemoryUpdate, NewMemory,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -1221,5 +1224,215 @@ async fn extraction_parses_code_fenced_json_and_rejects_bad_shapes() {
             "{\"memories\":[{\"content\":\"\",\"kind\":\"fact\"},{\"content\":\"ok\",\"kind\":\"summary\"}]}"
         ),
         Some(vec![])
+    );
+}
+
+fn run_options() -> CrewRunOptions {
+    CrewRunOptions {
+        approval_level: ApprovalLevel::Trusted,
+        ..CrewRunOptions::default()
+    }
+}
+
+async fn run_task(
+    fixture: &Fixture,
+    task: &Task,
+    llm: Arc<RecordingLlm>,
+    task_memory: bool,
+) -> Vec<ChatCompletionRequest> {
+    let mut scheduler = AssignmentScheduler::new(
+        fixture.store.clone(),
+        fixture.bus.clone(),
+        fixture.workspace_id.clone(),
+        1,
+    );
+    if task_memory {
+        scheduler = scheduler.with_task_memory();
+    }
+    scheduler.register_agent(
+        fixture.planner.clone(),
+        llm.clone(),
+        ToolRegistry::new(),
+        "mock-model",
+    );
+    scheduler
+        .enqueue(
+            task,
+            AssignmentRequester::User("user-1".to_string()),
+            AssignmentOrigin::User,
+            &run_options(),
+        )
+        .await
+        .unwrap();
+    scheduler.run_until_idle().await.unwrap();
+    llm.requests()
+}
+
+#[tokio::test]
+async fn task_execution_injects_notes_and_recalled_memory_before_instructions() {
+    let fixture = fixture().await;
+    fixture
+        .memory
+        .save_workspace_note("Task note.")
+        .await
+        .unwrap();
+    let entry = fixture
+        .memory
+        .add_entry(
+            NewMemory::user("The deploy target is staging.")
+                .with_scope(Some(fixture.planner.id.clone()), None),
+        )
+        .await
+        .unwrap()
+        .entry;
+    let task = Task::new("Deploy the service to staging", "A short summary")
+        .assign_to(fixture.planner.id.clone());
+
+    let requests = run_task(&fixture, &task, Arc::new(RecordingLlm::new()), true).await;
+    assert_eq!(requests.len(), 1);
+    let messages = &requests[0].messages;
+    let memory_index = messages
+        .iter()
+        .position(|message| message.content.starts_with("Memory (reference data"))
+        .expect("the task receives a memory block");
+    let task_index = messages
+        .iter()
+        .position(|message| message.content.starts_with("Task Description:"))
+        .expect("the task instructions follow the memory");
+    assert!(
+        memory_index < task_index,
+        "memory is a system message before the task instructions"
+    );
+    assert_eq!(messages[memory_index].role, ChatRole::System);
+    let block = &messages[memory_index].content;
+    assert!(block.contains("Task note."));
+    assert!(block.contains("deploy target is staging"));
+
+    let reloaded = fixture
+        .store
+        .get_memory_entry(&entry.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded.recall_count, 1);
+}
+
+#[tokio::test]
+async fn task_memory_uses_the_task_channel_scope() {
+    let fixture = fixture().await;
+    let conversation = fixture
+        .conversations
+        .create(Some("Deploy Talk"), &fixture.planner.id, None, "mock-model")
+        .await
+        .unwrap();
+    let other = fixture
+        .conversations
+        .create(Some("Other Talk"), &fixture.coder.id, None, "mock-model")
+        .await
+        .unwrap();
+    fixture
+        .memory
+        .save_conversation_note(&conversation.id, "Release carefully.")
+        .await
+        .unwrap();
+    fixture
+        .memory
+        .save_conversation_note(&other.id, "Other channel note.")
+        .await
+        .unwrap();
+    fixture
+        .memory
+        .add_entry(
+            NewMemory::user("The release branch is cut from dev.")
+                .with_scope(None, Some(conversation.id.clone())),
+        )
+        .await
+        .unwrap();
+    fixture
+        .memory
+        .add_entry(
+            NewMemory::user("The release branch is cut from main.")
+                .with_scope(None, Some(other.id.clone())),
+        )
+        .await
+        .unwrap();
+
+    let task = Task::new("Cut the release branch", "A summary")
+        .in_channel(conversation.id.clone())
+        .assign_to(fixture.planner.id.clone());
+    let requests = run_task(&fixture, &task, Arc::new(RecordingLlm::new()), true).await;
+    let block = requests[0]
+        .messages
+        .iter()
+        .find(|message| message.content.starts_with("Memory (reference data"))
+        .expect("the task receives a memory block");
+    assert!(block.content.contains("Release carefully."));
+    assert!(block.content.contains("cut from dev"));
+    assert!(!block.content.contains("Other channel note."));
+    assert!(!block.content.contains("cut from main"));
+}
+
+#[tokio::test]
+async fn task_memory_never_crosses_workspaces() {
+    let fixture = fixture().await;
+    let other_workspace = cowbot_core::identity::Workspace::new("Other");
+    fixture
+        .store
+        .create_workspace(&other_workspace)
+        .await
+        .unwrap();
+    let other_memory = MemoryService::new(fixture.store.clone(), other_workspace.id.clone());
+    other_memory
+        .save_workspace_note("Other workspace note.")
+        .await
+        .unwrap();
+    other_memory
+        .add_entry(NewMemory::user("The deploy target is staging."))
+        .await
+        .unwrap();
+
+    let task = Task::new("Deploy the service to staging", "A short summary")
+        .assign_to(fixture.planner.id.clone());
+    let requests = run_task(&fixture, &task, Arc::new(RecordingLlm::new()), true).await;
+    assert!(requests[0]
+        .messages
+        .iter()
+        .all(|message| !message.content.starts_with("Memory (reference data")));
+}
+
+#[tokio::test]
+async fn task_memory_stays_off_for_schedulers_that_do_not_opt_in() {
+    let fixture = fixture().await;
+    fixture
+        .memory
+        .save_workspace_note("Should not be injected.")
+        .await
+        .unwrap();
+    let task =
+        Task::new("Deploy the service", "A short summary").assign_to(fixture.planner.id.clone());
+
+    let requests = run_task(&fixture, &task, Arc::new(RecordingLlm::new()), false).await;
+    assert!(requests[0]
+        .messages
+        .iter()
+        .all(|message| !message.content.starts_with("Memory (reference data")));
+}
+
+#[tokio::test]
+async fn task_execution_without_memory_is_unchanged() {
+    let fixture = fixture().await;
+    let task =
+        Task::new("Deploy the service", "A short summary").assign_to(fixture.planner.id.clone());
+    let llm = Arc::new(RecordingLlm::new());
+
+    let requests = run_task(&fixture, &task, llm, true).await;
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0]
+        .messages
+        .iter()
+        .all(|message| !message.content.starts_with("Memory (reference data")));
+    assert_eq!(
+        requests[0].messages.last().unwrap().content,
+        "Task Description:\nDeploy the service\n\nExpected Output Format:\nA short summary"
     );
 }
