@@ -152,6 +152,8 @@ Each workstream can ship independently; prioritization will be decided with user
 
 ### 6.2 Deferred Product Directions (Not Started)
 
+**Agent memory and shared notes (M4, planned, not started).** Agents gain workspace-scoped long-term memory and shared notes: one workspace note, one note per conversation, and memory entries with workspace, agent, conversation, and agent-in-conversation scopes. Recall is deterministic and budgeted over an FTS5 index, capture is explicit through the desktop and a `remember` tool, and automatic extraction is opt-in with pending review before anything is injected. Packages round-trip notes and memories with secret redaction. Embeddings and cross-workspace memory are deferred. See the [M4 plan](plans/M4-agent-memory-and-shared-notes.md).
+
 **Product structure and vertical kits (planned, not started).** Work and Code are project profiles rather than global modes; domain presets use starter kits, capability packs, and security policies. Finance is the first vertical, targeting small private funds and independent analysts; medical research is a later candidate. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the decision record and scope.
 
 **Project model (planned for internal M6; not started).** Projects become the unit of work inside a workspace, with channels and tasks optionally scoped to one; Home is the unscoped view. The model is settled at the decision level; implementation is not scheduled. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the locked decisions and work breakdown.

@@ -15,6 +15,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 | Architecture contributors | [Target architecture](ARCHITECTURE.md) and [decision records](ADR/README.md) |
 | Context management (implemented) | [M1 usage accounting plan](plans/M1-usage-accounting.md), [M2 conversations and context plan](plans/M2-conversations-and-context.md), [ADR-0029](ADR/0029-token-usage-accounting.md), and [ADR-0030](ADR/0030-conversation-sessions-and-context.md) |
 | Group conversations and routing (implemented) | [M3 group conversations and routing plan](plans/M3-group-conversations-and-routing.md) and [ADR-0032](ADR/0032-group-conversations-and-routing.md) |
+| Planned agent memory and shared notes | [M4 agent memory and shared notes plan](plans/M4-agent-memory-and-shared-notes.md) |
 | Planned projects and product structure | [M6 project plan](plans/M6-projects-and-product-structure.md) |
 
 ## Reading design documents
