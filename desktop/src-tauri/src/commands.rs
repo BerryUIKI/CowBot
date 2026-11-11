@@ -256,6 +256,7 @@ pub async fn post_message(
                     max_concurrency: 4,
                     use_model_permissions,
                     platform_context,
+                    participant_capacity: Vec::new(),
                 },
             )
             .await;

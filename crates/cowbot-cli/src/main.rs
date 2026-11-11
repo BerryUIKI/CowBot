@@ -451,6 +451,7 @@ async fn reply_to_mentions(
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
                 platform_context: None,
+                participant_capacity: Vec::new(),
             },
         )
         .await?;

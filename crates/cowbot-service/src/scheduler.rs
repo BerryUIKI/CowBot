@@ -161,6 +161,9 @@ impl cowbot_agent::ConversationRecorder for CollectingConversation {
     }
 }
 
+/// One finished root: its root assignment, its task, and the execution result.
+type SettledRoot = (AssignmentId, TaskId, CowResult<(TaskId, String)>);
+
 /// Dispatches queued and resumed assignments until no work is left.
 ///
 /// The scheduler is the single wake path described by ADR-0006: it picks up
@@ -379,8 +382,29 @@ impl AssignmentScheduler {
 
     /// Dispatch assignments until no queued or resumed work remains.
     pub async fn run_until_idle(&self) -> CowResult<HashMap<TaskId, String>> {
+        self.run_until_idle_inner(None).await
+    }
+
+    /// Dispatch until idle, reporting each settled task as it settles.
+    ///
+    /// [`Self::run_until_idle`] waits for every root before returning. This
+    /// variant sends each task id to `settled` once its assignment is terminal
+    /// (completed or failed), so a caller can post replies while slower
+    /// participants are still running. The returned map and error behavior are
+    /// unchanged.
+    pub async fn run_until_idle_observed(
+        &self,
+        settled: tokio::sync::mpsc::UnboundedSender<TaskId>,
+    ) -> CowResult<HashMap<TaskId, String>> {
+        self.run_until_idle_inner(Some(settled)).await
+    }
+
+    async fn run_until_idle_inner(
+        &self,
+        settled: Option<tokio::sync::mpsc::UnboundedSender<TaskId>>,
+    ) -> CowResult<HashMap<TaskId, String>> {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrency.max(1)));
-        let mut running: JoinSet<(AssignmentId, CowResult<(TaskId, String)>)> = JoinSet::new();
+        let mut running: JoinSet<SettledRoot> = JoinSet::new();
         let mut active_roots: HashSet<AssignmentId> = HashSet::new();
         let mut completed: HashMap<TaskId, String> = HashMap::new();
         let mut first_error: Option<CowError> = None;
@@ -394,12 +418,13 @@ impl AssignmentScheduler {
                             break;
                         };
                         let root_id = assignment.root_id.clone();
+                        let task_id = assignment.task_id.clone();
                         active_roots.insert(root_id.clone());
                         let scheduler = self.clone();
                         running.spawn(async move {
                             let result = scheduler.execute_assignment(assignment).await;
                             drop(permit);
-                            (root_id, result)
+                            (root_id, task_id, result)
                         });
                         progressed = true;
                     }
@@ -407,8 +432,14 @@ impl AssignmentScheduler {
                         if first_error.is_none() {
                             first_error = Some(CowError::Task(reason.clone()));
                         }
+                        let task_id = assignment.task_id.clone();
                         match self.assignments.fail(&assignment.id, reason).await {
-                            Ok(_) => progressed = true,
+                            Ok(_) => {
+                                progressed = true;
+                                if let Some(sender) = &settled {
+                                    let _ = sender.send(task_id);
+                                }
+                            }
                             Err(error) => {
                                 if first_error.is_none() {
                                     first_error = Some(error);
@@ -432,7 +463,7 @@ impl AssignmentScheduler {
                 break;
             };
             match joined {
-                Ok((root_id, result)) => {
+                Ok((root_id, task_id, result)) => {
                     active_roots.remove(&root_id);
                     match result {
                         Ok((task_id, output)) => {
@@ -443,6 +474,9 @@ impl AssignmentScheduler {
                                 first_error = Some(error);
                             }
                         }
+                    }
+                    if let Some(sender) = &settled {
+                        let _ = sender.send(task_id);
                     }
                 }
                 Err(error) => {

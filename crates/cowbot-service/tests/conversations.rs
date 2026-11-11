@@ -3,14 +3,19 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use cowbot_agent::StandardRoles;
 use cowbot_bus::EventBus;
-use cowbot_core::agent::AgentProfile;
+use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
-use cowbot_core::conversation::{ContextEntry, ContextEventKind, ContextRole, ConversationMode};
-use cowbot_core::error::CowResult;
+use cowbot_core::conversation::{
+    ContextEntry, ContextEntryKind, ContextEventKind, ContextRole, ConversationMode,
+    ConversationSettingsUpdate, RouteSource,
+};
+use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::usage::TokenUsage;
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider};
-use cowbot_service::{bootstrap_local, ChannelService, ChannelTurnOptions, ConversationService};
+use cowbot_service::{
+    bootstrap_local, ChannelService, ChannelTurnOptions, ConversationService, ParticipantCapacity,
+};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
@@ -112,6 +117,7 @@ fn options() -> ChannelTurnOptions {
         max_concurrency: 2,
         use_model_permissions: false,
         platform_context: None,
+        participant_capacity: Vec::new(),
     }
 }
 
@@ -121,6 +127,114 @@ fn user_message(channel: &Channel, content: &str) -> ChannelMessage {
         Sender::User("user-1".to_string()),
         content,
     )
+}
+
+struct GroupFixture {
+    store: Store,
+    service: ConversationService,
+    channels: ChannelService,
+    participants: Vec<AgentProfile>,
+    channel: Channel,
+}
+
+async fn group_fixture(default_responder: Option<AgentId>) -> GroupFixture {
+    let participants = vec![
+        AgentProfile::new("Planner", "Architect", "Plan", "Careful"),
+        AgentProfile::new("Coder", "Engineer", "Ship", "Careful"),
+    ];
+    group_fixture_with(participants, default_responder).await
+}
+
+async fn group_fixture_with(
+    participants: Vec<AgentProfile>,
+    default_responder: Option<AgentId>,
+) -> GroupFixture {
+    let store = Store::connect_in_memory().await.unwrap();
+    store.migrate().await.unwrap();
+    let context = bootstrap_local(&store).await.unwrap();
+    for agent in &participants {
+        store
+            .upsert_agent(&context.workspace.id, agent)
+            .await
+            .unwrap();
+    }
+    let bus = EventBus::default_bus();
+    let service =
+        ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone());
+    let channels = ChannelService::new(store.clone(), bus);
+    let ids = participants
+        .iter()
+        .map(|agent| agent.id.clone())
+        .collect::<Vec<_>>();
+    let channel = service
+        .create_group(
+            Some("Build crew"),
+            &ids,
+            Some("provider-1".to_string()),
+            "recording-model",
+            default_responder,
+        )
+        .await
+        .unwrap();
+    GroupFixture {
+        store,
+        service,
+        channels,
+        participants,
+        channel,
+    }
+}
+
+async fn post_user(channels: &ChannelService, channel: &Channel, content: &str) -> ChannelMessage {
+    channels
+        .post_message(&channel.id, Sender::User("user-1".to_string()), content)
+        .await
+        .unwrap()
+}
+
+fn agent_replies(messages: &[ChannelMessage]) -> Vec<AgentId> {
+    messages
+        .iter()
+        .filter_map(|message| match &message.sender {
+            Sender::Agent(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+struct FailingLlm {
+    fail_on: String,
+}
+
+#[async_trait]
+impl LlmProvider for FailingLlm {
+    fn name(&self) -> &str {
+        "failing"
+    }
+
+    async fn chat_complete(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        let system = request
+            .messages
+            .first()
+            .map(|message| message.content.as_str())
+            .unwrap_or_default();
+        if system.contains(&self.fail_on) {
+            return Err(CowError::Agent(format!(
+                "{} failed in the test",
+                self.fail_on
+            )));
+        }
+        Ok(ChatCompletionResponse {
+            content: Some("still here".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
+        })
+    }
 }
 
 #[tokio::test]
@@ -367,4 +481,620 @@ async fn direct_and_group_channels_keep_their_kind_and_behavior() {
     // Conversation-only operations reject other channel kinds.
     assert!(service.context(&direct.id).await.is_err());
     assert!(service.context(&group.id).await.is_err());
+}
+
+#[tokio::test]
+async fn group_creation_validates_participants_and_default_responder() {
+    let store = Store::connect_in_memory().await.unwrap();
+    store.migrate().await.unwrap();
+    let context = bootstrap_local(&store).await.unwrap();
+    let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    let coder = AgentProfile::new("Coder", "Engineer", "Ship", "Careful");
+    for agent in [&planner, &coder] {
+        store
+            .upsert_agent(&context.workspace.id, agent)
+            .await
+            .unwrap();
+    }
+    let bus = EventBus::default_bus();
+    let service = ConversationService::new(store.clone(), bus, context.workspace.id.clone());
+
+    assert!(service
+        .create_group(
+            None,
+            std::slice::from_ref(&planner.id),
+            None,
+            "mock-model",
+            None
+        )
+        .await
+        .is_err());
+    assert!(service
+        .create_group(
+            None,
+            &[planner.id.clone(), planner.id.clone()],
+            None,
+            "mock-model",
+            None
+        )
+        .await
+        .is_err());
+    assert!(service
+        .create_group(
+            None,
+            &[planner.id.clone(), coder.id.clone()],
+            None,
+            "mock-model",
+            Some(AgentId::new("missing-agent"))
+        )
+        .await
+        .is_err());
+    let too_many = vec![planner.id.clone(); 9];
+    assert!(service
+        .create_group(None, &too_many, None, "mock-model", None)
+        .await
+        .is_err());
+
+    let channel = service
+        .create_group(
+            Some("Valid crew"),
+            &[planner.id.clone(), coder.id.clone()],
+            Some("provider-1".to_string()),
+            "mock-model",
+            Some(coder.id.clone()),
+        )
+        .await
+        .unwrap();
+    let settings = service.settings(&channel.id).await.unwrap();
+    assert_eq!(settings.mode, ConversationMode::Group);
+    assert_eq!(settings.default_responder.as_ref(), Some(&coder.id));
+    let stored = store.list_channel_participants(&channel.id).await.unwrap();
+    assert_eq!(
+        stored
+            .iter()
+            .map(|participant| participant.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+}
+
+#[tokio::test]
+async fn group_mention_routes_only_to_the_named_participant() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(
+        &fixture.channels,
+        &fixture.channel,
+        "@Coder plan the release",
+    )
+    .await;
+
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    let coder = fixture.participants[1].id.clone();
+    assert_eq!(report.agents, vec![coder.clone()]);
+    assert_eq!(report.tasks.len(), 1);
+    assert_eq!(report.replied, vec![coder.clone()]);
+    assert!(report.unknown_mentions.is_empty());
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(agent_replies(&messages), vec![coder.clone()]);
+
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Mention);
+    assert_eq!(turn.selected_agents, vec![coder.clone()]);
+    assert_eq!(turn.task_ids, report.tasks);
+    assert!(turn.mirrored_at.is_some());
+
+    // The user message enters every branch; only the responder gets an answer.
+    for agent in &fixture.participants {
+        let entries = fixture
+            .store
+            .list_context_entries(&fixture.channel.id, &agent.id)
+            .await
+            .unwrap();
+        assert!(entries.iter().any(|entry| {
+            entry.role == ContextRole::User
+                && entry.content == "@Coder plan the release"
+                && entry.author_agent_id.is_none()
+        }));
+    }
+    let planner_entries = fixture
+        .store
+        .list_context_entries(&fixture.channel.id, &fixture.participants[0].id)
+        .await
+        .unwrap();
+    assert!(!planner_entries
+        .iter()
+        .any(|entry| entry.role == ContextRole::Assistant));
+}
+
+#[tokio::test]
+async fn group_broadcast_routes_to_every_participant_and_mirrors_peer_replies() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "@team status update").await;
+
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.agents.len(), 2);
+    assert_eq!(report.tasks.len(), 2);
+    assert_eq!(report.replied.len(), 2);
+    assert!(report.failed.is_empty());
+    assert!(report.skipped.is_empty());
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    let replied = agent_replies(&messages);
+    assert_eq!(replied.len(), 2);
+
+    // Each branch keeps the other participant's settled reply as authored
+    // teammate history, never as the user's words.
+    for (index, agent) in fixture.participants.iter().enumerate() {
+        let other = &fixture.participants[1 - index];
+        let entries = fixture
+            .store
+            .list_context_entries(&fixture.channel.id, &agent.id)
+            .await
+            .unwrap();
+        let mirrored = entries
+            .iter()
+            .find(|entry| entry.author_agent_id.as_ref() == Some(&other.id))
+            .expect("peer reply is mirrored into every other branch");
+        assert_eq!(mirrored.role, ContextRole::User);
+        assert!(mirrored.content.starts_with(&format!("[{}]", other.name)));
+    }
+}
+
+#[tokio::test]
+async fn group_unknown_mentions_are_reported_without_a_reply() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "@Ghost are you there?").await;
+
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert!(report.agents.is_empty());
+    assert!(report.tasks.is_empty());
+    assert_eq!(report.unknown_mentions, vec!["Ghost".to_string()]);
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(agent_replies(&messages).is_empty());
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message.content.contains("@Ghost")
+            && message.content.contains("@Planner")
+    }));
+
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Unmatched);
+    assert!(turn.selected_agents.is_empty());
+    assert_eq!(turn.unknown_mentions, vec!["Ghost".to_string()]);
+}
+
+#[tokio::test]
+async fn group_mixed_mentions_answer_and_report_the_unknown_names() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "@Coder @Ghost ship it").await;
+
+    let llm = RecordingLlm::new();
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(llm),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.agents, vec![fixture.participants[1].id.clone()]);
+    assert_eq!(report.unknown_mentions, vec!["Ghost".to_string()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        agent_replies(&messages),
+        vec![fixture.participants[1].id.clone()]
+    );
+    assert!(messages
+        .iter()
+        .any(|message| message.sender == Sender::System && message.content.contains("@Ghost")));
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Mention);
+    assert_eq!(turn.unknown_mentions, vec!["Ghost".to_string()]);
+}
+
+#[tokio::test]
+async fn group_without_a_mention_or_default_responder_is_silent() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "status update").await;
+
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert!(report.agents.is_empty());
+    assert!(report.tasks.is_empty());
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(messages.len(), 1, "a silent turn posts no notice");
+    assert!(agent_replies(&messages).is_empty());
+
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Silent);
+    assert!(turn.task_ids.is_empty());
+}
+
+#[tokio::test]
+async fn group_default_responder_answers_an_unaddressed_message() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                auto_compact: None,
+                compact_threshold: None,
+                router_enabled: None,
+                default_responder: Some(planner.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let message = post_user(&fixture.channels, &fixture.channel, "status update").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.agents, vec![planner.clone()]);
+    assert_eq!(report.replied, vec![planner.clone()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(agent_replies(&messages), vec![planner.clone()]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Default);
+}
+
+#[tokio::test]
+async fn stale_default_responder_falls_back_to_main_with_a_notice() {
+    let main = AgentProfile::new("main", "Primary Assistant", "Coordinate", "Careful");
+    let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    let coder = AgentProfile::new("Coder", "Engineer", "Ship", "Careful");
+    let participants = vec![planner, coder, main.clone()];
+    let fixture = group_fixture_with(participants, None).await;
+
+    let mut settings = fixture.service.settings(&fixture.channel.id).await.unwrap();
+    settings.default_responder = Some(AgentId::new("missing-agent"));
+    fixture
+        .store
+        .update_conversation_settings(&settings)
+        .await
+        .unwrap();
+
+    let message = post_user(&fixture.channels, &fixture.channel, "status update").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.agents, vec![main.id.clone()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message.content.contains("no longer a participant")
+            && message.content.contains("main")
+    }));
+}
+
+#[tokio::test]
+async fn group_capacity_skips_a_full_branch_and_answers_with_the_others() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "@team status update").await;
+    let planner = fixture.participants[0].id.clone();
+    let coder = fixture.participants[1].id.clone();
+
+    let mut turn_options = options();
+    turn_options.participant_capacity = vec![ParticipantCapacity {
+        agent_id: planner.clone(),
+        usable_window: 1,
+        tool_tokens: 0,
+    }];
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &turn_options,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.skipped, vec![planner.clone()]);
+    assert_eq!(report.agents, vec![coder.clone()]);
+    assert_eq!(report.replied, vec![coder.clone()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System && message.content.contains("Planner was skipped")
+    }));
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.selected_agents, vec![coder]);
+}
+
+#[tokio::test]
+async fn group_per_participant_context_and_clear() {
+    let fixture = group_fixture(None).await;
+    let message = post_user(&fixture.channels, &fixture.channel, "@team status update").await;
+    fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    let context = fixture.service.context(&fixture.channel.id).await.unwrap();
+    assert_eq!(context.participants.len(), 2);
+    assert_eq!(context.agent_id, fixture.participants[0].id);
+    assert_eq!(context.participants[0].agent_name, "Planner");
+    assert_eq!(context.participants[1].agent_id, fixture.participants[1].id);
+    assert!(context.participants[0].projection.active_entries > 0);
+    assert!(context.participants[1].projection.active_entries > 0);
+    assert!(context.participants[0].cache_last_run.calls > 0);
+
+    let coder = fixture.participants[1].id.clone();
+    let cleared = fixture
+        .service
+        .clear_participant_context(&fixture.channel.id, &coder)
+        .await
+        .unwrap();
+    assert!(cleared > 0);
+
+    let coder_entries = fixture
+        .store
+        .list_context_entries(&fixture.channel.id, &coder)
+        .await
+        .unwrap();
+    assert!(coder_entries.iter().all(|entry| entry.excluded));
+    let planner_entries = fixture
+        .store
+        .list_context_entries(&fixture.channel.id, &fixture.participants[0].id)
+        .await
+        .unwrap();
+    assert!(planner_entries.iter().any(|entry| !entry.excluded));
+
+    let context = fixture.service.context(&fixture.channel.id).await.unwrap();
+    assert_eq!(context.participants[1].projection.active_entries, 0);
+    assert!(context.participants[0].projection.active_entries > 0);
+}
+
+#[tokio::test]
+async fn group_auto_compacts_a_branch_before_answering() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].clone();
+    for index in 0..6 {
+        let role = if index % 2 == 0 {
+            ContextRole::User
+        } else {
+            ContextRole::Assistant
+        };
+        let mut entry = ContextEntry::new(
+            fixture.channel.id.clone(),
+            planner.id.clone(),
+            role,
+            format!("turn {index} {}", "x".repeat(4_000)),
+        );
+        entry.recount();
+        fixture.store.append_context_entry(&entry).await.unwrap();
+    }
+    let mut settings = fixture.service.settings(&fixture.channel.id).await.unwrap();
+    settings.auto_compact = true;
+    settings.compact_threshold = 1;
+    fixture
+        .store
+        .update_conversation_settings(&settings)
+        .await
+        .unwrap();
+
+    let message = post_user(&fixture.channels, &fixture.channel, "@Planner status").await;
+    let mut turn_options = options();
+    turn_options.participant_capacity = vec![
+        ParticipantCapacity {
+            agent_id: planner.id.clone(),
+            usable_window: 60_000,
+            tool_tokens: 0,
+        },
+        ParticipantCapacity {
+            agent_id: fixture.participants[1].id.clone(),
+            usable_window: 60_000,
+            tool_tokens: 0,
+        },
+    ];
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &turn_options,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.replied, vec![planner.id.clone()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message
+                .content
+                .contains("Context compacted automatically for Planner")
+    }));
+    let entries = fixture
+        .store
+        .list_context_entries(&fixture.channel.id, &planner.id)
+        .await
+        .unwrap();
+    assert!(entries
+        .iter()
+        .any(|entry| entry.kind == ContextEntryKind::Summary));
+}
+
+#[tokio::test]
+async fn group_partial_failure_keeps_the_other_answers() {
+    let participants = vec![
+        AgentProfile::new("Planner", "Architect", "Plan", "Careful"),
+        AgentProfile::new("Coder", "Engineer", "Ship", "fails-on-request-marker"),
+    ];
+    let fixture = group_fixture_with(participants, None).await;
+    let planner = fixture.participants[0].id.clone();
+    let coder = fixture.participants[1].id.clone();
+    let message = post_user(&fixture.channels, &fixture.channel, "@team status update").await;
+
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(FailingLlm {
+                fail_on: "fails-on-request-marker".to_string(),
+            }),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.replied, vec![planner.clone()]);
+    assert_eq!(report.failed, vec![coder.clone()]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(agent_replies(&messages), vec![planner]);
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System && message.content.contains("Coder could not answer")
+    }));
 }

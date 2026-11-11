@@ -25,7 +25,9 @@ pub use approvals::{
 };
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
-pub use channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};
+pub use channel_agents::{
+    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
+};
 pub use channels::ChannelService;
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;

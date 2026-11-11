@@ -22,6 +22,19 @@ use crate::session_decisions::SessionDecisions;
 /// How many channel messages are used as conversation context for one turn.
 const HISTORY_LIMIT: u32 = 20;
 
+/// Usable context window and tool-schema cost the caller knows for one agent.
+///
+/// The service does not own model metadata or the tool registry, so the
+/// desktop supplies these values for the group post-routing capacity check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParticipantCapacity {
+    pub agent_id: AgentId,
+    /// Window left after the model's maximum output and the safety buffer.
+    pub usable_window: u32,
+    /// Tokens the agent's tool schemas take in every request.
+    pub tool_tokens: u32,
+}
+
 /// Options for one channel turn.
 #[derive(Debug, Clone)]
 pub struct ChannelTurnOptions {
@@ -34,6 +47,11 @@ pub struct ChannelTurnOptions {
     /// Extra environment text appended to the platform context, for example
     /// registered projects the desktop can target with workspace tools.
     pub platform_context: Option<String>,
+    /// Per-participant windows used by the group post-routing capacity check.
+    ///
+    /// Callers without model metadata (the CLI) pass nothing; the service then
+    /// skips the percentage-based group gate.
+    pub participant_capacity: Vec<ParticipantCapacity>,
 }
 
 impl Default for ChannelTurnOptions {
@@ -43,6 +61,7 @@ impl Default for ChannelTurnOptions {
             max_concurrency: 4,
             use_model_permissions: false,
             platform_context: None,
+            participant_capacity: Vec::new(),
         }
     }
 }
@@ -56,6 +75,12 @@ pub struct ChannelTurnReport {
     pub unknown_mentions: Vec<String>,
     /// Tasks created for the turn.
     pub tasks: Vec<TaskId>,
+    /// Group responders whose answer was posted.
+    pub replied: Vec<AgentId>,
+    /// Group responders whose task failed.
+    pub failed: Vec<AgentId>,
+    /// Group responders skipped because their context branch was full.
+    pub skipped: Vec<AgentId>,
 }
 
 impl ChannelTurnReport {
@@ -263,6 +288,7 @@ impl ChannelAgentService {
             agents: addressees.iter().map(|agent| agent.id.clone()).collect(),
             unknown_mentions: Vec::new(),
             tasks,
+            ..ChannelTurnReport::default()
         })
     }
 
