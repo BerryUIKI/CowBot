@@ -1,6 +1,6 @@
 # M4 — Agent memory and shared notes
 
-- Status: In progress (M4.1–M4.5 complete; M4.6 next)
+- Status: In progress (M4.1–M4.6 complete; M4.7 next)
 - Date: 2026-11-11
 - Related: [ADR-0029](../ADR/0029-token-usage-accounting.md),
   [ADR-0030](../ADR/0030-conversation-sessions-and-context.md),
