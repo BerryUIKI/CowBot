@@ -12,7 +12,8 @@ use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
-    ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+    ChannelParticipant, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+    ConversationTurn,
 };
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
@@ -104,11 +105,53 @@ impl NewTask {
     }
 }
 
+/// Parameters for creating a user-created conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewConversation {
+    pub title: Option<String>,
+    /// Participants in selection order; one makes a single conversation.
+    pub agent_ids: Vec<AgentId>,
+    pub provider_id: Option<String>,
+    pub model: String,
+    /// Route unaddressed group messages with the model; single ignores it.
+    #[serde(default)]
+    pub router_enabled: bool,
+    /// Participant that answers unaddressed group messages.
+    #[serde(default)]
+    pub default_responder: Option<AgentId>,
+}
+
+impl NewConversation {
+    /// A single-agent conversation.
+    pub fn single(
+        title: Option<String>,
+        agent_id: AgentId,
+        provider_id: Option<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            title,
+            agent_ids: vec![agent_id],
+            provider_id,
+            model: model.into(),
+            router_enabled: false,
+            default_responder: None,
+        }
+    }
+}
+
+/// A conversation channel with its fixed settings and participant profiles.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSummary {
+    pub channel: Channel,
+    pub settings: ConversationSettings,
+    pub participants: Vec<AgentProfile>,
+}
+
 /// A live stream of platform events for the UI.
 pub struct EventStream {
     receiver: mpsc::Receiver<Event>,
 }
-
 impl EventStream {
     pub(crate) fn new(receiver: mpsc::Receiver<Event>) -> Self {
         Self { receiver }
@@ -164,17 +207,26 @@ pub trait Client: Send + Sync {
         limit: u32,
     ) -> CowResult<Vec<ChannelMessage>>;
 
-    /// Create a user-created single-agent conversation.
+    /// Create a user-created conversation with one to eight participants.
     ///
-    /// `provider_id` is the configured provider that supplies `model`; the pair
-    /// stays fixed for the conversation.
-    async fn create_conversation(
+    /// One participant creates a single conversation; two or more create a
+    /// group whose membership is fixed. `provider_id` is the configured
+    /// provider that supplies `model`; the pair stays fixed for the
+    /// conversation.
+    async fn create_conversation(&self, conversation: &NewConversation) -> CowResult<Channel>;
+    /// Conversations with their fixed settings and participant profiles.
+    async fn list_conversation_summaries(&self) -> CowResult<Vec<ConversationSummary>>;
+    /// Persisted participants of a conversation, in participant order.
+    async fn list_conversation_participants(
         &self,
-        title: Option<&str>,
-        agent_id: &AgentId,
-        provider_id: Option<String>,
-        model: &str,
-    ) -> CowResult<Channel>;
+        channel_id: &ChannelId,
+    ) -> CowResult<Vec<ChannelParticipant>>;
+    /// Persisted routing decisions of a conversation, most recent first.
+    async fn list_conversation_turns(
+        &self,
+        channel_id: &ChannelId,
+        limit: u32,
+    ) -> CowResult<Vec<ConversationTurn>>;
     async fn conversation_settings(
         &self,
         channel_id: &ChannelId,
@@ -188,6 +240,12 @@ pub trait Client: Send + Sync {
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
     /// Exclude every active context entry; display messages are kept.
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
+    /// Exclude one participant's active context entries.
+    async fn clear_conversation_participant_context(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<u64>;
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;

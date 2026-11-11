@@ -32,6 +32,7 @@ export interface ConversationSettings {
   mode: "single" | "group";
   provider_id: string | null;
   model: string;
+  default_responder: string | null;
   router_enabled: boolean;
   auto_compact: boolean;
   compact_threshold: number;
@@ -46,6 +47,22 @@ export interface CacheUsageSummary {
 }
 
 export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
+
+export interface ConversationParticipantView {
+  agent_id: string;
+  agent_name: string;
+  system_tokens: number;
+  tool_tokens: number;
+  history_tokens: number;
+  latest_tokens: number;
+  total_tokens: number;
+  active_entries: number;
+  excluded_entries: number;
+  percent_used: number | null;
+  state: ContextUsageState;
+  cache_last_run: CacheUsageSummary;
+  cache_conversation: CacheUsageSummary;
+}
 
 export interface ConversationContext {
   channel_id: string;
@@ -66,8 +83,40 @@ export interface ConversationContext {
   state: ContextUsageState;
   auto_compact: boolean;
   compact_threshold: number;
+  router_enabled: boolean;
+  default_responder: string | null;
   cache_last_turn: CacheUsageSummary;
   cache_conversation: CacheUsageSummary;
+  participants: ConversationParticipantView[];
+}
+
+export type RouteSource = "mention" | "router" | "default" | "silent" | "unmatched";
+
+export interface ConversationParticipant {
+  channel_id: string;
+  agent_id: string;
+  position: number;
+  joined_at: string;
+}
+
+export interface ConversationTurn {
+  id: string;
+  channel_id: string;
+  message_id: string;
+  source: RouteSource;
+  selected_agents: string[];
+  unknown_mentions: string[];
+  reason: string | null;
+  router_call_id: string | null;
+  task_ids: string[];
+  mirrored_at: string | null;
+  created_at: string;
+}
+
+export interface ConversationSummary {
+  channel: Channel;
+  settings: ConversationSettings;
+  participants: AgentProfile[];
 }
 
 export interface CompactionOutcome {

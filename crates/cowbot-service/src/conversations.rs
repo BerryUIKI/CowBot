@@ -355,15 +355,18 @@ impl ConversationService {
                         "This conversation has no agent participant. Create a new conversation.",
                     )
                     .await?;
+                let mut report = ChannelTurnReport::default();
                 if settings.mode == ConversationMode::Group {
-                    self.record_turn(&ConversationTurn::new(
+                    let turn = ConversationTurn::new(
                         channel.id.clone(),
                         message.id.clone(),
                         RouteSource::Silent,
-                    ))
-                    .await?;
+                    );
+                    self.record_turn(&turn).await?;
+                    report.route = Some(turn.source);
+                    report.turn_id = Some(turn.id);
                 }
-                Ok(ChannelTurnReport::default())
+                Ok(report)
             }
             1 => {
                 self.reply_single(&channel, &settings, message, llm, tools, options)
@@ -492,13 +495,14 @@ impl ConversationService {
                      conversation.",
                 )
                 .await?;
-            self.record_turn(&ConversationTurn::new(
-                channel.id.clone(),
-                message.id.clone(),
-                RouteSource::Silent,
-            ))
-            .await?;
-            return Ok(ChannelTurnReport::default());
+            let turn =
+                ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Silent);
+            self.record_turn(&turn).await?;
+            return Ok(ChannelTurnReport {
+                route: Some(turn.source),
+                turn_id: Some(turn.id),
+                ..ChannelTurnReport::default()
+            });
         }
         let agents = self.store.list_agents(&self.workspace_id).await?;
 
@@ -537,6 +541,8 @@ impl ConversationService {
             self.record_turn(&turn).await?;
             return Ok(ChannelTurnReport {
                 unknown_mentions: unknown,
+                route: Some(turn.source),
+                turn_id: Some(turn.id),
                 ..ChannelTurnReport::default()
             });
         } else {
@@ -584,6 +590,8 @@ impl ConversationService {
                         self.record_turn(&turn).await?;
                         return Ok(ChannelTurnReport {
                             unknown_mentions: unknown,
+                            route: Some(turn.source),
+                            turn_id: Some(turn.id),
                             ..ChannelTurnReport::default()
                         });
                     };
@@ -703,6 +711,8 @@ impl ConversationService {
             return Ok(ChannelTurnReport {
                 unknown_mentions: unknown,
                 skipped,
+                route: Some(turn.source),
+                turn_id: Some(turn.id),
                 ..ChannelTurnReport::default()
             });
         }
@@ -814,6 +824,8 @@ impl ConversationService {
             replied: settlement.replied,
             failed: settlement.failed,
             skipped,
+            route: Some(turn.source),
+            turn_id: Some(turn.id),
         })
     }
 
