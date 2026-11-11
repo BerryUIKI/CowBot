@@ -3,7 +3,7 @@ use std::io::Read;
 use chrono::Utc;
 use cowbot_core::agent::AgentProfile;
 use cowbot_core::audit::AuditEvent;
-use cowbot_core::channel::{Channel, ChannelMessage};
+use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
     ChannelParticipant, ContextEntry, ContextEvent, ConversationSettings,
 };
@@ -62,6 +62,8 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     let mut messages: Vec<ChannelMessage> = parse_jsonl(required(&entries, MESSAGES_PATH)?)?;
     let participants: Vec<ChannelParticipant> =
         optional_jsonl(&entries, PARTICIPANTS_PATH)?.unwrap_or_default();
+    let mut participants = participants;
+    resequence_legacy_participant_positions(&mut participants);
     let conversation_settings: Vec<ConversationSettings> =
         optional_jsonl(&entries, CONVERSATION_SETTINGS_PATH)?.unwrap_or_default();
     let context_entries: Vec<ContextEntry> =
@@ -210,6 +212,41 @@ fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, PackageError
     Ok(serde_json::from_slice(bytes)?)
 }
 
+/// Give legacy all-zero participant positions one rank in file order.
+///
+/// Packages written before group conversations stored no position, so every
+/// participant of a channel reads as zero. The exporter wrote participants in
+/// creation order, which is the order the migration backfill reconstructs, so
+/// ranking the file order preserves the original roster.
+fn resequence_legacy_participant_positions(participants: &mut [ChannelParticipant]) {
+    let mut totals: std::collections::HashMap<&ChannelId, (usize, usize)> =
+        std::collections::HashMap::new();
+    for participant in participants.iter() {
+        let entry = totals.entry(&participant.channel_id).or_insert((0, 0));
+        entry.0 += 1;
+        if participant.position == 0 {
+            entry.1 += 1;
+        }
+    }
+    let legacy: std::collections::HashSet<ChannelId> = totals
+        .into_iter()
+        .filter(|(_, (total, zero))| *total > 1 && total == zero)
+        .map(|(channel_id, _)| channel_id.clone())
+        .collect();
+    if legacy.is_empty() {
+        return;
+    }
+
+    let mut next: std::collections::HashMap<ChannelId, u32> = std::collections::HashMap::new();
+    for participant in participants.iter_mut() {
+        if legacy.contains(&participant.channel_id) {
+            let position = next.entry(participant.channel_id.clone()).or_insert(0);
+            participant.position = *position;
+            *position += 1;
+        }
+    }
+}
+
 fn parse_jsonl<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<Vec<T>, PackageError> {
     let mut values = Vec::new();
     for line in bytes.split(|byte| *byte == b'\n') {
@@ -312,4 +349,71 @@ fn read_verified_entries(
     }
 
     Ok((manifest, entries))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cowbot_core::agent::AgentId;
+
+    fn participant(channel: &ChannelId, agent: &str, position: u32) -> ChannelParticipant {
+        ChannelParticipant::new(channel.clone(), AgentId::new(agent)).with_position(position)
+    }
+
+    #[test]
+    fn legacy_all_zero_positions_are_resequenced_in_file_order() {
+        let channel = ChannelId::new("c1");
+        let mut participants = vec![
+            participant(&channel, "agent-b", 0),
+            participant(&channel, "agent-a", 0),
+        ];
+        resequence_legacy_participant_positions(&mut participants);
+        let order: Vec<&str> = participants
+            .iter()
+            .map(|participant| participant.agent_id.0.as_str())
+            .collect();
+        assert_eq!(order, vec!["agent-b", "agent-a"]);
+        assert_eq!(
+            participants
+                .iter()
+                .map(|participant| participant.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        // Explicit positions are preserved as written.
+        let mut explicit = vec![
+            participant(&channel, "agent-a", 2),
+            participant(&channel, "agent-b", 1),
+        ];
+        resequence_legacy_participant_positions(&mut explicit);
+        assert_eq!(
+            explicit
+                .iter()
+                .map(|participant| participant.position)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+
+        // A lone participant keeps position zero.
+        let mut single = vec![participant(&channel, "agent-a", 0)];
+        resequence_legacy_participant_positions(&mut single);
+        assert_eq!(single[0].position, 0);
+
+        // Only channels whose participants are all zero are re-sequenced.
+        let other = ChannelId::new("c2");
+        let mut mixed = vec![
+            participant(&channel, "agent-a", 0),
+            participant(&other, "agent-c", 0),
+            participant(&other, "agent-d", 0),
+        ];
+        resequence_legacy_participant_positions(&mut mixed);
+        assert_eq!(
+            mixed
+                .iter()
+                .map(|participant| participant.position)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1]
+        );
+    }
 }

@@ -2,7 +2,8 @@ use cowbot_core::agent::AgentProfile;
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationSettings,
+    ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationMode,
+    ConversationSettings, ConversationTurn, RouteSource,
 };
 use cowbot_core::identity::{Membership, Role, User, Workspace};
 use cowbot_core::permission::{PermissionRule, RuleDecision, RuleSource};
@@ -275,6 +276,116 @@ async fn conversation_context_round_trips() {
         .await
         .unwrap();
     assert_eq!(events.len(), 1);
+}
+
+#[tokio::test]
+async fn group_conversation_round_trips_positions_and_authored_entries() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let seeded = source
+        .list_agents(&workspace.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.name == "Cow-Coder")
+        .unwrap();
+    let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    let reviewer = AgentProfile::new("Reviewer", "Reviewer", "Review", "Careful");
+    for agent in [&planner, &reviewer] {
+        source.upsert_agent(&workspace.id, agent).await.unwrap();
+    }
+    let participants = vec![seeded.id.clone(), planner.id.clone(), reviewer.id.clone()];
+
+    let channel = Channel::conversation("Crew", "Group conversation");
+    let settings = ConversationSettings::group(
+        channel.id.clone(),
+        Some("provider-1".to_string()),
+        "mock-model",
+        Some(planner.id.clone()),
+    );
+    source
+        .create_conversation(&workspace.id, &channel, &settings, &participants)
+        .await
+        .unwrap();
+
+    let mut peer = ContextEntry::peer(
+        channel.id.clone(),
+        seeded.id.clone(),
+        planner.id.clone(),
+        "Planner",
+        "The draft is ready.",
+    );
+    peer.recount();
+    source.append_context_entry(&peer).await.unwrap();
+
+    // Turn rows stay device-local and must never enter a package.
+    let message = ChannelMessage::new(
+        channel.id.clone(),
+        Sender::User("owner".to_string()),
+        "@team status",
+    );
+    source.append_message(&message).await.unwrap();
+    let mut turn =
+        ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Mention);
+    turn.selected_agents = participants.clone();
+    source.insert_conversation_turn(&turn).await.unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let manifest = inspect(&bytes).unwrap();
+    assert!(
+        !manifest
+            .checksums
+            .keys()
+            .any(|path| path.contains("conversation_turns")),
+        "turn rows are device-local and must not be packaged"
+    );
+
+    let target = test_store().await;
+    import_workspace(&target, &bytes).await.unwrap();
+
+    let stored = target.list_channel_participants(&channel.id).await.unwrap();
+    assert_eq!(
+        stored
+            .iter()
+            .map(|participant| participant.agent_id.clone())
+            .collect::<Vec<_>>(),
+        participants
+    );
+    assert_eq!(
+        stored
+            .iter()
+            .map(|participant| participant.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    let stored_settings = target
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_settings.mode, ConversationMode::Group);
+    assert_eq!(
+        stored_settings.default_responder.as_ref(),
+        Some(&planner.id)
+    );
+
+    let entries = target
+        .list_context_entries(&channel.id, &seeded.id)
+        .await
+        .unwrap();
+    let authored = entries
+        .iter()
+        .find(|entry| entry.author_agent_id.is_some())
+        .expect("authored peer entry should round trip");
+    assert_eq!(authored.author_agent_id.as_ref(), Some(&planner.id));
+    assert_eq!(authored.content, "[Planner] The draft is ready.");
+
+    assert!(target
+        .list_conversation_turns(&channel.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
