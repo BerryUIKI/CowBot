@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cowbot_bus::EventBus;
@@ -6,20 +7,25 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split, project_context, CacheUsageSummary, CompactionOutcome, ContextEntry,
-    ContextEntryKind, ContextEvent, ContextEventKind, ContextRole, ConversationContext,
-    ConversationMode, ConversationSettings, ConversationSettingsUpdate,
-    CONTEXT_SUMMARY_INPUT_TOKENS,
+    compaction_split, context_usage_state, project_context, CacheUsageSummary, CompactionOutcome,
+    ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
+    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS,
+    MAX_GROUP_PARTICIPANTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
-use cowbot_core::task::Task;
+use cowbot_core::mention::resolve_mentions;
+use cowbot_core::task::{Task, TaskId};
 use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord, UsageTotals};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
-use crate::channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};
+use crate::channel_agents::{
+    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
+};
 use crate::channels::{normalize_channel_name, ChannelService};
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
@@ -65,11 +71,75 @@ impl ConversationService {
         provider_id: Option<String>,
         model: &str,
     ) -> CowResult<Channel> {
-        let agent = self
-            .store
-            .get_agent(agent_id)
-            .await?
-            .ok_or_else(|| CowError::Config(format!("agent '{}' was not found", agent_id.0)))?;
+        self.create_with(
+            title,
+            std::slice::from_ref(agent_id),
+            provider_id,
+            model,
+            None,
+        )
+        .await
+    }
+
+    /// Create a group conversation with an ordered participant list.
+    ///
+    /// The participant order is selection order and is preserved for routing,
+    /// display, and the default responder. Membership is fixed after creation.
+    pub async fn create_group(
+        &self,
+        title: Option<&str>,
+        agent_ids: &[AgentId],
+        provider_id: Option<String>,
+        model: &str,
+        default_responder: Option<AgentId>,
+    ) -> CowResult<Channel> {
+        if !(MIN_GROUP_PARTICIPANTS..=MAX_GROUP_PARTICIPANTS).contains(&agent_ids.len()) {
+            return Err(CowError::Config(format!(
+                "a group conversation needs between {MIN_GROUP_PARTICIPANTS} and \
+                 {MAX_GROUP_PARTICIPANTS} participants"
+            )));
+        }
+        self.create_with(title, agent_ids, provider_id, model, default_responder)
+            .await
+    }
+
+    async fn create_with(
+        &self,
+        title: Option<&str>,
+        agent_ids: &[AgentId],
+        provider_id: Option<String>,
+        model: &str,
+        default_responder: Option<AgentId>,
+    ) -> CowResult<Channel> {
+        if agent_ids.is_empty() {
+            return Err(CowError::Config(
+                "a conversation needs at least one participant".into(),
+            ));
+        }
+        let unique: std::collections::HashSet<&AgentId> = agent_ids.iter().collect();
+        if unique.len() != agent_ids.len() {
+            return Err(CowError::Config(
+                "a participant may appear only once in a conversation".into(),
+            ));
+        }
+
+        let mut agents = Vec::with_capacity(agent_ids.len());
+        for agent_id in agent_ids {
+            let agent =
+                self.store.get_agent(agent_id).await?.ok_or_else(|| {
+                    CowError::Config(format!("agent '{}' was not found", agent_id.0))
+                })?;
+            agents.push(agent);
+        }
+
+        if let Some(responder) = &default_responder {
+            if !agent_ids.contains(responder) {
+                return Err(CowError::Config(
+                    "the default responder must be a participant".into(),
+                ));
+            }
+        }
+
         let model = model.trim();
         if model.is_empty() {
             return Err(CowError::Config(
@@ -77,7 +147,14 @@ impl ConversationService {
             ));
         }
 
-        let fallback_title = format!("Conversation with {}", agent.name);
+        let names = agents
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect::<Vec<_>>();
+        let fallback_title = match names.as_slice() {
+            [agent] => format!("Conversation with {agent}"),
+            _ => names.join(", "),
+        };
         let base = title
             .map(str::trim)
             .filter(|title| !title.is_empty())
@@ -85,20 +162,26 @@ impl ConversationService {
         let base = truncate_title(&normalize_channel_name(base)?);
         let name = self.unique_name(&base).await?;
 
-        let channel = Channel::conversation(name, format!("Conversation with {}", agent.name));
-        let settings =
-            ConversationSettings::new(channel.id.clone(), provider_id, model.to_string());
-        self.store
-            .create_conversation(
-                &self.workspace_id,
-                &channel,
-                &settings,
-                std::slice::from_ref(agent_id),
+        let topic = match names.as_slice() {
+            [agent] => format!("Conversation with {agent}"),
+            _ => format!("Group conversation with {}", names.join(", ")),
+        };
+        let channel = Channel::conversation(name, topic);
+        let settings = if agents.len() >= MIN_GROUP_PARTICIPANTS {
+            ConversationSettings::group(
+                channel.id.clone(),
+                provider_id,
+                model.to_string(),
+                default_responder,
             )
+        } else {
+            ConversationSettings::new(channel.id.clone(), provider_id, model.to_string())
+        };
+        self.store
+            .create_conversation(&self.workspace_id, &channel, &settings, agent_ids)
             .await?;
-        self.bus.publish(cowbot_core::event::Event::new(
-            cowbot_core::event::EventPayload::ChannelCreated(channel.clone()),
-        ));
+        self.bus
+            .publish(Event::new(EventPayload::ChannelCreated(channel.clone())));
         Ok(channel)
     }
 
@@ -128,41 +211,101 @@ impl ConversationService {
             }
             settings.compact_threshold = threshold;
         }
+        if let Some(router_enabled) = update.router_enabled {
+            settings.router_enabled = router_enabled;
+        }
+        if let Some(responder) = &update.default_responder {
+            let participants = self.store.list_channel_participants(channel_id).await?;
+            if !participants
+                .iter()
+                .any(|participant| &participant.agent_id == responder)
+            {
+                return Err(CowError::Config(
+                    "the default responder must be a participant".into(),
+                ));
+            }
+            settings.default_responder = Some(responder.clone());
+        }
         settings.updated_at = chrono::Utc::now();
         self.store.update_conversation_settings(&settings).await?;
         Ok(settings)
     }
 
     /// Token breakdown, cache summaries, and fixed model of a conversation.
+    ///
+    /// Group conversations return one entry per participant; the top-level
+    /// fields mirror the first participant for older callers.
     pub async fn context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
         let channel = self.conversation_channel(channel_id).await?;
-        let agent = self.single_participant(&channel).await?;
+        let participants = self.load_participants(&channel).await?;
+        if participants.is_empty() {
+            return Err(CowError::Config(format!(
+                "conversation '{}' has no participant",
+                channel.name
+            )));
+        }
         let settings = self.settings(channel_id).await?;
         let agents = self.store.list_agents(&self.workspace_id).await?;
-        let entries = self
-            .store
-            .list_context_entries(channel_id, &agent.id)
-            .await?;
-        let system_tokens = estimate_tokens(&conversation_system_prompt(&agent, &agents));
-        let projection = project_context(system_tokens, 0, &entries);
-        let cache_last_turn =
-            cache_summary(&self.store.latest_run_usage_for_channel(channel_id).await?);
+        let default_name = resolve_default_responder(&settings, &participants)
+            .0
+            .map(|agent| agent.name.clone());
         let cache_conversation =
             cache_summary(&self.store.sum_llm_usage_for_channel(channel_id).await?);
+        let group = participants.len() >= MIN_GROUP_PARTICIPANTS;
 
+        let mut contexts = Vec::with_capacity(participants.len());
+        for agent in &participants {
+            let entries = self
+                .store
+                .list_context_entries(channel_id, &agent.id)
+                .await?;
+            let system_tokens = if group {
+                estimate_tokens(&group_system_prompt(
+                    agent,
+                    &participants,
+                    default_name.as_deref(),
+                    None,
+                    &agents,
+                ))
+            } else {
+                estimate_tokens(&conversation_system_prompt(agent, &agents))
+            };
+            let projection = project_context(system_tokens, 0, &entries);
+            let cache_last_run = cache_summary(
+                &self
+                    .store
+                    .latest_run_usage_for_channel_agent(channel_id, &agent.id)
+                    .await?,
+            );
+            contexts.push(ConversationParticipantContext {
+                agent_id: agent.id.clone(),
+                agent_name: agent.name.clone(),
+                projection,
+                cache_last_run,
+                cache_conversation: cache_conversation.clone(),
+            });
+        }
+
+        let first = contexts
+            .first()
+            .expect("participants are checked to be non-empty");
         Ok(ConversationContext {
             channel_id: channel.id,
-            agent_id: agent.id,
+            agent_id: first.agent_id.clone(),
             model: settings.model,
             provider_id: settings.provider_id,
-            projection,
-            cache_last_turn,
+            projection: first.projection.clone(),
+            cache_last_turn: first.cache_last_run.clone(),
             cache_conversation,
-            participants: Vec::new(),
+            participants: contexts,
         })
     }
 
-    /// Answer `message` in a conversation with its participant agent.
+    /// Answer `message` in a conversation.
+    ///
+    /// The participant count is authoritative: one participant is served by the
+    /// single-agent path (imported rows with a stale mode included), and two or
+    /// more use group routing.
     pub async fn reply(
         &self,
         channel_id: &ChannelId,
@@ -173,12 +316,46 @@ impl ConversationService {
     ) -> CowResult<ChannelTurnReport> {
         let channel = self.conversation_channel(channel_id).await?;
         let settings = self.settings(channel_id).await?;
-        if settings.mode != ConversationMode::Single {
-            return Err(CowError::Config(
-                "group conversations are not supported yet".into(),
-            ));
+        let participants = self.store.list_channel_participants(&channel.id).await?;
+        match participants.len() {
+            0 => {
+                self.channels
+                    .post_system_notice(
+                        &channel.id,
+                        "This conversation has no agent participant. Create a new conversation.",
+                    )
+                    .await?;
+                if settings.mode == ConversationMode::Group {
+                    self.record_turn(&ConversationTurn::new(
+                        channel.id.clone(),
+                        message.id.clone(),
+                        RouteSource::Silent,
+                    ))
+                    .await?;
+                }
+                Ok(ChannelTurnReport::default())
+            }
+            1 => {
+                self.reply_single(&channel, &settings, message, llm, tools, options)
+                    .await
+            }
+            _ => {
+                self.reply_group(&channel, &settings, message, llm, tools, options)
+                    .await
+            }
         }
-        let Some(agent) = self.participant_or_none(&channel).await? else {
+    }
+
+    async fn reply_single(
+        &self,
+        channel: &Channel,
+        settings: &ConversationSettings,
+        message: &ChannelMessage,
+        llm: Arc<dyn LlmProvider>,
+        tools: ToolRegistry,
+        options: &ChannelTurnOptions,
+    ) -> CowResult<ChannelTurnReport> {
+        let Some(agent) = self.participant_or_none(channel).await? else {
             self.channels
                 .post_system_notice(
                     &channel.id,
@@ -252,14 +429,494 @@ impl ConversationService {
             .await?;
 
         let outcome = scheduler.run_until_idle().await;
-        self.channels.post_task_outcome(&channel, &task_id).await?;
+        self.channels.post_task_outcome(channel, &task_id).await?;
         outcome?;
 
         Ok(ChannelTurnReport {
             agents: vec![agent.id],
             unknown_mentions: Vec::new(),
             tasks: vec![task_id],
+            ..ChannelTurnReport::default()
         })
+    }
+
+    /// Route one group message and fan it out to its responders.
+    ///
+    /// Explicit mentions always win. Without a mention the default responder
+    /// answers; the model router arrives in M3.4 behind `router_enabled`.
+    async fn reply_group(
+        &self,
+        channel: &Channel,
+        settings: &ConversationSettings,
+        message: &ChannelMessage,
+        llm: Arc<dyn LlmProvider>,
+        tools: ToolRegistry,
+        options: &ChannelTurnOptions,
+    ) -> CowResult<ChannelTurnReport> {
+        let participants = self.load_participants(channel).await?;
+        if participants.is_empty() {
+            self.channels
+                .post_system_notice(
+                    &channel.id,
+                    "This conversation has no available participants. Create a new group \
+                     conversation.",
+                )
+                .await?;
+            self.record_turn(&ConversationTurn::new(
+                channel.id.clone(),
+                message.id.clone(),
+                RouteSource::Silent,
+            ))
+            .await?;
+            return Ok(ChannelTurnReport::default());
+        }
+        let agents = self.store.list_agents(&self.workspace_id).await?;
+
+        // Every participant stays current for later turns, including the ones
+        // that do not answer this message.
+        for participant in &participants {
+            let mut entry = ContextEntry::new(
+                channel.id.clone(),
+                participant.id.clone(),
+                ContextRole::User,
+                message.content.trim(),
+            );
+            entry.recount();
+            self.store.append_context_entry(&entry).await?;
+        }
+
+        let resolution = resolve_mentions(&message.content, &participants);
+        let unknown = resolution.unknown.clone();
+        let mut turn =
+            ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Silent);
+        turn.unknown_mentions = unknown.clone();
+        let mut skipped = Vec::new();
+        let mut auto_compacted = Vec::new();
+
+        let selected = if !resolution.agents.is_empty() {
+            turn.source = RouteSource::Mention;
+            if !resolution.unknown.is_empty() {
+                self.post_participant_notice(channel, &resolution.unknown, &participants)
+                    .await?;
+            }
+            resolution.agents
+        } else if !resolution.unknown.is_empty() {
+            turn.source = RouteSource::Unmatched;
+            self.post_participant_notice(channel, &resolution.unknown, &participants)
+                .await?;
+            self.record_turn(&turn).await?;
+            return Ok(ChannelTurnReport {
+                unknown_mentions: unknown,
+                ..ChannelTurnReport::default()
+            });
+        } else {
+            let (responder, stale) = resolve_default_responder(settings, &participants);
+            let Some(responder) = responder else {
+                turn.source = RouteSource::Silent;
+                self.record_turn(&turn).await?;
+                return Ok(ChannelTurnReport {
+                    unknown_mentions: unknown,
+                    ..ChannelTurnReport::default()
+                });
+            };
+            if stale {
+                self.channels
+                    .post_system_notice(
+                        &channel.id,
+                        &format!(
+                            "The configured default responder is no longer a participant; {} \
+                             answered instead.",
+                            responder.name
+                        ),
+                    )
+                    .await?;
+            }
+            turn.source = RouteSource::Default;
+            vec![responder.clone()]
+        };
+
+        let default_name = resolve_default_responder(settings, &participants)
+            .0
+            .map(|agent| agent.name.clone());
+        let capacities: HashMap<&AgentId, &ParticipantCapacity> = options
+            .participant_capacity
+            .iter()
+            .map(|capacity| (&capacity.agent_id, capacity))
+            .collect();
+
+        let mut responders = Vec::new();
+        for agent in &selected {
+            let capacity = capacities.get(&agent.id);
+            let window = capacity
+                .map(|capacity| capacity.usable_window)
+                .filter(|window| *window > 0);
+            if let Some(window) = window {
+                let tool_tokens = capacity.map(|capacity| capacity.tool_tokens).unwrap_or(0);
+                if settings.auto_compact
+                    && self
+                        .branch_crosses_threshold(
+                            channel,
+                            agent,
+                            &participants,
+                            default_name.as_deref(),
+                            options.platform_context.as_deref(),
+                            &agents,
+                            tool_tokens,
+                            window,
+                            settings.compact_threshold,
+                        )
+                        .await?
+                {
+                    let outcome = self
+                        .compact_branch(channel, agent, llm.clone(), &settings.model, false)
+                        .await?;
+                    if outcome.compacted {
+                        auto_compacted.push(agent.name.clone());
+                    }
+                }
+                let entries = self
+                    .store
+                    .list_context_entries(&channel.id, &agent.id)
+                    .await?;
+                let system_tokens = estimate_tokens(&group_system_prompt(
+                    agent,
+                    &participants,
+                    default_name.as_deref(),
+                    options.platform_context.as_deref(),
+                    &agents,
+                ));
+                let projection = project_context(system_tokens, tool_tokens, &entries);
+                if projection.total_tokens() >= window {
+                    skipped.push(agent.id.clone());
+                    self.channels
+                        .post_system_notice(
+                            &channel.id,
+                            &format!(
+                                "{} was skipped because its context is full. Clear or compact \
+                                 its context to include it again.",
+                                agent.name
+                            ),
+                        )
+                        .await?;
+                    continue;
+                }
+            }
+            responders.push(agent.clone());
+        }
+
+        if !auto_compacted.is_empty() {
+            self.channels
+                .post_system_notice(
+                    &channel.id,
+                    &format!(
+                        "Context compacted automatically for {}.",
+                        auto_compacted.join(", ")
+                    ),
+                )
+                .await?;
+        }
+
+        turn.selected_agents = responders
+            .iter()
+            .map(|agent| agent.id.clone())
+            .collect::<Vec<_>>();
+        if responders.is_empty() && !skipped.is_empty() {
+            turn.reason = Some("every selected participant's context is full".to_string());
+            self.channels
+                .post_system_notice(
+                    &channel.id,
+                    "No participant had room to answer. Compact or clear a context branch and \
+                     try again.",
+                )
+                .await?;
+            self.record_turn(&turn).await?;
+            return Ok(ChannelTurnReport {
+                unknown_mentions: unknown,
+                skipped,
+                ..ChannelTurnReport::default()
+            });
+        }
+
+        let requester = match &message.sender {
+            Sender::User(id) => AssignmentRequester::User(id.clone()),
+            _ => AssignmentRequester::System,
+        };
+        let max_concurrency = responders.len().clamp(1, MAX_GROUP_PARTICIPANTS);
+        let mut scheduler = AssignmentScheduler::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.workspace_id.clone(),
+            max_concurrency,
+        )
+        .with_scope()
+        .with_model_permissions(options.use_model_permissions)
+        .with_session_decisions(self.session_decisions.clone());
+        let run_options = CrewRunOptions {
+            approval_level: options.approval_level,
+            channel_id: Some(channel.id.clone()),
+            max_concurrency,
+            use_model_permissions: options.use_model_permissions,
+            capture_plan_task: None,
+        };
+        let platform = options.platform_context.as_deref();
+
+        // Persist the route before the drain so the audit survives a restart
+        // even when a run fails halfway through.
+        self.store.insert_conversation_turn(&turn).await?;
+
+        let mut tasks = Vec::new();
+        for agent in &responders {
+            scheduler.register_agent(
+                agent.clone(),
+                llm.clone(),
+                tools.clone(),
+                settings.model.clone(),
+            );
+            let entries = self
+                .store
+                .list_context_entries(&channel.id, &agent.id)
+                .await?;
+            let messages = assemble_group_messages(
+                agent,
+                &participants,
+                default_name.as_deref(),
+                platform,
+                &agents,
+                &entries,
+            );
+            let task = Task::new(
+                message.content.trim(),
+                "A concise reply addressed to the user in this group conversation.",
+            )
+            .in_channel(channel.id.clone())
+            .assign_to(agent.id.clone());
+            let mut task_options = run_options.clone();
+            if options.approval_level == ApprovalLevel::PlanOnly {
+                task_options.capture_plan_task = Some(task.id.clone());
+            }
+            scheduler
+                .enqueue_conversation_turn(
+                    &task,
+                    requester.clone(),
+                    AssignmentOrigin::User,
+                    &task_options,
+                    messages,
+                    channel.id.clone(),
+                    agent.id.clone(),
+                )
+                .await?;
+            tasks.push(task.id);
+        }
+        turn.task_ids = tasks.clone();
+        self.store.update_conversation_turn(&turn).await?;
+        self.bus
+            .publish(Event::new(EventPayload::ConversationRouted(turn.clone())));
+
+        // Replies post as their tasks settle, so fast agents answer without
+        // waiting for the slowest participant.
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let consumer = tokio::spawn(self.clone().consume_group_settlements(
+            channel.clone(),
+            participants.clone(),
+            receiver,
+        ));
+        let outcome = scheduler.run_until_idle_observed(sender).await;
+        let settlement = consumer
+            .await
+            .map_err(|error| CowError::Task(format!("reply poster failed: {error}")))?;
+        if let Err(error) = outcome {
+            tracing::warn!(
+                error = %error,
+                "Group turn finished with an error; task statuses are authoritative"
+            );
+        }
+
+        turn.mirrored_at = Some(chrono::Utc::now());
+        self.store.update_conversation_turn(&turn).await?;
+
+        Ok(ChannelTurnReport {
+            agents: responders
+                .iter()
+                .map(|agent| agent.id.clone())
+                .collect::<Vec<_>>(),
+            unknown_mentions: unknown,
+            tasks,
+            replied: settlement.replied,
+            failed: settlement.failed,
+            skipped,
+        })
+    }
+
+    async fn consume_group_settlements(
+        self,
+        channel: Channel,
+        participants: Vec<AgentProfile>,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<TaskId>,
+    ) -> GroupSettlement {
+        let mut settlement = GroupSettlement::default();
+        while let Some(task_id) = receiver.recv().await {
+            match self
+                .settle_group_task(&channel, &task_id, &participants)
+                .await
+            {
+                Ok(Some((agent_id, replied))) => {
+                    if replied {
+                        settlement.replied.push(agent_id);
+                    } else {
+                        settlement.failed.push(agent_id);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        task = %task_id.0,
+                        "Failed to post a group reply"
+                    );
+                }
+            }
+        }
+        settlement
+    }
+
+    async fn settle_group_task(
+        &self,
+        channel: &Channel,
+        task_id: &TaskId,
+        participants: &[AgentProfile],
+    ) -> CowResult<Option<(AgentId, bool)>> {
+        let Some(task) = self.store.get_task(task_id).await? else {
+            return Ok(None);
+        };
+        let Some(assignee) = task.assigned_agent.clone() else {
+            return Ok(None);
+        };
+        let name = match participants.iter().find(|agent| agent.id == assignee) {
+            Some(agent) => agent.name.clone(),
+            None => self
+                .store
+                .get_agent(&assignee)
+                .await?
+                .map(|agent| agent.name)
+                .unwrap_or_else(|| format!("Agent {}", assignee.0)),
+        };
+
+        match &task.status {
+            cowbot_core::task::TaskStatus::Completed { output } => {
+                let content = output.trim();
+                if content.is_empty() {
+                    self.channels
+                        .post_system_notice(
+                            &channel.id,
+                            &format!("{name} finished without a reply."),
+                        )
+                        .await?;
+                    return Ok(None);
+                }
+                self.channels
+                    .post_message(
+                        &channel.id,
+                        Sender::Agent(assignee.clone()),
+                        content.to_string(),
+                    )
+                    .await?;
+                for participant in participants
+                    .iter()
+                    .filter(|participant| participant.id != assignee)
+                {
+                    let peer = ContextEntry::peer(
+                        channel.id.clone(),
+                        participant.id.clone(),
+                        assignee.clone(),
+                        &name,
+                        content,
+                    );
+                    self.store.append_context_entry(&peer).await?;
+                }
+                Ok(Some((assignee, true)))
+            }
+            cowbot_core::task::TaskStatus::Failed { error } => {
+                self.channels
+                    .post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
+                    .await?;
+                Ok(Some((assignee, false)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn post_participant_notice(
+        &self,
+        channel: &Channel,
+        rejected: &[String],
+        participants: &[AgentProfile],
+    ) -> CowResult<()> {
+        let rejected = rejected
+            .iter()
+            .map(|name| format!("@{name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let available = participants
+            .iter()
+            .map(|agent| format!("@{}", agent.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.channels
+            .post_system_notice(
+                &channel.id,
+                &format!("No participant matched {rejected}. Available participants: {available}."),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn record_turn(&self, turn: &ConversationTurn) -> CowResult<()> {
+        self.store.insert_conversation_turn(turn).await?;
+        self.bus
+            .publish(Event::new(EventPayload::ConversationRouted(turn.clone())));
+        Ok(())
+    }
+
+    async fn load_participants(&self, channel: &Channel) -> CowResult<Vec<AgentProfile>> {
+        let links = self.store.list_channel_participants(&channel.id).await?;
+        let mut participants = Vec::with_capacity(links.len());
+        for link in links {
+            if let Some(agent) = self.store.get_agent(&link.agent_id).await? {
+                participants.push(agent);
+            }
+        }
+        Ok(participants)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn branch_crosses_threshold(
+        &self,
+        channel: &Channel,
+        agent: &AgentProfile,
+        participants: &[AgentProfile],
+        default_name: Option<&str>,
+        platform_context: Option<&str>,
+        agents: &[AgentProfile],
+        tool_tokens: u32,
+        window: u32,
+        compact_threshold: u32,
+    ) -> CowResult<bool> {
+        let entries = self
+            .store
+            .list_context_entries(&channel.id, &agent.id)
+            .await?;
+        let system_tokens = estimate_tokens(&group_system_prompt(
+            agent,
+            participants,
+            default_name,
+            platform_context,
+            agents,
+        ));
+        let projection = project_context(system_tokens, tool_tokens, &entries);
+        let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
+        Ok(percent
+            .map(|percent| percent >= compact_threshold as f32)
+            .unwrap_or(false))
     }
 
     /// Summarize older context entries and exclude them from future requests.
@@ -274,6 +931,45 @@ impl ConversationService {
     ) -> CowResult<CompactionOutcome> {
         let channel = self.conversation_channel(channel_id).await?;
         let agent = self.single_participant(&channel).await?;
+        self.compact_branch(&channel, &agent, llm, model, true)
+            .await
+    }
+
+    /// Summarize one participant's context branch.
+    ///
+    /// Manual group compaction targets one participant; a clear-all action
+    /// repeats this per branch.
+    pub async fn compact_participant(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+    ) -> CowResult<CompactionOutcome> {
+        let channel = self.conversation_channel(channel_id).await?;
+        let agent = self
+            .load_participants(&channel)
+            .await?
+            .into_iter()
+            .find(|agent| &agent.id == agent_id)
+            .ok_or_else(|| {
+                CowError::Config(format!(
+                    "agent '{}' is not a participant of '{}'",
+                    agent_id.0, channel.name
+                ))
+            })?;
+        self.compact_branch(&channel, &agent, llm, model, true)
+            .await
+    }
+
+    async fn compact_branch(
+        &self,
+        channel: &Channel,
+        agent: &AgentProfile,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+        announce: bool,
+    ) -> CowResult<CompactionOutcome> {
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
@@ -317,7 +1013,7 @@ impl ConversationService {
             temperature: Some(0.2),
         };
         let response = llm.chat_complete(&request).await?;
-        self.record_compaction_usage(&channel, &agent, model, &response)
+        self.record_compaction_usage(channel, agent, model, &response)
             .await;
 
         let summary_text = response
@@ -356,18 +1052,20 @@ impl ConversationService {
             .compact_context(&summary, &excluded_ids, &event)
             .await?;
 
-        self.channels
-            .post_system_notice(
-                &channel.id,
-                &format!(
-                    "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
-                     Earlier messages stay visible but are no longer sent to the model.",
-                    summarized.len(),
-                    tokens_before,
-                    tokens_after
-                ),
-            )
-            .await?;
+        if announce {
+            self.channels
+                .post_system_notice(
+                    &channel.id,
+                    &format!(
+                        "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
+                         Earlier messages stay visible but are no longer sent to the model.",
+                        summarized.len(),
+                        tokens_before,
+                        tokens_after
+                    ),
+                )
+                .await?;
+        }
 
         Ok(CompactionOutcome {
             compacted: true,
@@ -381,37 +1079,115 @@ impl ConversationService {
     /// Exclude every active entry from future model requests.
     ///
     /// The rows and display messages stay; the model starts from an empty
-    /// context after this call.
+    /// context after this call. Group conversations clear every participant
+    /// branch and record one event per branch.
     pub async fn clear_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
         let channel = self.conversation_channel(channel_id).await?;
-        let agent = self.single_participant(&channel).await?;
+        let participants = self.load_participants(&channel).await?;
+        if participants.is_empty() {
+            return Err(CowError::Config(format!(
+                "conversation '{}' has no participant",
+                channel.name
+            )));
+        }
+        let mut tokens_by_agent = Vec::with_capacity(participants.len());
+        for agent in &participants {
+            let entries = self
+                .store
+                .list_context_entries(&channel.id, &agent.id)
+                .await?;
+            let tokens_before = entries
+                .iter()
+                .filter(|entry| !entry.excluded)
+                .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
+            tokens_by_agent.push((agent.id.clone(), tokens_before));
+        }
+        let cleared = self.store.exclude_all_context_entries(&channel.id).await?;
+        if cleared > 0 {
+            for (agent_id, tokens_before) in &tokens_by_agent {
+                let event = ContextEvent::new(
+                    channel.id.clone(),
+                    agent_id.clone(),
+                    ContextEventKind::Clear,
+                    *tokens_before,
+                    0,
+                );
+                self.store.record_context_event(&event).await?;
+            }
+            let notice = if participants.len() == 1 {
+                "Context cleared. Earlier messages stay visible but are no longer sent to the \
+                 model."
+                    .to_string()
+            } else {
+                format!(
+                    "Context cleared for all {} participants. Earlier messages stay visible but \
+                     are no longer sent to the model.",
+                    participants.len()
+                )
+            };
+            self.channels
+                .post_system_notice(&channel.id, &notice)
+                .await?;
+        }
+        Ok(cleared)
+    }
+
+    /// Exclude one participant's active entries from future model requests.
+    pub async fn clear_participant_context(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<u64> {
+        let channel = self.conversation_channel(channel_id).await?;
+        let agent = self
+            .load_participants(&channel)
+            .await?
+            .into_iter()
+            .find(|agent| &agent.id == agent_id)
+            .ok_or_else(|| {
+                CowError::Config(format!(
+                    "agent '{}' is not a participant of '{}'",
+                    agent_id.0, channel.name
+                ))
+            })?;
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
-        let tokens_before = entries
+        let active = entries
             .iter()
             .filter(|entry| !entry.excluded)
+            .collect::<Vec<_>>();
+        let tokens_before = active
+            .iter()
             .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
-        let cleared = self.store.exclude_all_context_entries(&channel.id).await?;
-        if cleared > 0 {
-            let event = ContextEvent::new(
-                channel.id.clone(),
-                agent.id.clone(),
-                ContextEventKind::Clear,
-                tokens_before,
-                0,
-            );
-            self.store.record_context_event(&event).await?;
-            self.channels
-                .post_system_notice(
-                    &channel.id,
-                    "Context cleared. Earlier messages stay visible but are no longer sent to \
-                     the model.",
-                )
-                .await?;
+        let ids = active
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(0);
         }
-        Ok(cleared)
+        self.store.exclude_context_entries(&ids).await?;
+        let event = ContextEvent::new(
+            channel.id.clone(),
+            agent.id.clone(),
+            ContextEventKind::Clear,
+            tokens_before,
+            0,
+        );
+        self.store.record_context_event(&event).await?;
+        self.channels
+            .post_system_notice(
+                &channel.id,
+                &format!(
+                    "Context cleared for {}. Earlier messages stay visible but are no longer \
+                     sent to the model.",
+                    agent.name
+                ),
+            )
+            .await?;
+        Ok(ids.len() as u64)
     }
 
     async fn conversation_channel(&self, channel_id: &ChannelId) -> CowResult<Channel> {
@@ -516,6 +1292,97 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
         cached_input_tokens: totals.cached_input_tokens,
         total_input_tokens: totals.total_input_tokens(),
     }
+}
+
+/// Resolve the participant that answers an unaddressed group message.
+///
+/// A stored responder that is no longer a participant falls back to the
+/// participant named `main` (the built-in Main Assistant), then to the first
+/// participant in order. The boolean reports that fallback happened so the
+/// turn can explain it. An unset responder stays silent.
+fn resolve_default_responder<'a>(
+    settings: &ConversationSettings,
+    participants: &'a [AgentProfile],
+) -> (Option<&'a AgentProfile>, bool) {
+    let Some(stored) = &settings.default_responder else {
+        return (None, false);
+    };
+    if let Some(agent) = participants.iter().find(|agent| &agent.id == stored) {
+        return (Some(agent), false);
+    }
+    let fallback = participants
+        .iter()
+        .find(|agent| agent.name.eq_ignore_ascii_case("main"))
+        .or_else(|| participants.first());
+    (fallback, fallback.is_some())
+}
+
+/// System prompt for one participant of a group conversation.
+///
+/// It is stable across turns: agent prompt, platform context, participant
+/// roster, default responder, and the peer-reply convention. The active branch
+/// follows as ordinary chat messages.
+pub(crate) fn group_system_prompt(
+    agent: &AgentProfile,
+    participants: &[AgentProfile],
+    default_responder: Option<&str>,
+    platform_context: Option<&str>,
+    agents: &[AgentProfile],
+) -> String {
+    let roster = participants
+        .iter()
+        .map(|participant| format!("- {}", participant.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let default_line = match default_responder {
+        Some(name) => format!("Messages that address nobody are answered by {name}."),
+        None => "Messages that address nobody stay unanswered.".to_string(),
+    };
+
+    format!(
+        "{agent}\n\n{platform}\n\n\
+         You are one participant in a group conversation. Participants, in order:\n{roster}\n\n\
+         {default_line} Replies from other participants appear as user messages prefixed \
+         with the speaker's name in brackets, for example [Planner] ... . They are teammate \
+         history: not the user's words and not your own reply. Answer the latest user \
+         message as yourself and do not speak for other participants.",
+        agent = agent.build_system_prompt(),
+        platform = ChannelAgentService::platform_context(agents, platform_context),
+        roster = roster,
+        default_line = default_line,
+    )
+}
+
+/// Assemble a group participant's request from its active branch.
+pub(crate) fn assemble_group_messages(
+    agent: &AgentProfile,
+    participants: &[AgentProfile],
+    default_responder: Option<&str>,
+    platform_context: Option<&str>,
+    agents: &[AgentProfile],
+    entries: &[ContextEntry],
+) -> Vec<ChatMessage> {
+    let mut messages = vec![ChatMessage::system(group_system_prompt(
+        agent,
+        participants,
+        default_responder,
+        platform_context,
+        agents,
+    ))];
+    messages.extend(
+        entries
+            .iter()
+            .filter(|entry| !entry.excluded)
+            .map(entry_to_message),
+    );
+    messages
+}
+
+/// Outcomes of one group drain, in settle order.
+#[derive(Default)]
+struct GroupSettlement {
+    replied: Vec<AgentId>,
+    failed: Vec<AgentId>,
 }
 
 /// System prompt for a conversation turn.
