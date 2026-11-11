@@ -158,6 +158,7 @@ impl ConversationService {
             projection,
             cache_last_turn,
             cache_conversation,
+            participants: Vec::new(),
         })
     }
 

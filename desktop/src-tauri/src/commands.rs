@@ -1376,6 +1376,8 @@ pub async fn update_conversation_settings(
             &ConversationSettingsUpdate {
                 auto_compact,
                 compact_threshold,
+                router_enabled: None,
+                default_responder: None,
             },
         )
         .await
@@ -2260,6 +2262,7 @@ mod tests {
             },
             cache_last_turn: CacheUsageSummary::default(),
             cache_conversation: CacheUsageSummary::default(),
+            participants: Vec::new(),
         }
     }
 

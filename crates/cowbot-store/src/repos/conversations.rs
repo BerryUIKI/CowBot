@@ -23,6 +23,8 @@ impl ParticipantRow {
         Ok(ChannelParticipant {
             channel_id: ChannelId(self.channel_id),
             agent_id: AgentId(self.agent_id),
+            // M3.2 reads the stored position once migration 0013 lands.
+            position: 0,
             joined_at: parse_datetime(&self.joined_at)?,
         })
     }
@@ -52,6 +54,8 @@ impl SettingsRow {
             mode,
             provider_id: self.provider_id,
             model: self.model,
+            // M3.2 reads the stored column once migration 0013 lands.
+            default_responder: None,
             router_enabled: self.router_enabled != 0,
             auto_compact: self.auto_compact != 0,
             compact_threshold: self.compact_threshold.clamp(1, 100) as u32,
@@ -90,6 +94,8 @@ impl ContextEntryRow {
             id: self.id,
             channel_id: ChannelId(self.channel_id),
             agent_id: AgentId(self.agent_id),
+            // M3.2 reads the stored column once migration 0013 lands.
+            author_agent_id: None,
             seq: self.seq,
             role,
             kind,
