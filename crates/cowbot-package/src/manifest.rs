@@ -23,6 +23,9 @@ pub const TASKS_PATH: &str = "tasks.json";
 pub const RUNS_PATH: &str = "runs.jsonl";
 pub const AUDIT_PATH: &str = "audit.jsonl";
 pub const PERMISSION_RULES_PATH: &str = "permission_rules.jsonl";
+pub const MEMORY_NOTES_PATH: &str = "memory_notes.jsonl";
+pub const MEMORY_ENTRIES_PATH: &str = "memory_entries.jsonl";
+pub const MEMORY_SETTINGS_PATH: &str = "memory_settings.jsonl";
 
 /// What a package contains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,6 +6,9 @@ use cowbot_core::conversation::{
     ConversationSettings, ConversationTurn, RouteSource,
 };
 use cowbot_core::identity::{Membership, Role, User, Workspace};
+use cowbot_core::memory::{
+    MemoryEntry, MemoryKind, MemorySettings, MemorySource, MemoryStatus, Note,
+};
 use cowbot_core::permission::{PermissionRule, RuleDecision, RuleSource};
 use cowbot_core::task::{Task, TaskStatus};
 use cowbot_package::{
@@ -106,6 +109,109 @@ async fn export_then_import_round_trip() {
     let tasks = target.list_tasks(&summary.workspace_id).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(matches!(tasks[0].status, TaskStatus::Pending));
+}
+
+#[tokio::test]
+async fn memory_notes_and_settings_round_trip_with_redaction() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let mut agents = source.list_agents(&workspace.id).await.unwrap();
+    let agent = agents.remove(0);
+    let mut channels = source.list_channels(&workspace.id).await.unwrap();
+    let channel = channels.remove(0);
+
+    source
+        .save_note(&Note::workspace(
+            workspace.id.clone(),
+            "Workspace policy: be brief.",
+        ))
+        .await
+        .unwrap();
+    source
+        .save_note(&Note::conversation(
+            workspace.id.clone(),
+            channel.id.clone(),
+            "Use the design doc. api_key = sk-live-123456",
+        ))
+        .await
+        .unwrap();
+
+    let mut entry = MemoryEntry::new(
+        workspace.id.clone(),
+        Some(agent.id.clone()),
+        Some(channel.id.clone()),
+        MemoryKind::Preference,
+        "The user prefers Rust. password: hunter2",
+        MemorySource::User,
+    );
+    entry.pinned = true;
+    entry.recount();
+    source.insert_memory_entry(&entry).await.unwrap();
+    let mut pending = MemoryEntry::candidate(
+        workspace.id.clone(),
+        None,
+        Some(channel.id.clone()),
+        MemoryKind::Fact,
+        "Pending candidate.",
+    );
+    pending.recount();
+    source.insert_memory_entry(&pending).await.unwrap();
+    source
+        .update_memory_settings(&MemorySettings::new(workspace.id.clone()).with_budgets(500, 900))
+        .await
+        .unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let target = test_store().await;
+    let summary = import_workspace(&target, &bytes).await.unwrap();
+    assert_eq!(summary.memory_notes, 2);
+    assert_eq!(summary.memory_entries, 2);
+
+    let notes = target.list_all_notes(&summary.workspace_id).await.unwrap();
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().all(|note| !note.content.contains("sk-live")));
+    let workspace_note = target
+        .get_note(&summary.workspace_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(workspace_note.content, "Workspace policy: be brief.");
+    let conversation_note = target
+        .get_note(&summary.workspace_id, Some(&channel.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conversation_note.content.contains("[redacted]"));
+    assert_eq!(conversation_note.workspace_id, summary.workspace_id);
+
+    let entries = target
+        .list_all_memory_entries(&summary.workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    let imported = entries
+        .iter()
+        .find(|entry| entry.kind == MemoryKind::Preference)
+        .expect("the active preference is imported");
+    assert_eq!(imported.agent_id.as_ref(), Some(&agent.id));
+    assert_eq!(imported.channel_id.as_ref(), Some(&channel.id));
+    assert!(imported.pinned);
+    assert!(imported.content.contains("[redacted]"));
+    assert!(!imported.content.contains("hunter2"));
+    assert_ne!(imported.id, entry.id);
+    assert_eq!(imported.status, MemoryStatus::Active);
+    let imported_pending = entries
+        .iter()
+        .find(|entry| entry.status == MemoryStatus::Pending)
+        .expect("the pending candidate is imported");
+    assert!(imported_pending.agent_id.is_none());
+
+    let settings = target
+        .get_memory_settings(&summary.workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(settings.notes_budget_tokens, 500);
+    assert_eq!(settings.recall_budget_tokens, 900);
 }
 
 #[tokio::test]

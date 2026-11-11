@@ -18,6 +18,7 @@ use cowbot_core::conversation::{
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::memory::{MemoryEntry, MemorySettings, Note};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -28,7 +29,10 @@ use tokio::sync::mpsc;
 mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
-pub use cowbot_service::AgentUpdate;
+pub use cowbot_service::{
+    AgentUpdate, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave,
+    RecalledMemory,
+};
 pub use local::LocalClient;
 
 /// User identity as seen by the client.
@@ -148,6 +152,13 @@ pub struct ConversationSummary {
     pub participants: Vec<AgentProfile>,
 }
 
+/// The workspace note and, when one conversation is selected, its note.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryNotes {
+    pub workspace: Option<Note>,
+    pub conversation: Option<Note>,
+}
+
 /// A live stream of platform events for the UI.
 pub struct EventStream {
     receiver: mpsc::Receiver<Event>,
@@ -246,6 +257,42 @@ pub trait Client: Send + Sync {
         channel_id: &ChannelId,
         agent_id: &AgentId,
     ) -> CowResult<u64>;
+
+    /// The workspace note and, when a conversation is selected, its note.
+    async fn memory_notes(&self, channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes>;
+    /// Save the workspace note, redacting credential-shaped content.
+    async fn save_workspace_note(&self, content: &str) -> CowResult<NoteSave>;
+    /// Save a conversation note; only user-created conversations accept one.
+    async fn save_conversation_note(
+        &self,
+        channel_id: &ChannelId,
+        content: &str,
+    ) -> CowResult<NoteSave>;
+    async fn delete_conversation_note(&self, channel_id: &ChannelId) -> CowResult<u64>;
+    async fn memory_settings(&self) -> CowResult<MemorySettings>;
+    async fn update_memory_settings(
+        &self,
+        update: &MemorySettingsUpdate,
+    ) -> CowResult<MemorySettings>;
+    /// Entries matching the optional status and exact scope filters.
+    async fn list_memory_entries(&self, filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>>;
+    /// Create an entry after validating its content and scope.
+    async fn add_memory_entry(&self, new: NewMemory) -> CowResult<MemorySave>;
+    /// Edit the content, kind, or pinning of an entry.
+    async fn update_memory_entry(&self, id: &str, update: &MemoryUpdate) -> CowResult<MemorySave>;
+    /// Approve a pending extraction candidate.
+    async fn approve_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    /// Dismiss a pending candidate, keeping it visible as archived.
+    async fn dismiss_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    async fn archive_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    async fn delete_memory_entry(&self, id: &str) -> CowResult<u64>;
+    /// What the next turn would inject, without touching recall statistics.
+    async fn preview_memory_recall(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<Option<RecalledMemory>>;
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;

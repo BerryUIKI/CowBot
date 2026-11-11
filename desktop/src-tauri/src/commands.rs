@@ -1,5 +1,9 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{AgentUpdate, Client, ConversationSummary, NewConversation, NewTask};
+use cowbot_client::{
+    AgentUpdate, Client, ConversationSummary, MemoryFilter, MemoryNotes, MemorySave,
+    MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory, NewTask, NoteSave,
+    RecalledMemory,
+};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
 use cowbot_core::assignment::{
@@ -13,6 +17,7 @@ use cowbot_core::conversation::{
     ConversationTurn,
 };
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -1240,6 +1245,8 @@ pub struct ConversationParticipantView {
     pub history_tokens: u32,
     pub latest_tokens: u32,
     pub total_tokens: u32,
+    /// Estimated tokens the next turn's memory block would add.
+    pub memory_tokens: u32,
     pub active_entries: u32,
     pub excluded_entries: u32,
     pub percent_used: Option<f32>,
@@ -1262,6 +1269,8 @@ pub struct ConversationContextView {
     pub total_tokens: u32,
     pub active_entries: u32,
     pub excluded_entries: u32,
+    /// Estimated tokens the next turn's memory block would add.
+    pub memory_tokens: u32,
     pub context_window: Option<u32>,
     pub max_output_tokens: Option<u32>,
     pub usable_tokens: Option<u32>,
@@ -1391,6 +1400,7 @@ fn context_view_from_parts(
             context.agent_id.0.clone(),
             String::new(),
             &context.projection,
+            0,
             tool_tokens.get(&context.agent_id).copied().unwrap_or(0),
             context.cache_last_turn.clone(),
             context.cache_conversation.clone(),
@@ -1402,6 +1412,7 @@ fn context_view_from_parts(
                 participant.agent_id.0.clone(),
                 participant.agent_name.clone(),
                 &participant.projection,
+                participant.memory_tokens,
                 tool_tokens.get(&participant.agent_id).copied().unwrap_or(0),
                 participant.cache_last_run.clone(),
                 participant.cache_conversation.clone(),
@@ -1427,6 +1438,7 @@ fn context_view_from_parts(
         total_tokens: first.total_tokens,
         active_entries: first.active_entries,
         excluded_entries: first.excluded_entries,
+        memory_tokens: first.memory_tokens,
         context_window,
         max_output_tokens,
         usable_tokens,
@@ -1449,6 +1461,7 @@ fn participant_view(
     agent_id: String,
     agent_name: String,
     projection: &ContextProjection,
+    memory_tokens: u32,
     tool_tokens: u32,
     cache_last_run: CacheUsageSummary,
     cache_conversation: CacheUsageSummary,
@@ -1464,6 +1477,7 @@ fn participant_view(
         history_tokens: projection.history_tokens,
         latest_tokens: projection.latest_tokens,
         total_tokens,
+        memory_tokens,
         active_entries: projection.active_entries,
         excluded_entries: projection.excluded_entries,
         percent_used,
@@ -1625,6 +1639,201 @@ pub async fn clear_conversation_context(
             .await
             .map_err(|error| error.to_string()),
     }
+}
+
+#[tauri::command]
+pub async fn get_memory_notes(
+    state: State<'_, AppState>,
+    channel_id: Option<String>,
+) -> Result<MemoryNotes, String> {
+    let channel = channel_id.map(ChannelId::new);
+    state
+        .client
+        .memory_notes(channel.as_ref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn save_memory_note(
+    state: State<'_, AppState>,
+    channel_id: Option<String>,
+    content: String,
+) -> Result<NoteSave, String> {
+    let saved = match channel_id {
+        Some(channel_id) => {
+            state
+                .client
+                .save_conversation_note(&ChannelId::new(channel_id), &content)
+                .await
+        }
+        None => state.client.save_workspace_note(&content).await,
+    };
+    saved.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_memory_note(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<u64, String> {
+    state
+        .client
+        .delete_conversation_note(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_memory_settings(state: State<'_, AppState>) -> Result<MemorySettings, String> {
+    state
+        .client
+        .memory_settings()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_memory_settings(
+    state: State<'_, AppState>,
+    extraction_enabled: Option<bool>,
+    recall_enabled: Option<bool>,
+    notes_budget_tokens: Option<u32>,
+    recall_budget_tokens: Option<u32>,
+) -> Result<MemorySettings, String> {
+    state
+        .client
+        .update_memory_settings(&MemorySettingsUpdate {
+            extraction_enabled,
+            recall_enabled,
+            notes_budget_tokens,
+            recall_budget_tokens,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_memory_entries(
+    state: State<'_, AppState>,
+    status: Option<MemoryStatus>,
+    agent_id: Option<String>,
+    channel_id: Option<String>,
+) -> Result<Vec<MemoryEntry>, String> {
+    state
+        .client
+        .list_memory_entries(&MemoryFilter {
+            status,
+            agent_id: agent_id.map(AgentId::new),
+            channel_id: channel_id.map(ChannelId::new),
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn add_memory_entry(
+    state: State<'_, AppState>,
+    content: String,
+    kind: MemoryKind,
+    agent_id: Option<String>,
+    channel_id: Option<String>,
+    pinned: Option<bool>,
+) -> Result<MemorySave, String> {
+    let new = NewMemory::user(content)
+        .with_kind(kind)
+        .with_scope(agent_id.map(AgentId::new), channel_id.map(ChannelId::new))
+        .with_pinned(pinned.unwrap_or(false));
+    state
+        .client
+        .add_memory_entry(new)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_memory_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+    content: Option<String>,
+    kind: Option<MemoryKind>,
+    pinned: Option<bool>,
+) -> Result<MemorySave, String> {
+    state
+        .client
+        .update_memory_entry(
+            &entry_id,
+            &MemoryUpdate {
+                content,
+                kind,
+                pinned,
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn approve_memory_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<MemoryEntry, String> {
+    state
+        .client
+        .approve_memory_entry(&entry_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn dismiss_memory_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<MemoryEntry, String> {
+    state
+        .client
+        .dismiss_memory_entry(&entry_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn archive_memory_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<MemoryEntry, String> {
+    state
+        .client
+        .archive_memory_entry(&entry_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_memory_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<u64, String> {
+    state
+        .client
+        .delete_memory_entry(&entry_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_memory_recall(
+    state: State<'_, AppState>,
+    channel_id: Option<String>,
+    agent_id: String,
+    query: String,
+) -> Result<Option<RecalledMemory>, String> {
+    let channel = channel_id.map(ChannelId::new);
+    state
+        .client
+        .preview_memory_recall(channel.as_ref(), &AgentId::new(agent_id), &query)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Values submitted by the provider editor.
@@ -2581,6 +2790,7 @@ mod tests {
                     system_tokens: 1_000,
                     ..ContextProjection::default()
                 },
+                memory_tokens: 50,
                 cache_last_run: CacheUsageSummary::default(),
                 cache_conversation: CacheUsageSummary::default(),
             },
@@ -2591,6 +2801,7 @@ mod tests {
                     system_tokens: 2_000,
                     ..ContextProjection::default()
                 },
+                memory_tokens: 0,
                 cache_last_run: CacheUsageSummary::default(),
                 cache_conversation: CacheUsageSummary::default(),
             },
@@ -2605,6 +2816,8 @@ mod tests {
         assert_eq!(view.participants.len(), 2);
         assert_eq!(view.participants[0].agent_name, "Planner");
         assert_eq!(view.participants[0].total_tokens, 1_100);
+        assert_eq!(view.participants[0].memory_tokens, 50);
+        assert_eq!(view.memory_tokens, 50);
         assert_eq!(view.participants[1].agent_name, "Coder");
         assert_eq!(view.participants[1].total_tokens, 2_300);
         assert!(!view.router_enabled);

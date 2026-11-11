@@ -20,6 +20,7 @@ use cowbot_core::conversation::{
     ConversationSettingsUpdate, ConversationTurn,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -29,8 +30,8 @@ use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
-    SessionDecisions, TaskService, TemplateService, WorktreeService,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
+    PermissionService, SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -38,8 +39,9 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, ConversationSummary, EventStream,
-    NewConversation, NewTask, SessionDecisionView, WorkspaceImport,
+    AgentUpdate, Client, ClientSession, ClientUser, ConversationSummary, EventStream, MemoryFilter,
+    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
+    NewTask, NoteSave, RecalledMemory, SessionDecisionView, WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -56,6 +58,7 @@ pub struct LocalClient {
     approvals: ApprovalService,
     agents: AgentService,
     permissions: PermissionService,
+    memory: MemoryService,
     session_decisions: Arc<SessionDecisions>,
     worktrees: WorktreeService,
 }
@@ -99,6 +102,7 @@ impl LocalClient {
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
+        let memory = MemoryService::new(store.clone(), context.workspace.id.clone());
         let worktrees = WorktreeService::new(store.clone(), bus.clone());
         worktrees.reconcile().await?;
         let session = ClientSession {
@@ -123,6 +127,7 @@ impl LocalClient {
             approvals,
             agents,
             permissions,
+            memory,
             session_decisions,
             worktrees,
         })
@@ -666,6 +671,82 @@ impl Client for LocalClient {
     ) -> CowResult<u64> {
         self.conversations
             .clear_participant_context(channel_id, agent_id)
+            .await
+    }
+
+    async fn memory_notes(&self, channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes> {
+        let (workspace, conversation) = self.memory.notes(channel_id).await?;
+        Ok(MemoryNotes {
+            workspace,
+            conversation,
+        })
+    }
+
+    async fn save_workspace_note(&self, content: &str) -> CowResult<NoteSave> {
+        self.memory.save_workspace_note(content).await
+    }
+
+    async fn save_conversation_note(
+        &self,
+        channel_id: &ChannelId,
+        content: &str,
+    ) -> CowResult<NoteSave> {
+        self.memory
+            .save_conversation_note(channel_id, content)
+            .await
+    }
+
+    async fn delete_conversation_note(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.memory.delete_conversation_note(channel_id).await
+    }
+
+    async fn memory_settings(&self) -> CowResult<MemorySettings> {
+        self.memory.settings().await
+    }
+
+    async fn update_memory_settings(
+        &self,
+        update: &MemorySettingsUpdate,
+    ) -> CowResult<MemorySettings> {
+        self.memory.update_settings(update).await
+    }
+
+    async fn list_memory_entries(&self, filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>> {
+        self.memory.list_entries(filter).await
+    }
+
+    async fn add_memory_entry(&self, new: NewMemory) -> CowResult<MemorySave> {
+        self.memory.add_entry(new).await
+    }
+
+    async fn update_memory_entry(&self, id: &str, update: &MemoryUpdate) -> CowResult<MemorySave> {
+        self.memory.update_entry(id, update).await
+    }
+
+    async fn approve_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.approve_entry(id).await
+    }
+
+    async fn dismiss_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.dismiss_entry(id).await
+    }
+
+    async fn archive_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.archive_entry(id).await
+    }
+
+    async fn delete_memory_entry(&self, id: &str) -> CowResult<u64> {
+        self.memory.delete_entry(id).await
+    }
+
+    async fn preview_memory_recall(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<Option<RecalledMemory>> {
+        self.memory
+            .preview_recall(channel_id, agent_id, query)
             .await
     }
 

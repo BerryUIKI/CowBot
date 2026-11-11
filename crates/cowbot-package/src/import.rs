@@ -1,13 +1,17 @@
 use std::io::Read;
 
-use chrono::Utc;
-use cowbot_core::agent::AgentProfile;
+use chrono::{DateTime, Utc};
+use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
     ChannelParticipant, ContextEntry, ContextEvent, ConversationSettings,
 };
 use cowbot_core::identity::{Role, User, UserId, Workspace, WorkspaceId};
+use cowbot_core::memory::{
+    redact_secrets, MemoryEntry, MemoryKind, MemorySettings, MemorySource, MemoryStatus, Note,
+    DEFAULT_NOTES_BUDGET_TOKENS, DEFAULT_RECALL_BUDGET_TOKENS,
+};
 use cowbot_core::permission::{PermissionRule, RuleSource};
 use cowbot_core::run::Run;
 use cowbot_core::task::Task;
@@ -20,8 +24,8 @@ use crate::export::MAX_PACKAGE_BYTES;
 use crate::manifest::{
     Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH, CHANNELS_PATH,
     CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH, MANIFEST_PATH,
-    MESSAGES_PATH, PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH,
-    WORKSPACE_PATH,
+    MEMORY_ENTRIES_PATH, MEMORY_NOTES_PATH, MEMORY_SETTINGS_PATH, MESSAGES_PATH, PARTICIPANTS_PATH,
+    PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH, WORKSPACE_PATH,
 };
 
 /// Result of importing a package into a fresh local workspace.
@@ -38,6 +42,63 @@ pub struct ImportSummary {
     pub conversations: usize,
     pub context_entries: usize,
     pub permission_rules: usize,
+    pub memory_notes: usize,
+    pub memory_entries: usize,
+}
+
+/// A memory entry as stored in a package. Enums are read as free strings so a
+/// foreign package cannot fail the import or inject an unknown active state.
+#[derive(Debug, serde::Deserialize)]
+struct PackagedMemoryEntry {
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    channel_id: Option<String>,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    source_ref: Option<String>,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    recall_count: u32,
+    #[serde(default)]
+    last_recalled_at: Option<DateTime<Utc>>,
+    #[serde(default = "Utc::now")]
+    created_at: DateTime<Utc>,
+    #[serde(default = "Utc::now")]
+    updated_at: DateTime<Utc>,
+}
+
+/// Workspace memory settings as stored in a package.
+#[derive(Debug, serde::Deserialize)]
+struct PackagedMemorySettings {
+    #[serde(default)]
+    extraction_enabled: bool,
+    #[serde(default = "default_recall_enabled")]
+    recall_enabled: bool,
+    #[serde(default = "default_notes_budget")]
+    notes_budget_tokens: u32,
+    #[serde(default = "default_recall_budget")]
+    recall_budget_tokens: u32,
+}
+
+fn default_recall_enabled() -> bool {
+    true
+}
+
+fn default_notes_budget() -> u32 {
+    DEFAULT_NOTES_BUDGET_TOKENS
+}
+
+fn default_recall_budget() -> u32 {
+    DEFAULT_RECALL_BUDGET_TOKENS
 }
 
 /// Read and verify a package without importing it.
@@ -75,6 +136,11 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     let audit: Vec<AuditEvent> = parse_jsonl(required(&entries, AUDIT_PATH)?)?;
     let permission_rules: Vec<PermissionRule> =
         optional_jsonl(&entries, PERMISSION_RULES_PATH)?.unwrap_or_default();
+    let notes: Vec<Note> = optional_jsonl(&entries, MEMORY_NOTES_PATH)?.unwrap_or_default();
+    let packaged_memory: Vec<PackagedMemoryEntry> =
+        optional_jsonl(&entries, MEMORY_ENTRIES_PATH)?.unwrap_or_default();
+    let memory_settings: Option<PackagedMemorySettings> =
+        optional_jsonl(&entries, MEMORY_SETTINGS_PATH)?.and_then(|rows| rows.into_iter().next());
 
     // Give the import a fresh identity so it never collides with local rows.
     let workspace_id = WorkspaceId::random();
@@ -158,6 +224,47 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         store.insert_context_event(event).await?;
     }
 
+    // Notes and memory are re-keyed for the imported workspace; chat-like
+    // scopes that do not exist in the package are dropped. Unknown enum values
+    // normalize so a foreign package cannot create active memory silently.
+    let agent_ids: std::collections::HashSet<AgentId> =
+        agents.iter().map(|agent| agent.id.clone()).collect();
+    for note in &notes {
+        if note
+            .channel_id
+            .as_ref()
+            .is_some_and(|channel| !channel_ids.contains(channel))
+        {
+            continue;
+        }
+        let imported = Note {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: workspace_id.clone(),
+            channel_id: note.channel_id.clone(),
+            title: note.title.clone(),
+            content: redact_secrets(&note.content).content,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+        };
+        store.save_note(&imported).await?;
+    }
+    let mut imported_entries = 0_usize;
+    for packaged in &packaged_memory {
+        let Some(entry) = normalize_memory_entry(packaged, &workspace_id, &channel_ids, &agent_ids)
+        else {
+            continue;
+        };
+        store.insert_memory_entry(&entry).await?;
+        imported_entries += 1;
+    }
+    if let Some(settings) = &memory_settings {
+        let mut imported = MemorySettings::new(workspace_id.clone());
+        imported.extraction_enabled = settings.extraction_enabled;
+        imported.recall_enabled = settings.recall_enabled;
+        imported.set_budgets(settings.notes_budget_tokens, settings.recall_budget_tokens);
+        store.update_memory_settings(&imported).await?;
+    }
+
     for task in &tasks {
         store
             .create_task(&workspace_id, task.channel_id.as_ref(), task)
@@ -205,11 +312,75 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         conversations: conversation_settings.len(),
         context_entries: context_entries.len(),
         permission_rules: permission_rules.len(),
+        memory_notes: notes.len(),
+        memory_entries: imported_entries,
     })
 }
 
 fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, PackageError> {
     Ok(serde_json::from_slice(bytes)?)
+}
+
+/// Normalize one packaged entry for the imported workspace.
+///
+/// Unknown kinds become `note`, unknown statuses become `archived`, and unknown
+/// sources become `user`, so a foreign package cannot create active memory with
+/// an unrecognized state. Entries with an empty body or a scope that is not
+/// part of the package are dropped, and content is redacted again.
+fn normalize_memory_entry(
+    packaged: &PackagedMemoryEntry,
+    workspace_id: &WorkspaceId,
+    channel_ids: &std::collections::HashSet<ChannelId>,
+    agent_ids: &std::collections::HashSet<AgentId>,
+) -> Option<MemoryEntry> {
+    let content = redact_secrets(packaged.content.trim()).content;
+    if content.trim().is_empty() {
+        return None;
+    }
+    let channel_id = packaged
+        .channel_id
+        .as_ref()
+        .map(ChannelId::new)
+        .filter(|channel| channel_ids.contains(channel));
+    if packaged.channel_id.is_some() && channel_id.is_none() {
+        return None;
+    }
+    let agent_id = packaged
+        .agent_id
+        .as_ref()
+        .map(AgentId::new)
+        .filter(|agent| agent_ids.contains(agent));
+    if packaged.agent_id.is_some() && agent_id.is_none() {
+        return None;
+    }
+
+    let mut entry = MemoryEntry::new(
+        workspace_id.clone(),
+        agent_id,
+        channel_id,
+        packaged
+            .kind
+            .parse::<MemoryKind>()
+            .unwrap_or(MemoryKind::Note),
+        content,
+        packaged
+            .source
+            .parse::<MemorySource>()
+            .unwrap_or(MemorySource::User),
+    );
+    entry.id = Uuid::new_v4().to_string();
+    entry.source_ref = packaged.source_ref.clone();
+    entry.status = packaged
+        .status
+        .parse::<MemoryStatus>()
+        .unwrap_or(MemoryStatus::Archived);
+    entry.pinned = packaged.pinned;
+    entry.recall_count = packaged.recall_count;
+    entry.last_recalled_at = packaged.last_recalled_at;
+    entry.created_at = packaged.created_at;
+    entry.updated_at = packaged.updated_at;
+    entry.recount();
+    Some(entry)
 }
 
 /// Give legacy all-zero participant positions one rank in file order.
@@ -299,6 +470,9 @@ fn known_paths() -> &'static [&'static str] {
         RUNS_PATH,
         AUDIT_PATH,
         PERMISSION_RULES_PATH,
+        MEMORY_NOTES_PATH,
+        MEMORY_ENTRIES_PATH,
+        MEMORY_SETTINGS_PATH,
     ]
 }
 
@@ -415,5 +589,84 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 0, 1]
         );
+    }
+
+    fn packaged(kind: &str, status: &str, content: &str) -> PackagedMemoryEntry {
+        PackagedMemoryEntry {
+            agent_id: None,
+            channel_id: None,
+            kind: kind.to_string(),
+            content: content.to_string(),
+            source: "user".to_string(),
+            source_ref: None,
+            status: status.to_string(),
+            pinned: false,
+            recall_count: 0,
+            last_recalled_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn unknown_states_normalize_to_inert_values() {
+        let workspace = WorkspaceId::new("imported");
+        let channels = std::collections::HashSet::new();
+        let agents = std::collections::HashSet::new();
+        let entry = normalize_memory_entry(
+            &packaged("rumour", "trusted", "not a real state"),
+            &workspace,
+            &channels,
+            &agents,
+        )
+        .expect("the entry is imported");
+
+        assert_eq!(entry.kind, MemoryKind::Note);
+        assert_eq!(entry.status, MemoryStatus::Archived);
+        assert_eq!(entry.source, MemorySource::User);
+        assert!(!entry.is_active());
+        assert_ne!(entry.id, String::new());
+
+        let active = normalize_memory_entry(
+            &packaged("fact", "active", "The user prefers Rust."),
+            &workspace,
+            &channels,
+            &agents,
+        )
+        .expect("known values are preserved");
+        assert_eq!(active.kind, MemoryKind::Fact);
+        assert_eq!(active.status, MemoryStatus::Active);
+    }
+
+    #[test]
+    fn entries_with_unknown_scopes_or_empty_content_are_dropped() {
+        let workspace = WorkspaceId::new("imported");
+        let channels = std::collections::HashSet::from([ChannelId::new("known")]);
+        let agents = std::collections::HashSet::from([AgentId::new("known-agent")]);
+
+        let mut foreign_channel = packaged("fact", "active", "content");
+        foreign_channel.channel_id = Some("missing".to_string());
+        assert!(normalize_memory_entry(&foreign_channel, &workspace, &channels, &agents).is_none());
+
+        let mut foreign_agent = packaged("fact", "active", "content");
+        foreign_agent.agent_id = Some("missing".to_string());
+        assert!(normalize_memory_entry(&foreign_agent, &workspace, &channels, &agents).is_none());
+
+        assert!(normalize_memory_entry(
+            &packaged("fact", "active", "   "),
+            &workspace,
+            &channels,
+            &agents
+        )
+        .is_none());
+
+        let mut redacted = packaged("fact", "active", "api_key = sk-live-123456");
+        redacted.channel_id = Some("known".to_string());
+        redacted.agent_id = Some("known-agent".to_string());
+        let entry =
+            normalize_memory_entry(&redacted, &workspace, &channels, &agents).expect("imported");
+        assert!(entry.content.contains("[redacted]"));
+        assert_eq!(entry.channel_id, Some(ChannelId::new("known")));
+        assert_eq!(entry.agent_id, Some(AgentId::new("known-agent")));
     }
 }

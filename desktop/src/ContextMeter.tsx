@@ -54,6 +54,7 @@ function fallbackParticipant(context: ConversationContext): ConversationParticip
     history_tokens: context.history_tokens,
     latest_tokens: context.latest_tokens,
     total_tokens: context.total_tokens,
+    memory_tokens: context.memory_tokens,
     active_entries: context.active_entries,
     excluded_entries: context.excluded_entries,
     percent_used: context.percent_used,

@@ -56,6 +56,7 @@ export interface ConversationParticipantView {
   history_tokens: number;
   latest_tokens: number;
   total_tokens: number;
+  memory_tokens: number;
   active_entries: number;
   excluded_entries: number;
   percent_used: number | null;
@@ -76,6 +77,7 @@ export interface ConversationContext {
   total_tokens: number;
   active_entries: number;
   excluded_entries: number;
+  memory_tokens: number;
   context_window: number | null;
   max_output_tokens: number | null;
   usable_tokens: number | null;
@@ -88,6 +90,87 @@ export interface ConversationContext {
   cache_last_turn: CacheUsageSummary;
   cache_conversation: CacheUsageSummary;
   participants: ConversationParticipantView[];
+}
+
+export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "note";
+export type MemoryStatus = "active" | "pending" | "archived";
+export type MemorySource = "user" | "agent" | "extraction" | "compaction";
+
+export interface MemoryNote {
+  id: string;
+  workspace_id: string;
+  channel_id?: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryNotes {
+  workspace: MemoryNote | null;
+  conversation: MemoryNote | null;
+}
+
+export interface NoteSave {
+  note: MemoryNote;
+  redacted: boolean;
+}
+
+export interface MemoryEntry {
+  id: string;
+  workspace_id: string;
+  agent_id?: string;
+  channel_id?: string;
+  kind: MemoryKind;
+  content: string;
+  source: MemorySource;
+  source_ref?: string;
+  status: MemoryStatus;
+  pinned: boolean;
+  tokens: number;
+  recall_count: number;
+  last_recalled_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemorySave {
+  entry: MemoryEntry;
+  redacted: boolean;
+}
+
+export interface MemorySettings {
+  workspace_id: string;
+  extraction_enabled: boolean;
+  recall_enabled: boolean;
+  notes_budget_tokens: number;
+  recall_budget_tokens: number;
+  updated_at: string;
+}
+
+export interface MemorySettingsUpdate {
+  extractionEnabled?: boolean;
+  recallEnabled?: boolean;
+  notesBudgetTokens?: number;
+  recallBudgetTokens?: number;
+}
+
+export interface MemoryFilter {
+  status?: MemoryStatus;
+  agentId?: string;
+  channelId?: string;
+}
+
+export interface MemoryEntryUpdate {
+  content?: string;
+  kind?: MemoryKind;
+  pinned?: boolean;
+}
+
+export interface RecalledMemory {
+  block: string;
+  entry_ids: string[];
+  tokens: number;
 }
 
 export type RouteSource = "mention" | "router" | "default" | "silent" | "unmatched";
