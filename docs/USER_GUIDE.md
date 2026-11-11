@@ -213,12 +213,24 @@ from templates; a standalone agent editor is not part of this release.
   that agent directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
-- **Conversations** — the **Conversations** section holds user-created
-  single-agent sessions. Choose **New conversation**, give it a title, and pick
-  an agent. Unlike an agent contact, a conversation keeps its own model context
-  and a fixed model; you can have several conversations with the same agent, and
-  the header shows a context meter (see below). Conversations can be pinned,
-  renamed, deleted, compacted, and cleared like other sidebar rows.
+- **Conversations** — the **Conversations** section holds user-created sessions
+  with one agent or a group of two to eight. Choose **New conversation**, give
+  it a title, and select participants in the order you want them listed; use
+  ↑ and ↓ to reorder a selected participant. With two or more selected, choose
+  the **default responder** — preselected to the Main Assistant (`main`) when it
+  is in the group, otherwise the first participant — and optionally enable
+  **Route unaddressed messages with the model**. Unlike an agent contact, a
+  conversation keeps its own model context and a fixed model; you can have
+  several conversations with the same agent, and the header shows participant
+  chips and a context meter (see below). Conversations can be pinned, renamed,
+  deleted, compacted, and cleared like other sidebar rows.
+- **Group routing** — in a group conversation, `@Agent` addresses that
+  participant and `@team` (also `@all`, `@everyone`, `@here`) addresses every
+  participant; names outside the group are rejected with a notice. A message
+  that addresses nobody goes to the default responder. With routing enabled,
+  the conversation's model picks up to three participants first and falls back
+  to the default responder when it cannot. Type `@` in the composer to open a
+  participant list: arrow keys move, Enter or Tab inserts, and Escape closes it.
 - **Channels** — group rooms sit below the agents. Create one with **New
   channel** or the **+** button, post messages, and follow the timeline. Names
   must be unique in the workspace, case-insensitively. Mention an agent by name
@@ -230,7 +242,8 @@ from templates; a standalone agent editor is not part of this release.
 - **Manage conversations** — right-click an agent, conversation, or channel row
   (or use its **⋯** button) to pin it to the top, rename it, delete a group
   channel or conversation, clear an agent conversation's history, or compact and
-  clear a user-created conversation's context. Deleting a channel or
+  clear a user-created conversation's context (one participant's branch or all
+  branches). Deleting a channel or
   conversation deletes its messages (and, for a conversation, its context);
   tasks keep their history but are no longer linked to that channel. Clearing an
   agent conversation keeps the agent and removes only its messages. Agent
@@ -293,32 +306,48 @@ Running work is visible without leaving Chat.
 
 ### Conversation context
 
-A user-created conversation keeps an independent, append-only context for its
-agent. The visible timeline and the model context are separate: clearing or
-compacting the context never deletes messages.
+A user-created conversation keeps an independent, append-only context for each
+participant. The visible timeline and the model context are separate: clearing
+or compacting the context never deletes messages.
 
-- The **context ring** in the header shows how much of the model's usable
-  context window is occupied. Hover it for percent used and left, the token
-  ratio, and a breakdown into system prompt, tool schemas, history, and the
-  latest message. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is
-  a danger colour, and 100% blocks sending.
+- The **context ring** in the header shows the highest occupancy among
+  participants. Hover it for percent used and left, the token ratio, and a
+  breakdown into system prompt, tool schemas, history, and the latest message.
+  Below 70% the ring is neutral, 70–89% is a warning, 90–99% is a danger
+  colour, and 100% is full.
+- In a group, the popover has one tab per participant with that branch's
+  breakdown, latest-run cache figure, and conversation-total cache figure. The
+  tabs are keyboard accessible with the left and right arrow keys.
 - Percentages need a context window. Set **Context window** (and optionally
   **Max output**) for the model in **Settings → Model**. Without it the ring
   shows absolute tokens only.
-- **Cache hit rate** for the last turn and the whole conversation comes from
-  the usage the provider reports. Providers without prompt caching show no
-  cached tokens.
+- **Cache hit rate** for the latest run and the whole conversation comes from
+  the usage the provider reports. Router and compaction calls count toward the
+  conversation total but not toward a participant's latest run. Providers
+  without prompt caching show no cached tokens.
 - **Compact now** summarizes older context entries into one summary and stops
-  sending the summarized entries; recent turns stay verbatim. A system notice in
-  the timeline reports the token change, and the original messages remain
-  visible.
-- **Compact automatically** is off by default. When enabled, CowBot compacts
-  before a send if the next message would cross the configured percentage
-  (80% by default) of the usable window.
-- **Clear context** stops sending every earlier message but keeps them in the
-  timeline. **Delete conversation** removes the conversation, its messages, and
-  its context. At 100% the composer is blocked and offers compact, clear, and
-  new-conversation actions.
+  sending the summarized entries; recent turns stay verbatim. In a group it
+  compacts the active participant's branch. A system notice in the timeline
+  reports the token change, and the original messages remain visible.
+- **Compact automatically** is off by default. When enabled, CowBot compacts a
+  selected participant's branch before its turn if it would cross the configured
+  percentage (80% by default) of the usable window.
+- **Clear context** stops sending earlier messages but keeps them in the
+  timeline; in a group, **Clear this branch** affects the active participant and
+  **Clear all** affects every participant. **Delete conversation** removes the
+  conversation, its messages, and its context.
+- A single-agent conversation blocks sending at 100% and offers compact, clear,
+  and new-conversation actions. A group is not blocked up front: after routing,
+  a full participant is skipped with a notice naming it while the others answer,
+  and a turn whose selected participants are all full posts a notice without a
+  model call.
+- Each user message in a group gets an **Answered by** line under it, showing
+  whether mentions, routing, or the default responder chose the responders,
+  which participants replied, and any failures or skips. Open **Routing** for
+  the selected roster, unmatched names, the router's reason, and outcome counts.
+  These details survive a restart because the route is stored with the message.
+- A message that addresses nobody in a group with no default responder stays
+  unanswered; the timeline shows a short note instead of inventing an agent.
 - The fixed model is recorded when the conversation is created; changing the
   active provider in Settings does not switch existing conversations. A
   conversation whose provider was deleted falls back to the active provider

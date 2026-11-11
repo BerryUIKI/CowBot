@@ -1,8 +1,10 @@
 # M3 — Group conversations and routing
 
-- Status: Planned (not started)
+- Status: Implemented (M3.1–M3.7)
 - Date: 2026-11-10
+- Completed: 2026-11-11
 - Related: [ADR-0030](../ADR/0030-conversation-sessions-and-context.md),
+  [ADR-0032](../ADR/0032-group-conversations-and-routing.md),
   [ADR-0022](../ADR/0022-channel-mention-turns.md),
   [ADR-0024](../ADR/0024-agent-direct-conversations.md),
   [ADR-0028](../ADR/0028-main-assistant-and-workspace-actions.md),
@@ -504,34 +506,34 @@ Coverage:
 
 ## Acceptance criteria
 
-- [ ] A user can create a group conversation with two to eight ordered agents,
+- [x] A user can create a group conversation with two to eight ordered agents,
       a default responder, and one fixed provider/model.
-- [ ] `@Agent` addresses that participant; `@team` addresses every participant
+- [x] `@Agent` addresses that participant; `@team` addresses every participant
       in participant order; non-participant mentions are rejected with a clear
       notice.
-- [ ] With routing off, an unaddressed message goes to the default responder;
+- [x] With routing off, an unaddressed message goes to the default responder;
       with no default responder it stays silent with a clear notice.
-- [ ] With routing on, the router selects one to three participants and its
+- [x] With routing on, the router selects one to three participants and its
       choice is visible; invalid, timed-out, or failed routing falls back to the
       default responder.
-- [ ] Several participants answer one message, failures are isolated, and each
+- [x] Several participants answer one message, failures are isolated, and each
       reply posts as its task settles.
-- [ ] Every participant has an independent append-only branch containing the
+- [x] Every participant has an independent append-only branch containing the
       shared group timeline, with peer replies attributed by
       `author_agent_id` and tool calls only in the owner's branch.
-- [ ] The context popover shows one tab per participant and compaction and
+- [x] The context popover shows one tab per participant and compaction and
       clear act on the selected branch.
-- [ ] A full selected branch is skipped with a notice naming the participant
+- [x] A full selected branch is skipped with a notice naming the participant
       while the others answer.
-- [ ] One `conversation_turns` row is written per group user message and drives
+- [x] One `conversation_turns` row is written per group user message and drives
       the Answered-by line after a reload.
-- [ ] Membership is fixed after creation and the UI explains how to create a
+- [x] Membership is fixed after creation and the UI explains how to create a
       new group with a different team.
-- [ ] Single-agent conversations, direct conversations, and group channels
+- [x] Single-agent conversations, direct conversations, and group channels
       keep their behavior.
-- [ ] Workspace packages round-trip group conversations; older packages import;
+- [x] Workspace packages round-trip group conversations; older packages import;
       turn records stay device-local.
-- [ ] Workspace and desktop gates pass.
+- [x] Workspace and desktop gates pass.
 
 ## Risks and mitigations
 
