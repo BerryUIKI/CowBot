@@ -9,6 +9,7 @@ import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
+import GroupAvatar from "./GroupAvatar";
 import Inspector from "./Inspector";
 import type { InspectorTab } from "./Inspector";
 import ContextMeter from "./ContextMeter";
@@ -32,7 +33,7 @@ import {
   compactConversation,
   completeOnboarding,
   createChannel,
-  createConversation,
+  createGroupConversation,
   createTask,
   decideApproval,
   deleteChannel,
@@ -48,6 +49,8 @@ import {
   listAssignments,
   listAvailableTools,
   listChannels,
+  listConversationSummaries,
+  listConversationTurns,
   listMessages,
   listProjectBranches,
   listProjects,
@@ -72,6 +75,7 @@ import {
   updateAgent,
   updateConversationSettings,
 } from "./api";
+import type { ChannelReplyFinished } from "./api";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
@@ -84,10 +88,13 @@ import type {
   ChannelMessage,
   ClientSession,
   ConversationContext,
+  ConversationSummary,
+  ConversationTurn,
   ModelSettings,
   OnboardingState,
   Project,
   ProjectBranches,
+  RouteSource,
   Task,
   TaskOverviewEntry,
   TaskWorktree,
@@ -282,13 +289,27 @@ export default function App() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [conversationTitle, setConversationTitle] = useState("");
-  const [conversationAgentId, setConversationAgentId] = useState("");
+  const [conversationIds, setConversationIds] = useState<string[]>([]);
+  const [conversationDefaultResponder, setConversationDefaultResponder] =
+    useState("");
+  const [conversationRouter, setConversationRouter] = useState(false);
+  const [conversationSummaries, setConversationSummaries] = useState<
+    Record<string, ConversationSummary>
+  >({});
+  const [conversationTurns, setConversationTurns] = useState<
+    Record<string, ConversationTurn>
+  >({});
+  const [replyOutcomes, setReplyOutcomes] = useState<
+    Record<string, ChannelReplyFinished>
+  >({});
   const [conversationContext, setConversationContext] =
     useState<ConversationContext | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
@@ -537,6 +558,7 @@ export default function App() {
           nextOnboarding,
           nextProjects,
           nextOverview,
+          nextSummaries,
         ] = await Promise.all([
           getSession(),
           ensureAgentChannels(),
@@ -547,6 +569,7 @@ export default function App() {
           getOnboardingState(),
           listProjects(),
           listTaskOverview(),
+          listConversationSummaries(),
         ]);
         if (cancelled) return;
         setSession(nextSession);
@@ -559,6 +582,11 @@ export default function App() {
         setOnboarding(nextOnboarding);
         setProjects(nextProjects);
         setOverview(nextOverview);
+        setConversationSummaries(
+          Object.fromEntries(
+            nextSummaries.map((summary) => [summary.channel.id, summary]),
+          ),
+        );
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
       } finally {
@@ -596,6 +624,42 @@ export default function App() {
   useEffect(() => {
     refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
   }, [refreshTaskDetail, selectedTaskId]);
+
+  useEffect(() => {
+    if (!selectedChannel || selectedChannel.kind !== "conversation") {
+      setConversationTurns({});
+      return;
+    }
+    let cancelled = false;
+    listConversationTurns(selectedChannel.id, 100)
+      .then((turns) => {
+        if (!cancelled) {
+          setConversationTurns(
+            Object.fromEntries(turns.map((turn) => [turn.message_id, turn])),
+          );
+        }
+      })
+      .catch(() => {
+        // Route details are supplementary; the thread still renders.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contextVersion, selectedChannel]);
+
+  useEffect(() => {
+    if (conversationIds.length === 0) {
+      if (conversationDefaultResponder) setConversationDefaultResponder("");
+      return;
+    }
+    if (conversationIds.includes(conversationDefaultResponder)) return;
+    const selected = conversationIds
+      .map((id) => agents.find((agent) => agent.id === id) ?? null)
+      .filter((agent): agent is AgentProfile => agent !== null);
+    const preferred =
+      selected.find((agent) => agent.name.toLowerCase() === "main") ?? selected[0];
+    setConversationDefaultResponder(preferred?.id ?? "");
+  }, [agents, conversationDefaultResponder, conversationIds]);
 
   useEffect(() => {
     if (!taskAssignee && agents.length > 0) setTaskAssignee(agents[0].id);
@@ -834,6 +898,10 @@ export default function App() {
       setPendingReply((current) =>
         current && current.messageId === event.message_id ? null : current,
       );
+      setReplyOutcomes((current) => ({
+        ...current,
+        [event.message_id]: event,
+      }));
       if (event.error) {
         setError(event.error);
       }
@@ -974,9 +1042,88 @@ export default function App() {
     });
   }, [agents]);
 
+  const conversationParticipants = conversationContext?.participants ?? [];
+
+  const mentionQuery = useMemo(() => {
+    const match = draft.match(/(?:^|\s)@([\p{L}\p{N}_-]*)$/u);
+    return match ? match[1] : null;
+  }, [draft]);
+
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null || mentionDismissed) return [];
+    if (!selectedChannel || selectedChannel.kind === "direct") return [];
+
+    const pool: { key: string; name: string; broadcast: boolean }[] = [];
+    if (selectedChannel.kind === "conversation" && conversationParticipants.length > 0) {
+      for (const participant of conversationParticipants) {
+        pool.push({
+          key: `agent-${participant.agent_id}`,
+          name: participant.agent_name,
+          broadcast: false,
+        });
+      }
+    } else if (selectedChannel.kind === "conversation") {
+      for (const agent of agents) {
+        pool.push({ key: `agent-${agent.id}`, name: agent.name, broadcast: false });
+      }
+    } else {
+      for (const agent of channelMentionNames) {
+        pool.push({ key: `agent-${agent.id}`, name: agent.name, broadcast: false });
+      }
+    }
+
+    const allowBroadcast =
+      selectedChannel.kind === "channel" ||
+      (selectedChannel.kind === "conversation" &&
+        conversationParticipants.length > 1);
+    if (allowBroadcast) {
+      for (const name of broadcastNames) {
+        pool.push({ key: `broadcast-${name}`, name, broadcast: true });
+      }
+    }
+
+    const query = mentionQuery.toLowerCase();
+    const seen = new Set<string>();
+    return pool
+      .filter((candidate) => {
+        const key = candidate.name.toLowerCase();
+        if (seen.has(key) || !key.startsWith(query)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 6);
+  }, [
+    agents,
+    channelMentionNames,
+    conversationParticipants,
+    mentionDismissed,
+    mentionQuery,
+    selectedChannel,
+  ]);
+
+  const activeMentionIndex = Math.min(
+    mentionIndex,
+    Math.max(0, mentionCandidates.length - 1),
+  );
+
+  useEffect(() => {
+    setMentionDismissed(false);
+    setMentionIndex(0);
+  }, [mentionQuery]);
+
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+  const conversationParticipantNames = conversationParticipants.map(
+    (participant) => participant.agent_name,
+  );
+  const defaultResponderName =
+    conversationParticipants.find(
+      (participant) =>
+        participant.agent_id === conversationContext?.default_responder,
+    )?.agent_name ?? null;
   const conversationFull =
-    selectedChannel?.kind === "conversation" && conversationContext?.state === "full";
+    selectedChannel?.kind === "conversation" &&
+    conversationParticipants.length <= 1 &&
+    conversationContext?.state === "full";
 
   const inlineApprovals = useMemo(
     () =>
@@ -1015,24 +1162,67 @@ export default function App() {
     setView("chat");
     setCreatingConversation(true);
     setError(null);
-    setConversationAgentId((current) => current || agents[0]?.id || "");
+    if (conversationIds.length === 0 && agents.length > 0) {
+      setConversationIds([agents[0].id]);
+    }
+  }
+
+  function toggleConversationParticipant(agentId: string) {
+    setConversationIds((current) => {
+      if (current.includes(agentId)) {
+        return current.filter((id) => id !== agentId);
+      }
+      if (current.length >= 8) return current;
+      return [...current, agentId];
+    });
+  }
+
+  function moveConversationParticipant(agentId: string, delta: number) {
+    setConversationIds((current) => {
+      const index = current.indexOf(agentId);
+      const next = index + delta;
+      if (index < 0 || next < 0 || next >= current.length) return current;
+      const reordered = [...current];
+      [reordered[index], reordered[next]] = [reordered[next], reordered[index]];
+      return reordered;
+    });
   }
 
   async function handleCreateConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!conversationAgentId) return;
+    const participants = conversationIds.filter((id) =>
+      agents.some((agent) => agent.id === id),
+    );
+    if (participants.length === 0) return;
 
     setBusy("create-conversation");
     setError(null);
     try {
-      const channel = await createConversation(
+      const group = participants.length > 1;
+      const channel = await createGroupConversation(
         conversationTitle.trim() || null,
-        conversationAgentId,
+        participants,
+        group ? conversationRouter : false,
+        group ? conversationDefaultResponder || null : null,
       );
       setCreatingConversation(false);
       setConversationTitle("");
+      setConversationIds([]);
+      setConversationRouter(false);
+      setConversationDefaultResponder("");
       await refreshChannels(channel.id);
       setContextVersion((version) => version + 1);
+      listConversationSummaries()
+        .then((summaries) =>
+          setConversationSummaries(
+            Object.fromEntries(
+              summaries.map((summary) => [summary.channel.id, summary]),
+            ),
+          ),
+        )
+        .catch(() => {
+          // Sidebar avatars fall back to channel avatars.
+        });
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -1040,11 +1230,11 @@ export default function App() {
     }
   }
 
-  async function compactChannel(channel: Channel) {
+  async function compactChannel(channel: Channel, agentId?: string) {
     setContextBusy(true);
     setError(null);
     try {
-      const outcome = await compactConversation(channel.id);
+      const outcome = await compactConversation(channel.id, agentId);
       setNotice(
         outcome.compacted
           ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
@@ -1059,10 +1249,13 @@ export default function App() {
     }
   }
 
-  async function clearContextForChannel(channel: Channel) {
+  async function clearContextForChannel(channel: Channel, agentId?: string) {
+    const target = agentId
+      ? "this participant's context branch"
+      : "this conversation's context";
     if (
       !window.confirm(
-        "Clear this conversation's context? Messages stay visible, but the model will no longer see them.",
+        `Clear ${target}? Messages stay visible, but the model will no longer see them.`,
       )
     ) {
       return;
@@ -1071,7 +1264,7 @@ export default function App() {
     setContextBusy(true);
     setError(null);
     try {
-      const cleared = await clearConversationContext(channel.id);
+      const cleared = await clearConversationContext(channel.id, agentId);
       setNotice(
         cleared > 0
           ? `Cleared ${cleared} context entries.`
@@ -1097,6 +1290,40 @@ export default function App() {
         channel.id,
         autoCompact,
         threshold,
+      );
+      setConversationContext(context);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function updateConversationRouting(
+    channel: Channel,
+    routerEnabled: boolean,
+  ) {
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        channel.id,
+        conversationContext?.auto_compact ?? false,
+        conversationContext?.compact_threshold ?? 80,
+        routerEnabled,
+      );
+      setConversationContext(context);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function updateDefaultResponder(channel: Channel, agentId: string) {
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        channel.id,
+        conversationContext?.auto_compact ?? false,
+        conversationContext?.compact_threshold ?? 80,
+        undefined,
+        agentId,
       );
       setConversationContext(context);
     } catch (err) {
@@ -1320,9 +1547,20 @@ export default function App() {
     setError(null);
     try {
       const posted = await postMessage(selectedChannel.id, content, channelApproval);
-      const recipients = selectedAgent
-        ? [selectedAgent]
-        : addressedAgents(posted.content, agents);
+      const conversationAgents =
+        selectedChannel.kind === "conversation" && conversationContext
+          ? conversationContext.participants
+              .map((participant) =>
+                agents.find((agent) => agent.id === participant.agent_id),
+              )
+              .filter((agent): agent is AgentProfile => agent !== undefined)
+          : [];
+      const recipients =
+        conversationAgents.length > 0
+          ? conversationAgents
+          : selectedAgent
+            ? [selectedAgent]
+            : addressedAgents(posted.content, agents);
       setPendingReply(
         recipients.length > 0
           ? { channelId: selectedChannel.id, messageId: posted.id, agents: recipients }
@@ -1338,7 +1576,45 @@ export default function App() {
     }
   }
 
+  function acceptMention(name: string) {
+    setDraft((current) =>
+      current.replace(
+        /(^|\s)@[\p{L}\p{N}_-]*$/u,
+        (_match, prefix: string) => `${prefix}@${name} `,
+      ),
+    );
+    setMentionDismissed(true);
+    setMentionIndex(0);
+    composerRef.current?.focus();
+  }
+
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (mentionCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionIndex((current) => (current + 1) % mentionCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionIndex(
+          (current) =>
+            (current - 1 + mentionCandidates.length) % mentionCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const candidate = mentionCandidates[activeMentionIndex];
+        if (candidate) acceptMention(candidate.name);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionDismissed(true);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (!conversationFull) void sendMessage();
@@ -1580,6 +1856,133 @@ export default function App() {
       : `${senderLabel(message, session, agents)}: ${text}`;
   }
 
+  function participantLabel(agentId: string): string {
+    return (
+      conversationParticipants.find(
+        (participant) => participant.agent_id === agentId,
+      )?.agent_name ?? agentName(agents, agentId)
+    );
+  }
+
+  /**
+   * Reload-safe Answered-by line and routing details for one user message.
+   *
+   * The persisted turn supplies history after a restart; the reply event adds
+   * per-agent outcomes from this session.
+   */
+  function renderRouteLine(message: ChannelMessage) {
+    if (conversationParticipants.length <= 1) return null;
+    const turn = conversationTurns[message.id];
+    const outcome = replyOutcomes[message.id];
+    if (!turn && !outcome) return null;
+
+    const source: RouteSource | null =
+      turn?.source ?? ((outcome?.route as RouteSource | null) ?? null);
+    const selected = outcome?.selected.length
+      ? outcome.selected
+      : turn?.selected_agents ?? [];
+    const replied = outcome?.replied ?? [];
+    const failed = outcome?.failed ?? [];
+    const skipped = outcome?.skipped ?? [];
+    const answered = replied.length > 0 ? replied : selected;
+    const routeLabel =
+      source === "mention"
+        ? "by mention"
+        : source === "router"
+          ? "by routing"
+          : source === "default"
+            ? "by the default responder"
+            : "";
+
+    if (source === "silent") {
+      return (
+        <li className="chat-route-row">
+          <span className="route-note">
+            No one answered. Mention a participant or set a default responder.
+          </span>
+        </li>
+      );
+    }
+    if (source === "unmatched") {
+      const unknown = turn?.unknown_mentions ?? [];
+      return (
+        <li className="chat-route-row">
+          <span className="route-note route-note-warning">
+            No participant matched{" "}
+            {unknown.length > 0
+              ? unknown.map((name) => `@${name}`).join(", ")
+              : "the mention"}
+            .
+          </span>
+        </li>
+      );
+    }
+    if (answered.length === 0 && failed.length === 0 && skipped.length === 0) {
+      return null;
+    }
+
+    return (
+      <li className="chat-route-row">
+        <span className="route-answered">
+          {answered.length > 0 ? (
+            <>
+              Answered {routeLabel} by{" "}
+              <strong>{answered.map(participantLabel).join(", ")}</strong>
+            </>
+          ) : (
+            "No reply was posted."
+          )}
+        </span>
+        {failed.length > 0 ? (
+          <span className="route-chip route-chip-failed">
+            {failed.map(participantLabel).join(", ")} failed
+          </span>
+        ) : null}
+        {skipped.length > 0 ? (
+          <span className="route-chip">
+            {skipped.map(participantLabel).join(", ")} skipped
+          </span>
+        ) : null}
+        {turn ? (
+          <details className="route-details">
+            <summary>Routing</summary>
+            <div className="route-details-body">
+              <p>
+                <span>Source</span>
+                {source ?? "unknown"}
+              </p>
+              {turn.selected_agents.length > 0 ? (
+                <p>
+                  <span>Selected</span>
+                  {turn.selected_agents.map(participantLabel).join(", ")}
+                </p>
+              ) : null}
+              {turn.unknown_mentions.length > 0 ? (
+                <p>
+                  <span>Not matched</span>
+                  {turn.unknown_mentions.map((name) => `@${name}`).join(", ")}
+                </p>
+              ) : null}
+              {turn.reason ? (
+                <p>
+                  <span>Reason</span>
+                  {turn.reason}
+                </p>
+              ) : null}
+              {outcome ? (
+                <p>
+                  <span>Outcome</span>
+                  {replied.length} replied · {failed.length} failed ·{" "}
+                  {skipped.length} skipped
+                </p>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
+      </li>
+    );
+  }
+
   const renderedMessages = useMemo(() => {
     let lastDay = "";
     return messages.map((message) => {
@@ -1813,7 +2216,11 @@ export default function App() {
                               openMenuFromKey(event, "conversation", channel)
                             }
                           >
-                            <Avatar name={channel.name} kind="channel" />
+                            <GroupAvatar
+                              names={(conversationSummaries[channel.id]?.participants ?? []).map(
+                                (participant) => participant.name,
+                              )}
+                            />
                             <span className="contact-text">
                               <span className="contact-top">
                                 <span className="contact-name">
@@ -1861,24 +2268,116 @@ export default function App() {
                         autoComplete="off"
                       />
                     </label>
-                    <label className="field">
-                      <span>Agent</span>
-                      <select
-                        value={conversationAgentId}
-                        onChange={(event) => setConversationAgentId(event.target.value)}
-                      >
-                        {agents.map((agent) => (
-                          <option key={agent.id} value={agent.id}>
-                            {agent.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <fieldset className="participant-picker">
+                      <legend>
+                        Participants <span>{conversationIds.length}/8</span>
+                      </legend>
+                      <ul>
+                        {agents.map((agent) => {
+                          const order = conversationIds.indexOf(agent.id);
+                          const selected = order >= 0;
+                          return (
+                            <li key={agent.id}>
+                              <button
+                                type="button"
+                                className={`participant-option${
+                                  selected ? " is-selected" : ""
+                                }`}
+                                aria-pressed={selected}
+                                disabled={!selected && conversationIds.length >= 8}
+                                onClick={() =>
+                                  toggleConversationParticipant(agent.id)
+                                }
+                              >
+                                <Avatar
+                                  name={agent.name}
+                                  kind="agent"
+                                  size="small"
+                                />
+                                <span className="participant-name">
+                                  {agent.name}
+                                </span>
+                                {selected ? (
+                                  <span className="participant-order">
+                                    {order + 1}
+                                  </span>
+                                ) : (
+                                  <span className="participant-add">+</span>
+                                )}
+                              </button>
+                              {selected ? (
+                                <span className="participant-move">
+                                  <button
+                                    type="button"
+                                    aria-label={`Move ${agent.name} earlier`}
+                                    disabled={order === 0}
+                                    onClick={() =>
+                                      moveConversationParticipant(agent.id, -1)
+                                    }
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label={`Move ${agent.name} later`}
+                                    disabled={
+                                      order === conversationIds.length - 1
+                                    }
+                                    onClick={() =>
+                                      moveConversationParticipant(agent.id, 1)
+                                    }
+                                  >
+                                    ↓
+                                  </button>
+                                </span>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </fieldset>
+                    {conversationIds.length > 1 ? (
+                      <>
+                        <label className="field">
+                          <span>Default responder</span>
+                          <select
+                            value={conversationDefaultResponder}
+                            onChange={(event) =>
+                              setConversationDefaultResponder(event.target.value)
+                            }
+                          >
+                            {conversationIds.map((id) => {
+                              const agent = agents.find(
+                                (candidate) => candidate.id === id,
+                              );
+                              return agent ? (
+                                <option key={id} value={id}>
+                                  {agent.name}
+                                </option>
+                              ) : null;
+                            })}
+                          </select>
+                        </label>
+                        <label className="context-toggle">
+                          <input
+                            type="checkbox"
+                            checked={conversationRouter}
+                            onChange={(event) =>
+                              setConversationRouter(event.target.checked)
+                            }
+                          />
+                          <span>Route unaddressed messages with the model</span>
+                        </label>
+                      </>
+                    ) : null}
                     <div className="form-actions">
                       <button
                         type="submit"
                         className="primary-button"
-                        disabled={busy === "create-conversation" || !conversationAgentId}
+                        disabled={
+                          busy === "create-conversation" ||
+                          conversationIds.length === 0
+                        }
                       >
                         {busy === "create-conversation" ? "Creating…" : "Create"}
                       </button>
@@ -2267,11 +2766,16 @@ export default function App() {
             <>
               <header className="chat-header">
                 <div className="chat-identity">
-                  <Avatar
-                    name={selectedAgent?.name ?? selectedChannel.name}
-                    kind={selectedAgent ? "agent" : "channel"}
-                    size="large"
-                  />
+                  {selectedChannel.kind === "conversation" &&
+                  conversationParticipants.length > 1 ? (
+                    <GroupAvatar names={conversationParticipantNames} size="large" />
+                  ) : (
+                    <Avatar
+                      name={selectedAgent?.name ?? selectedChannel.name}
+                      kind={selectedAgent ? "agent" : "channel"}
+                      size="large"
+                    />
+                  )}
                   <div className="chat-heading">
                     <h2 className="chat-title">
                       {selectedChannel.kind === "conversation" ? (
@@ -2289,13 +2793,44 @@ export default function App() {
                     </h2>
                     <p className="chat-subtitle">
                       {selectedChannel.kind === "conversation"
-                        ? selectedAgent
-                          ? `${selectedAgent.name} · ${selectedAgent.role}`
-                          : "Private conversation"
+                        ? conversationParticipants.length > 1
+                          ? `${conversationParticipants.length} participants${
+                              defaultResponderName
+                                ? ` · ${defaultResponderName} answers unaddressed messages`
+                                : " · unaddressed messages stay silent"
+                            }`
+                          : selectedAgent
+                            ? `${selectedAgent.name} · ${selectedAgent.role}`
+                            : "Private conversation"
                         : selectedAgent
                           ? selectedAgent.role
                           : selectedChannel.topic.trim() || "No topic yet."}
                     </p>
+                    {selectedChannel.kind === "conversation" &&
+                    conversationParticipants.length > 1 ? (
+                      <div
+                        className="chat-participants"
+                        aria-label="Conversation participants"
+                      >
+                        {conversationParticipants.map((participant) => (
+                          <span
+                            key={participant.agent_id}
+                            className="chat-participant-chip"
+                          >
+                            <Avatar
+                              name={participant.agent_name}
+                              kind="agent"
+                              size="small"
+                            />
+                            {participant.agent_name}
+                            {participant.agent_id ===
+                            conversationContext?.default_responder ? (
+                              <span className="chip-default">default</span>
+                            ) : null}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {selectedChannel.kind === "channel" && channelMentionNames.length > 0 ? (
                       <p className="chat-members">
                         Mention{" "}
@@ -2364,8 +2899,12 @@ export default function App() {
                         <ContextMeter
                           context={conversationContext}
                           busy={contextBusy}
-                          onCompact={() => void compactChannel(selectedChannel)}
-                          onClear={() => void clearContextForChannel(selectedChannel)}
+                          onCompact={(agentId) =>
+                            void compactChannel(selectedChannel, agentId)
+                          }
+                          onClear={(agentId) =>
+                            void clearContextForChannel(selectedChannel, agentId)
+                          }
                           onAutoCompactChange={(enabled) =>
                             void updateConversationOptions(
                               selectedChannel,
@@ -2380,10 +2919,20 @@ export default function App() {
                               threshold,
                             )
                           }
+                          onRouterChange={(enabled) =>
+                            void updateConversationRouting(selectedChannel, enabled)
+                          }
+                          onDefaultResponderChange={(agentId) =>
+                            void updateDefaultResponder(selectedChannel, agentId)
+                          }
                           onNewConversation={openNewConversation}
                         />
                       ) : null}
-                      <span className="chat-kind">Conversation</span>
+                      <span className="chat-kind">
+                        {conversationParticipants.length > 1
+                          ? "Group"
+                          : "Conversation"}
+                      </span>
                     </>
                   ) : selectedAgent ? (
                     <span className="chat-kind">Direct</span>
@@ -2398,23 +2947,36 @@ export default function App() {
               >
                 {messages.length === 0 ? (
                   <div className="chat-empty">
-                    <Avatar
-                      name={selectedAgent?.name ?? selectedChannel.name}
-                      kind={selectedAgent ? "agent" : "channel"}
-                      size="large"
-                    />
+                    {selectedChannel.kind === "conversation" &&
+                    conversationParticipants.length > 1 ? (
+                      <GroupAvatar names={conversationParticipantNames} size="large" />
+                    ) : (
+                      <Avatar
+                        name={selectedAgent?.name ?? selectedChannel.name}
+                        kind={selectedAgent ? "agent" : "channel"}
+                        size="large"
+                      />
+                    )}
                     <p className="empty-title">
                       {selectedChannel.kind === "conversation"
-                        ? selectedAgent
-                          ? `Start a conversation with ${selectedAgent.name}.`
-                          : "Start a conversation."
+                        ? conversationParticipants.length > 1
+                          ? `Start the conversation with ${conversationParticipantNames.join(", ")}.`
+                          : selectedAgent
+                            ? `Start a conversation with ${selectedAgent.name}.`
+                            : "Start a conversation."
                         : selectedAgent
                           ? `Say hello to ${selectedAgent.name}.`
                           : "No messages yet."}
                     </p>
                     <p>
                       {selectedChannel.kind === "conversation"
-                        ? "Each conversation keeps its own context branch; the header meter shows how full it is."
+                        ? conversationParticipants.length > 1
+                          ? `Mention a participant, use @team, or send an unaddressed message${
+                              defaultResponderName
+                                ? ` for ${defaultResponderName} to answer`
+                                : " (it stays silent while no default responder is set)"
+                            }. Each participant keeps its own context branch.`
+                          : "Each conversation keeps its own context branch; the header meter shows how full it is."
                         : selectedAgent
                           ? "Every message here goes straight to this agent."
                           : `Write the first message to #${selectedChannel.name}.`}
@@ -2470,6 +3032,10 @@ export default function App() {
                             </div>
                           </li>
                         )}
+                        {message.sender.type === "User" &&
+                        selectedChannel.kind === "conversation"
+                          ? renderRouteLine(message)
+                          : null}
                       </Fragment>
                     ))}
                     {inlineApprovals.map((approval) => {
@@ -2583,6 +3149,36 @@ export default function App() {
                 }}
               >
                 <div className="composer-main">
+                  {mentionCandidates.length > 0 ? (
+                    <div
+                      className="mention-suggestions"
+                      id="mention-suggestions"
+                      role="listbox"
+                      aria-label="Mention suggestions"
+                    >
+                      {mentionCandidates.map((candidate, index) => (
+                        <button
+                          key={candidate.key}
+                          type="button"
+                          role="option"
+                          id={`mention-option-${index}`}
+                          aria-selected={index === activeMentionIndex}
+                          className={`mention-option${
+                            index === activeMentionIndex ? " is-active" : ""
+                          }`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            acceptMention(candidate.name);
+                          }}
+                        >
+                          <span>@{candidate.name}</span>
+                          {candidate.broadcast ? (
+                            <span className="mention-broadcast">everyone</span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     className="composer-add"
@@ -2604,6 +3200,18 @@ export default function App() {
                         : `Message ${composerTarget}`
                     }
                     aria-label={`Message ${composerTarget}`}
+                    aria-autocomplete="list"
+                    aria-expanded={mentionCandidates.length > 0}
+                    aria-controls={
+                      mentionCandidates.length > 0
+                        ? "mention-suggestions"
+                        : undefined
+                    }
+                    aria-activedescendant={
+                      mentionCandidates.length > 0
+                        ? `mention-option-${activeMentionIndex}`
+                        : undefined
+                    }
                     disabled={conversationFull}
                     rows={1}
                   />
