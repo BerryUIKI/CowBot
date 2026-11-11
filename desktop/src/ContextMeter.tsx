@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
+import NotesEditor from "./NotesEditor";
 import { formatTokens } from "./format";
 import type {
   CacheUsageSummary,
@@ -17,6 +18,7 @@ interface ContextMeterProps {
   onThresholdChange: (threshold: number) => void;
   onRouterChange: (enabled: boolean) => void;
   onDefaultResponderChange: (agentId: string) => void;
+  onMemoryChanged: () => void;
   onNewConversation: () => void;
 }
 
@@ -29,6 +31,13 @@ const stateRank: Record<ConversationParticipantView["state"], number> = {
   warning: 2,
   danger: 3,
   full: 4,
+};
+
+const segmentClasses: Record<string, string> = {
+  messages: "context-segment-messages",
+  memory: "context-segment-memory",
+  system: "context-segment-system",
+  tools: "context-segment-tools",
 };
 
 function cacheRate(summary: CacheUsageSummary): number | null {
@@ -64,12 +73,71 @@ function fallbackParticipant(context: ConversationContext): ConversationParticip
   };
 }
 
+interface ContextSegment {
+  id: string;
+  label: string;
+  tokens: number;
+  percent: number;
+}
+
+interface ContextBar {
+  segments: ContextSegment[];
+  used: number;
+  usable: number;
+  freeTokens: number;
+  bufferTokens: number;
+  untilAutoCompact: number | null;
+}
+
+/** The colored stacked bar values for one participant's next request. */
+function buildContextBar(
+  current: ConversationParticipantView,
+  context: ConversationContext,
+): ContextBar | null {
+  const usable = context.usable_tokens;
+  if (usable === null || usable <= 0) return null;
+  const segments: ContextSegment[] = [
+    {
+      id: "messages",
+      label: "Messages",
+      tokens: current.history_tokens + current.latest_tokens,
+    },
+    { id: "memory", label: "Memory", tokens: current.memory_tokens },
+    { id: "system", label: "System prompt", tokens: current.system_tokens },
+    { id: "tools", label: "Tools", tokens: current.tool_tokens },
+  ].map((segment) => ({
+    ...segment,
+    percent: (segment.tokens / usable) * 100,
+  }));
+  const used = segments.reduce((total, segment) => total + segment.tokens, 0);
+  const threshold = context.auto_compact
+    ? Math.round((usable * context.compact_threshold) / 100)
+    : null;
+  const freeTokens =
+    threshold === null
+      ? Math.max(0, usable - used)
+      : Math.max(0, threshold - used);
+  const bufferTokens =
+    threshold === null ? 0 : Math.max(0, usable - Math.max(used, threshold));
+  const untilAutoCompact =
+    threshold === null ? null : Math.max(0, threshold - used);
+  return {
+    segments,
+    used,
+    usable,
+    freeTokens,
+    bufferTokens,
+    untilAutoCompact,
+  };
+}
+
 /**
  * Context ring and popover for a user-created conversation.
  *
  * The ring shows the highest occupancy among participants. The popover lists
- * one tab per participant with that branch's token breakdown, cache figures,
- * routing settings, and per-branch compaction actions.
+ * one tab per participant with a colored stacked bar, a labeled legend, the
+ * remaining tokens until auto-compaction, the conversation note, routing
+ * settings, and per-branch compaction actions.
  */
 export default function ContextMeter({
   context,
@@ -80,10 +148,12 @@ export default function ContextMeter({
   onThresholdChange,
   onRouterChange,
   onDefaultResponderChange,
+  onMemoryChanged,
   onNewConversation,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [showDetails, setShowDetails] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -119,6 +189,7 @@ export default function ContextMeter({
   const fraction = percent === null ? 0 : Math.min(percent, 100) / 100;
   const state = worst.state;
   const full = current.state === "full";
+  const bar = buildContextBar(current, context);
   const tabId = (position: number) => `context-tab-${context.channel_id}-${position}`;
   const panelId = `context-panel-${context.channel_id}`;
 
@@ -226,13 +297,111 @@ export default function ContextMeter({
             role={group ? "tabpanel" : undefined}
             aria-labelledby={group ? tabId(index) : undefined}
           >
-            <p className="context-ratio">
-              {context.usable_tokens !== null
-                ? `${formatTokens(current.total_tokens)} / ${formatTokens(
-                    context.usable_tokens,
-                  )} usable tokens`
-                : `${formatTokens(current.total_tokens)} tokens · set the model context window in Settings → Models to see a percentage`}
-            </p>
+            {bar ? (
+              <>
+                <div className="context-summary">
+                  <span>
+                    {formatTokens(current.total_tokens)} /{" "}
+                    {formatTokens(bar.usable)}
+                    {current.percent_used === null
+                      ? ""
+                      : ` (${Math.round(current.percent_used)}%)`}
+                  </span>
+                  <span className="context-until">
+                    {bar.untilAutoCompact === null
+                      ? "Automatic compaction off"
+                      : `${formatTokens(bar.untilAutoCompact)} until auto-compact`}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={busy}
+                    onClick={() => onCompact(group ? current.agent_id : undefined)}
+                  >
+                    {busy ? "Compacting…" : "Compact now"}
+                  </button>
+                </div>
+
+                <div
+                  className="context-bar"
+                  role="img"
+                  aria-label={`Context used: ${formatTokens(
+                    bar.used,
+                  )} of ${formatTokens(bar.usable)} tokens`}
+                >
+                  {bar.segments
+                    .filter((segment) => segment.tokens > 0)
+                    .map((segment) => (
+                      <span
+                        key={segment.id}
+                        className={`context-bar-segment ${segmentClasses[segment.id]}`}
+                        style={{ width: `${segment.percent}%` }}
+                      />
+                    ))}
+                  {bar.freeTokens > 0 ? (
+                    <span
+                      className="context-bar-segment context-bar-free"
+                      style={{ width: `${(bar.freeTokens / bar.usable) * 100}%` }}
+                    />
+                  ) : null}
+                  {bar.bufferTokens > 0 ? (
+                    <span
+                      className="context-bar-segment context-bar-buffer"
+                      style={{
+                        width: `${(bar.bufferTokens / bar.usable) * 100}%`,
+                      }}
+                    />
+                  ) : null}
+                </div>
+
+                <ul className="context-legend">
+                  {bar.segments.map((segment) => (
+                    <li key={segment.id}>
+                      <span
+                        className={`context-swatch ${segmentClasses[segment.id]}`}
+                        aria-hidden="true"
+                      />
+                      <span className="context-legend-label">{segment.label}</span>
+                      <span className="context-legend-value">
+                        {formatTokens(segment.tokens)} ·{" "}
+                        {Math.round(segment.percent)}%
+                      </span>
+                    </li>
+                  ))}
+                  <li>
+                    <span
+                      className="context-swatch context-bar-free"
+                      aria-hidden="true"
+                    />
+                    <span className="context-legend-label">Free space</span>
+                    <span className="context-legend-value">
+                      {formatTokens(bar.freeTokens)} ·{" "}
+                      {Math.round((bar.freeTokens / bar.usable) * 100)}%
+                    </span>
+                  </li>
+                  {context.auto_compact ? (
+                    <li>
+                      <span
+                        className="context-swatch context-bar-buffer"
+                        aria-hidden="true"
+                      />
+                      <span className="context-legend-label">
+                        Auto-compact buffer
+                      </span>
+                      <span className="context-legend-value">
+                        {formatTokens(bar.bufferTokens)} ·{" "}
+                        {Math.round((bar.bufferTokens / bar.usable) * 100)}%
+                      </span>
+                    </li>
+                  ) : null}
+                </ul>
+              </>
+            ) : (
+              <p className="context-ratio">
+                {formatTokens(current.total_tokens)} tokens · set the model
+                context window in Settings → Models to see a percentage
+              </p>
+            )}
 
             {full ? (
               <div className="context-full-warning" role="alert">
@@ -260,36 +429,53 @@ export default function ContextMeter({
               </div>
             ) : null}
 
-            <dl className="context-breakdown">
-              <div>
-                <dt>System prompt</dt>
-                <dd>{formatTokens(current.system_tokens)}</dd>
-              </div>
-              <div>
-                <dt>Tools</dt>
-                <dd>{formatTokens(current.tool_tokens)}</dd>
-              </div>
-              <div>
-                <dt>History</dt>
-                <dd>{formatTokens(current.history_tokens)}</dd>
-              </div>
-              <div>
-                <dt>Latest message</dt>
-                <dd>{formatTokens(current.latest_tokens)}</dd>
-              </div>
-            </dl>
+            <button
+              type="button"
+              className="text-button context-details-toggle"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails((shown) => !shown)}
+            >
+              {showDetails ? "Hide detailed breakdown" : "See detailed breakdown"}
+            </button>
 
-            <div className="context-cache">
-              <h4>Cache</h4>
-              <p>
-                <span>{group ? "Latest run" : "Last turn"}</span>
-                {cacheLabel(current.cache_last_run)}
-              </p>
-              <p>
-                <span>{group ? "Conversation total" : "Conversation"}</span>
-                {cacheLabel(current.cache_conversation)}
-              </p>
-            </div>
+            {showDetails ? (
+              <>
+                <dl className="context-breakdown">
+                  <div>
+                    <dt>System prompt</dt>
+                    <dd>{formatTokens(current.system_tokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>Tools</dt>
+                    <dd>{formatTokens(current.tool_tokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>History</dt>
+                    <dd>{formatTokens(current.history_tokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>Latest message</dt>
+                    <dd>{formatTokens(current.latest_tokens)}</dd>
+                  </div>
+                  <div>
+                    <dt>Memory (next turn)</dt>
+                    <dd>{formatTokens(current.memory_tokens)}</dd>
+                  </div>
+                </dl>
+
+                <div className="context-cache">
+                  <h4>Cache</h4>
+                  <p>
+                    <span>{group ? "Latest run" : "Last turn"}</span>
+                    {cacheLabel(current.cache_last_run)}
+                  </p>
+                  <p>
+                    <span>{group ? "Conversation total" : "Conversation"}</span>
+                    {cacheLabel(current.cache_conversation)}
+                  </p>
+                </div>
+              </>
+            ) : null}
 
             {group ? (
               <div className="context-routing">
@@ -368,6 +554,13 @@ export default function ContextMeter({
               </label>
             </div>
 
+            <NotesEditor
+              channelId={context.channel_id}
+              label="Conversation note"
+              hint="Shared with every participant and injected before this branch."
+              onChanged={onMemoryChanged}
+            />
+
             <p className="context-meta">
               {context.model}
               {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
@@ -378,14 +571,6 @@ export default function ContextMeter({
             </p>
 
             <div className="context-actions">
-              <button
-                type="button"
-                className="primary-button"
-                disabled={busy}
-                onClick={() => onCompact(group ? current.agent_id : undefined)}
-              >
-                {busy ? "Compacting…" : "Compact now"}
-              </button>
               <button
                 type="button"
                 className="ghost-button"

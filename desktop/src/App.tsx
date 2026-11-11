@@ -16,6 +16,7 @@ import ContextMeter from "./ContextMeter";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
+import RememberMessageModal from "./RememberMessageModal";
 import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
@@ -314,6 +315,9 @@ export default function App() {
     useState<ConversationContext | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
   const [contextVersion, setContextVersion] = useState(0);
+  const [rememberMessage, setRememberMessage] = useState<ChannelMessage | null>(
+    null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskDescription, setTaskDescription] = useState("");
@@ -2925,6 +2929,9 @@ export default function App() {
                           onDefaultResponderChange={(agentId) =>
                             void updateDefaultResponder(selectedChannel, agentId)
                           }
+                          onMemoryChanged={() =>
+                            setContextVersion((version) => version + 1)
+                          }
                           onNewConversation={openNewConversation}
                         />
                       ) : null}
@@ -3028,6 +3035,19 @@ export default function App() {
                                   {formatTime(message.created_at)}
                                 </time>
                                 {message.thread_id ? " · In a thread" : null}
+                                {message.sender.type === "User" &&
+                                selectedChannel.kind === "conversation" ? (
+                                  <>
+                                    {" · "}
+                                    <button
+                                      type="button"
+                                      className="text-button chat-remember"
+                                      onClick={() => setRememberMessage(message)}
+                                    >
+                                      Remember this message
+                                    </button>
+                                  </>
+                                ) : null}
                               </span>
                             </div>
                           </li>
@@ -3770,6 +3790,18 @@ export default function App() {
             ) : null}
           </form>
         </Modal>
+      ) : null}
+
+      {rememberMessage ? (
+        <RememberMessageModal
+          channelId={rememberMessage.channel_id}
+          initialContent={rememberMessage.content}
+          onClose={() => setRememberMessage(null)}
+          onSaved={() => {
+            setNotice("Saved to memory.");
+            setContextVersion((version) => version + 1);
+          }}
+        />
       ) : null}
     </div>
   );

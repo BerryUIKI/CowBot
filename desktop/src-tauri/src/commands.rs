@@ -1457,6 +1457,7 @@ fn context_view_from_parts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn participant_view(
     agent_id: String,
     agent_name: String,
@@ -1467,7 +1468,10 @@ fn participant_view(
     cache_conversation: CacheUsageSummary,
     usable_tokens: Option<u32>,
 ) -> ConversationParticipantView {
-    let total_tokens = projection.total_tokens().saturating_add(tool_tokens);
+    let total_tokens = projection
+        .total_tokens()
+        .saturating_add(tool_tokens)
+        .saturating_add(memory_tokens);
     let (percent_used, state) = context_usage_state(total_tokens, usable_tokens);
     ConversationParticipantView {
         agent_id,
@@ -2815,7 +2819,7 @@ mod tests {
 
         assert_eq!(view.participants.len(), 2);
         assert_eq!(view.participants[0].agent_name, "Planner");
-        assert_eq!(view.participants[0].total_tokens, 1_100);
+        assert_eq!(view.participants[0].total_tokens, 1_150);
         assert_eq!(view.participants[0].memory_tokens, 50);
         assert_eq!(view.memory_tokens, 50);
         assert_eq!(view.participants[1].agent_name, "Coder");
@@ -2824,7 +2828,7 @@ mod tests {
         assert_eq!(view.default_responder.as_deref(), Some("agent-2"));
         // The top-level fields mirror the first participant.
         assert_eq!(view.agent_id, "agent-1");
-        assert_eq!(view.total_tokens, 1_100);
+        assert_eq!(view.total_tokens, 1_150);
     }
 
     fn assignment_with(status: AssignmentStatus) -> Assignment {
