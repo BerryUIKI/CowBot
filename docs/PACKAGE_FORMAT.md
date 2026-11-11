@@ -71,6 +71,15 @@ serialize.
 - `permission_rules.jsonl`: one workspace allow / ask / deny rule per line
   (ADR-0003). Rules carry their tool, optional command glob, decision, enabled
   flag, and source.
+- `memory_notes.jsonl`: one note per line. A note without `channel_id` is the
+  workspace note; one with it is that conversation's note. Content is redacted
+  before export (ADR-0033).
+- `memory_entries.jsonl`: one memory entry per line with its scope
+  (`agent_id`, `channel_id`), kind, content, source, status, pinning, token
+  estimate, optional source reference, and recall statistics. Content is
+  redacted before export (ADR-0033).
+- `memory_settings.jsonl`: one workspace memory settings row with the
+  extraction and recall flags and both token budgets (ADR-0033).
 
 ## What is never written
 
@@ -111,6 +120,11 @@ workspace produces new turns (ADR-0032).
 - Imported group conversations keep their ordered roster, default responder,
   and authored peer entries. Conversation turn rows are never imported because
   they are not packaged.
+- The three memory files are optional on import. Notes and entries are re-keyed
+  for the new workspace, redacted again, and dropped when their agent or channel
+  is not part of the package. Unknown kinds normalize to `note` and unknown
+  statuses to `archived`, so a foreign package cannot create active memory with
+  an unrecognized state (ADR-0033).
 - The importing user is created as the owner of the new workspace, with an
   address of the form `<user id>@imported.local` and no password.
 - Existing local workspaces are never modified or merged.

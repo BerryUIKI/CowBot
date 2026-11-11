@@ -26,7 +26,7 @@ This roadmap sequences the work from the current foundation to a self-hosted, ch
 | **Phase 0** | Foundation | Workspace, core crates, product/architecture docs, initial ADRs |
 | **Phase 1** | Local/Offline MVP | Installable desktop app with channels, agents, tasks, approvals, sandbox, and SQLite |
 | **Phase 2** | Self-Hosted Team Mode | Multi-user server, shared workspaces, remote desktop client, Docker deployment |
-| **Phase 3** | Extensibility and Ecosystem | Docker sandbox, memory, integrations, plugins/MCP, marketplace, enterprise features |
+| **Phase 3** | Extensibility and Ecosystem | Docker sandbox, knowledge bases, integrations, plugins/MCP, marketplace, enterprise features |
 
 No calendar dates are committed; a phase ships when its exit criteria are met. Phase 0 and Phase 1 are complete; Phase 2 has not started.
 
@@ -77,6 +77,8 @@ Delivered:
 >
 > **Group conversations and routing (M3)**: user-created conversations hold two to eight ordered participants and route explicit mentions against that roster. Unaddressed messages go to an opt-in model router or a persisted default responder. Each participant keeps an independent context branch with its own meter tab, peers' replies appear as authored history, and replies post as independent tasks settle. Turn rows persist the routing audit, workspace packages round-trip the new fields, and group channels keep their mention-only behavior (ADR-0032).
 >
+> **Agent memory and shared notes (M4)**: a workspace note, a note per conversation, and memory entries scoped to the workspace, an agent, a conversation, or one agent in one conversation. Recall is deterministic and budgeted over an FTS5 trigram index with a LIKE fallback for short queries; pinned entries come first, the memory block is labeled reference data, and recall failures never block a turn. Capture is explicit through Settings → Memory, a per-conversation note editor, a "Remember this message" action, and an approval-gated `remember` tool; opt-in extraction stores at most three reviewed `pending` candidates per settled conversation turn and records one `memory_extract` call. Task executions recall for their assignee and task channel. Packages round-trip notes, entries, and settings with redaction on write and export. The context popover now shows a colored stacked bar with a labeled legend, the remaining tokens until auto-compaction, and the memory estimate (ADR-0033).
+>
 > **Worktrees and background cards (0.1.7)**: Settings → Projects registers local git repositories on this machine. A new task can opt into a per-task worktree on `cowbot/<slug>` under `<repo>/.cowbot/worktrees`; the run's file, code, and command tools are rooted at the checkout, and task detail shows the branch, diff, and discard actions. Crew tasks share the submitted task through `Task.run_group`, and assignment/worktree events feed compact sidebar cards plus a Background panel with live status, progress, and finished runs. Worktree records and project paths stay local and are excluded from `.cowpkg`; merging a branch back or opening a pull request remains out of scope (ADR-0031).
 >
 > **Phase 1 status**: complete. The exit criteria below are met. Reproducible path: install a release → complete onboarding → add agents from a template → create a channel and a task in it → run the crew and decide an approval → inspect run and tool-call history → export the workspace, import it as a new local workspace, and switch between them. The CLI reads `cowbot.toml`, lists and creates channels and messages, and can attach a crew's tasks to a channel (ADR-0020). 0.1.x remains the current release line until Phase 2 work starts.
@@ -97,7 +99,7 @@ Delivered:
 
 - Multi-user server, invitations, and remote sessions.
 - OIDC/SSO, PostgreSQL, Docker sandbox, IM/Webhook integrations.
-- Project-level long-term memory, streaming responses, cost accounting.
+- Project-scoped long-term knowledge bases, streaming responses, cost accounting.
 - Template marketplace and plugin/MCP ecosystem.
 
 ---
@@ -142,7 +144,7 @@ Delivered:
 | ID | Workstream | Key Deliverables |
 | --- | --- | --- |
 | 3.1 | Sandbox and execution | Docker sandbox backend; resource quotas; network policy; additional built-in tools |
-| 3.2 | Memory and knowledge | Project-level long-term memory; retrieval-augmented context; privacy and retention controls |
+| 3.2 | Knowledge and retention | Project-scoped knowledge bases; retrieval-augmented context; memory retention and privacy controls; embeddings and hybrid retrieval |
 | 3.3 | Integrations | Webhooks; Mattermost, Slack, and Feishu adapters; optional browser access |
 | 3.4 | Ecosystem | Plugin mechanism; MCP compatibility; template marketplace with signing; SDK for custom tools |
 | 3.5 | Enterprise readiness | OIDC/SSO; PostgreSQL backend; data-at-rest encryption; audit export; multi-workspace/organization management |
@@ -151,8 +153,6 @@ Delivered:
 Each workstream can ship independently; prioritization will be decided with users after Phase 2.
 
 ### 6.2 Deferred Product Directions (Not Started)
-
-**Agent memory and shared notes (M4, planned, not started).** Agents gain workspace-scoped long-term memory and shared notes: one workspace note, one note per conversation, and memory entries with workspace, agent, conversation, and agent-in-conversation scopes. Recall is deterministic and budgeted over an FTS5 index, capture is explicit through the desktop and a `remember` tool, and automatic extraction is opt-in with pending review before anything is injected. Packages round-trip notes and memories with secret redaction. Embeddings and cross-workspace memory are deferred. See the [M4 plan](plans/M4-agent-memory-and-shared-notes.md).
 
 **Product structure and vertical kits (planned, not started).** Work and Code are project profiles rather than global modes; domain presets use starter kits, capability packs, and security policies. Finance is the first vertical, targeting small private funds and independent analysts; medical research is a later candidate. See the [M6 plan](plans/M6-projects-and-product-structure.md) for the decision record and scope.
 
@@ -267,6 +267,6 @@ A milestone is done when:
 ### Phase 3
 
 - Adoption of Docker sandbox and integrations.
-- Memory retrieval usefulness and privacy incidents (target: zero).
+- Knowledge retrieval usefulness and memory privacy incidents (target: zero).
 - Plugin/MCP ecosystem growth.
 - Cost and latency efficiency per task.

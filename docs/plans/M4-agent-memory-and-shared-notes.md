@@ -1,6 +1,6 @@
 # M4 — Agent memory and shared notes
 
-- Status: In progress (M4.1–M4.6 complete; M4.7 next)
+- Status: Complete (M4.1–M4.7 implemented)
 - Date: 2026-11-11
 - Related: [ADR-0029](../ADR/0029-token-usage-accounting.md),
   [ADR-0030](../ADR/0030-conversation-sessions-and-context.md),
@@ -425,33 +425,33 @@ branches are untouched.
 
 ## Acceptance criteria
 
-- [ ] A workspace note and a conversation note can be edited, are injected first
+- [x] A workspace note and a conversation note can be edited, are injected first
       within the notes budget, and never cross workspaces.
-- [ ] An agent recalls its own, conversation, and workspace memories before
+- [x] An agent recalls its own, conversation, and workspace memories before
       every conversation turn, deterministically and within the recall budget,
       with pinned entries first.
-- [ ] Archived and pending entries are never injected.
-- [ ] Recall matches both Latin and Chinese text, including short queries.
-- [ ] Users can add, edit, pin, archive, and delete memories and approve or
+- [x] Archived and pending entries are never injected.
+- [x] Recall matches both Latin and Chinese text, including short queries.
+- [x] Users can add, edit, pin, archive, and delete memories and approve or
       dismiss pending candidates.
-- [ ] Automatic extraction is off by default; enabling it records one
+- [x] Automatic extraction is off by default; enabling it records one
       `memory_extract` call per settled turn and creates at most three pending
       entries.
-- [ ] The `remember` tool writes an agent-owned entry through the approval path.
-- [ ] Task executions receive workspace notes and recalled memories for the
+- [x] The `remember` tool writes an agent-owned entry through the approval path.
+- [x] Task executions receive workspace notes and recalled memories for the
       assignee and task channel.
-- [ ] Memory never leaks across workspaces or conversations; budgets are
+- [x] Memory never leaks across workspaces or conversations; budgets are
       enforced and the estimated injected size is visible.
-- [ ] The context indicator is a colored stacked bar with a labeled legend,
+- [x] The context indicator is a colored stacked bar with a labeled legend,
       token counts, percentages, remaining tokens until auto-compaction, and the
       compact action, and it falls back to absolute tokens when the window is
       unknown.
-- [ ] Packages round-trip notes, memories, and settings; secrets are redacted at
+- [x] Packages round-trip notes, memories, and settings; secrets are redacted at
       write and export; imported non-active statuses cannot become active.
-- [ ] Single-agent conversations, direct conversations, group conversations,
+- [x] Single-agent conversations, direct conversations, group conversations,
       group channels, and task execution keep their behavior when memory is
       empty.
-- [ ] Workspace and desktop gates pass.
+- [x] Workspace and desktop gates pass.
 
 ## Risks and mitigations
 
