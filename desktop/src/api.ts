@@ -18,13 +18,23 @@ import type {
   ConversationSummary,
   ConversationTurn,
   CowEvent,
+  MemoryEntry,
+  MemoryEntryUpdate,
+  MemoryFilter,
+  MemoryKind,
+  MemoryNotes,
+  MemorySave,
+  MemorySettings,
+  MemorySettingsUpdate,
   ModelMetadata,
   ModelSettings,
+  NoteSave,
   OnboardingState,
   PermissionRule,
   Project,
   ProjectBranches,
   ProviderProtocol,
+  RecalledMemory,
   RuleDecision,
   Run,
   SessionDecisionEntry,
@@ -159,6 +169,84 @@ export function clearConversationContext(
   agentId?: string,
 ): Promise<number> {
   return invoke<number>("clear_conversation_context", { channelId, agentId });
+}
+
+export function getMemoryNotes(channelId?: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("get_memory_notes", { channelId });
+}
+
+export function saveMemoryNote(content: string, channelId?: string): Promise<NoteSave> {
+  return invoke<NoteSave>("save_memory_note", { channelId, content });
+}
+
+export function deleteMemoryNote(channelId: string): Promise<number> {
+  return invoke<number>("delete_memory_note", { channelId });
+}
+
+export function getMemorySettings(): Promise<MemorySettings> {
+  return invoke<MemorySettings>("get_memory_settings");
+}
+
+export function updateMemorySettings(
+  update: MemorySettingsUpdate,
+): Promise<MemorySettings> {
+  return invoke<MemorySettings>("update_memory_settings", {
+    extractionEnabled: update.extractionEnabled,
+    recallEnabled: update.recallEnabled,
+    notesBudgetTokens: update.notesBudgetTokens,
+    recallBudgetTokens: update.recallBudgetTokens,
+  });
+}
+
+export function listMemoryEntries(filter: MemoryFilter = {}): Promise<MemoryEntry[]> {
+  return invoke<MemoryEntry[]>("list_memory_entries", {
+    status: filter.status,
+    agentId: filter.agentId,
+    channelId: filter.channelId,
+  });
+}
+
+export function addMemoryEntry(
+  content: string,
+  kind: MemoryKind,
+  options: { agentId?: string; channelId?: string; pinned?: boolean } = {},
+): Promise<MemorySave> {
+  return invoke<MemorySave>("add_memory_entry", { content, kind, ...options });
+}
+
+export function updateMemoryEntry(
+  entryId: string,
+  update: MemoryEntryUpdate,
+): Promise<MemorySave> {
+  return invoke<MemorySave>("update_memory_entry", { entryId, ...update });
+}
+
+export function approveMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("approve_memory_entry", { entryId });
+}
+
+export function dismissMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("dismiss_memory_entry", { entryId });
+}
+
+export function archiveMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("archive_memory_entry", { entryId });
+}
+
+export function deleteMemoryEntry(entryId: string): Promise<number> {
+  return invoke<number>("delete_memory_entry", { entryId });
+}
+
+export function previewMemoryRecall(
+  agentId: string,
+  query: string,
+  channelId?: string,
+): Promise<RecalledMemory | null> {
+  return invoke<RecalledMemory | null>("preview_memory_recall", {
+    channelId,
+    agentId,
+    query,
+  });
 }
 
 export function postMessage(

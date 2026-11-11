@@ -304,6 +304,14 @@ impl ConversationService {
                 estimate_tokens(&conversation_system_prompt(agent, &agents))
             };
             let projection = project_context(system_tokens, 0, &entries);
+            // What this participant's next turn would inject, without touching
+            // recall statistics. An empty query leaves notes and pinned entries.
+            let memory_tokens = self
+                .memory
+                .preview_recall(Some(channel_id), &agent.id, "")
+                .await?
+                .map(|recalled| recalled.tokens)
+                .unwrap_or(0);
             let cache_last_run = cache_summary(
                 &self
                     .store
@@ -314,6 +322,7 @@ impl ConversationService {
                 agent_id: agent.id.clone(),
                 agent_name: agent.name.clone(),
                 projection,
+                memory_tokens,
                 cache_last_run,
                 cache_conversation: cache_conversation.clone(),
             });

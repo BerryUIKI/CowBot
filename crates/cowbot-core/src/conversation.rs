@@ -509,6 +509,9 @@ pub struct ConversationParticipantContext {
     pub agent_id: AgentId,
     pub agent_name: String,
     pub projection: ContextProjection,
+    /// Estimated tokens the next turn's memory block would add.
+    #[serde(default)]
+    pub memory_tokens: u32,
     /// Cache summary of the agent's latest run in this conversation.
     pub cache_last_run: CacheUsageSummary,
     /// Cache summary of every call in this agent's branch.

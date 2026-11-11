@@ -126,21 +126,21 @@ pub struct MemorySettingsUpdate {
 }
 
 /// A saved note and whether redaction changed its content.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NoteSave {
     pub note: Note,
     pub redacted: bool,
 }
 
 /// A saved memory entry and whether redaction changed its content.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MemorySave {
     pub entry: MemoryEntry,
     pub redacted: bool,
 }
 
 /// The prompt block a turn would receive and the entries that shape it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RecalledMemory {
     pub block: String,
     pub entry_ids: Vec<String>,

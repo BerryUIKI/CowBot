@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{Client, LocalClient, NewTask};
+use cowbot_client::{
+    Client, LocalClient, MemoryFilter, MemorySettingsUpdate, NewConversation, NewMemory, NewTask,
+};
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::AssignmentStatus;
 use cowbot_core::channel::Sender;
 use cowbot_core::event::EventPayload;
+use cowbot_core::memory::{MemoryKind, MemorySource, MemoryStatus};
 use cowbot_core::run::RunStatus;
 use cowbot_core::task::{Task, TaskStatus};
 use cowbot_core::template::TemplateDocument;
@@ -234,4 +237,125 @@ async fn local_client_runs_a_crew_and_persists_history() {
     let runs = client.list_runs(&task_id).await.unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn local_client_manages_notes_memory_and_settings() {
+    let client = LocalClient::open_in_memory().await.unwrap();
+    let agents = client
+        .instantiate_agents("builtin-software-team")
+        .await
+        .unwrap();
+    let agent = agents[0].clone();
+    let conversation = client
+        .create_conversation(&NewConversation::single(
+            Some("Memory Lab".to_string()),
+            agent.id.clone(),
+            None,
+            "mock-model",
+        ))
+        .await
+        .unwrap();
+
+    // Notes redact on write and read back at both scopes.
+    let workspace_note = client
+        .save_workspace_note("Always answer with Rust examples.")
+        .await
+        .unwrap();
+    assert!(!workspace_note.redacted);
+    let conversation_note = client
+        .save_conversation_note(&conversation.id, "password: hunter2")
+        .await
+        .unwrap();
+    assert!(conversation_note.redacted);
+    assert!(conversation_note.note.content.contains("[redacted]"));
+    let notes = client.memory_notes(Some(&conversation.id)).await.unwrap();
+    assert_eq!(
+        notes.workspace.unwrap().content,
+        "Always answer with Rust examples."
+    );
+    assert!(notes.conversation.unwrap().content.contains("[redacted]"));
+    assert_eq!(
+        client
+            .delete_conversation_note(&conversation.id)
+            .await
+            .unwrap(),
+        1
+    );
+
+    // Settings round-trip.
+    let settings = client
+        .update_memory_settings(&MemorySettingsUpdate {
+            extraction_enabled: Some(true),
+            notes_budget_tokens: Some(400),
+            ..MemorySettingsUpdate::default()
+        })
+        .await
+        .unwrap();
+    assert!(settings.extraction_enabled);
+    assert_eq!(settings.notes_budget_tokens, 400);
+    assert!(client.memory_settings().await.unwrap().extraction_enabled);
+
+    // Entries appear in scoped filters and can be edited and archived.
+    let entry = client
+        .add_memory_entry(
+            NewMemory::user("The user prefers Rust for services.")
+                .with_kind(MemoryKind::Preference)
+                .with_scope(Some(agent.id.clone()), Some(conversation.id.clone())),
+        )
+        .await
+        .unwrap()
+        .entry;
+    let listed = client
+        .list_memory_entries(&MemoryFilter {
+            status: Some(MemoryStatus::Active),
+            agent_id: Some(agent.id.clone()),
+            channel_id: Some(conversation.id.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, entry.id);
+    assert_eq!(listed[0].source, MemorySource::User);
+
+    let updated = client
+        .update_memory_entry(
+            &entry.id,
+            &cowbot_client::MemoryUpdate {
+                content: Some("The user prefers Rust.".to_string()),
+                pinned: Some(true),
+                ..cowbot_client::MemoryUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(updated.entry.pinned);
+    assert_eq!(updated.entry.content, "The user prefers Rust.");
+
+    // The recall preview sees notes and the active entry without a mutation.
+    let recalled = client
+        .preview_memory_recall(Some(&conversation.id), &agent.id, "Rust")
+        .await
+        .unwrap()
+        .expect("memory is recalled");
+    assert!(recalled.block.contains("Always answer with Rust examples."));
+    assert!(recalled.block.contains("prefers Rust"));
+    assert_eq!(recalled.entry_ids, vec![entry.id.clone()]);
+
+    // The context meter exposes the estimated memory block per participant.
+    let context = client.conversation_context(&conversation.id).await.unwrap();
+    assert_eq!(context.participants.len(), 1);
+    assert!(context.participants[0].memory_tokens > 0);
+
+    let dismissed = client.dismiss_memory_entry(&entry.id).await.unwrap();
+    assert_eq!(dismissed.status, MemoryStatus::Archived);
+    assert!(client
+        .list_memory_entries(&MemoryFilter {
+            status: Some(MemoryStatus::Active),
+            ..MemoryFilter::default()
+        })
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(client.delete_memory_entry(&entry.id).await.unwrap(), 1);
 }
