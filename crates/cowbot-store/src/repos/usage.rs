@@ -207,6 +207,50 @@ impl Store {
         .map_err(db)?;
         Ok(row.into_domain())
     }
+
+    /// Billed usage of the latest run one agent owned in a conversation channel.
+    ///
+    /// Router calls are skipped when picking the run so a per-participant meter
+    /// never attributes a routing decision to the participant.
+    pub async fn latest_run_usage_for_channel_agent(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<UsageTotals> {
+        let run_id: Option<String> = sqlx::query_scalar(
+            "SELECT run_id FROM llm_calls
+             WHERE channel_id = ? AND agent_id = ? AND run_id IS NOT NULL
+               AND call_kind <> ?
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(&channel_id.0)
+        .bind(&agent_id.0)
+        .bind(LlmCallKind::Router.as_str())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+
+        let Some(run_id) = run_id else {
+            return Ok(UsageTotals::default());
+        };
+
+        let row = sqlx::query_as::<_, UsageTotalsRow>(
+            "SELECT COUNT(*) AS calls,
+                    COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+                    COALESCE(SUM(cache_write_input_tokens), 0) AS cache_write_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens
+             FROM llm_calls WHERE channel_id = ? AND agent_id = ? AND run_id = ?",
+        )
+        .bind(&channel_id.0)
+        .bind(&agent_id.0)
+        .bind(&run_id)
+        .fetch_one(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(row.into_domain())
+    }
 }
 
 #[derive(sqlx::FromRow)]
