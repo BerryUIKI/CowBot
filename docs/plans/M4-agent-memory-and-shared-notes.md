@@ -1,6 +1,6 @@
 # M4 — Agent memory and shared notes
 
-- Status: Planned (not started)
+- Status: In progress (M4.1–M4.3 complete; M4.4 next)
 - Date: 2026-11-11
 - Related: [ADR-0029](../ADR/0029-token-usage-accounting.md),
   [ADR-0030](../ADR/0030-conversation-sessions-and-context.md),
@@ -44,6 +44,10 @@ entries are the long-term surface.
 - A CLI surface to list and add memories for verification and scripting.
 - Tabs/sections in the desktop for notes, memory entries, and pending
   candidates.
+- A colored segmented context indicator in the conversation header popover:
+  one stacked bar with a legend for messages, memory, system prompt, tools, the
+  auto-compact buffer, and free space, plus token counts, percentages, the
+  remaining tokens until auto-compaction, and the compact action.
 
 ### Out of scope
 
@@ -98,6 +102,48 @@ entries are the long-term surface.
 12. Task executions recall workspace-shared, agent, and task-channel memory for
     the assignee using the task description as the query; notes are always
     included.
+13. The context indicator is colored and self-explanatory: a stacked bar shows
+    each category in a fixed color, the legend repeats every color with its
+    token count and percentage, and color is never the only signal. The bar uses
+    the same categories and colors for single conversations, group participant
+    tabs, and unknown windows (where it falls back to absolute tokens).
+
+## Colored context indicator
+
+The header popover replaces the plain token breakdown with a visual summary
+modelled on the reference screenshot:
+
+- A horizontal stacked bar fills the usable window. Segment colors are fixed:
+  messages blue, memory gray, system prompt yellow, tools orange, auto-compact
+  buffer dark gray, and the remaining free space in the neutral track color.
+- Messages combine history and the latest message in the bar; the detailed
+  breakdown keeps them separate.
+- Memory is the estimated token size of the notes and recalled entries the next
+  turn would inject, including the `[truncated]` markers. It is `0` when recall
+  is disabled or nothing matches.
+- The auto-compact buffer is the space between the configured threshold and the
+  usable window. It is shown only when automatic compaction is on; free space is
+  the remainder below the threshold and drives the "tokens until auto-compact"
+  line.
+- The legend lists each visible segment with a color swatch, label, token count,
+  and percent of the usable window. Colors meet the existing dark theme and are
+  paired with labels, so the view stays readable without color.
+- The header summary shows "used / usable (percent)", the remaining tokens
+  until auto-compaction, and a **Compact now** action. A **See detailed
+  breakdown** toggle reveals the existing per-category list, cache figures, and
+  per-participant tabs.
+- Unknown windows keep the absolute-token view and hide the bar and percentages
+  rather than inventing a scale.
+- Group conversations show the same bar for the active participant tab and keep
+  the ring at the fullest branch.
+
+## Data needed from the service
+
+`ConversationContext` gains an estimated memory block size per participant:
+the same note and recall budget resolution the turn uses, without updating
+recall statistics. The desktop bar reads `memory_tokens`; the detailed view can
+show the notes and entries that would be injected. This keeps the indicator
+honest without the frontend assembling prompts.
 
 ## Memory model
 
@@ -341,6 +387,9 @@ branches are untouched.
 ### M4.6 `cowbot-client`, Tauri, packages, CLI
 
 - Client and Tauri memory operations and the reply-turn budget plumbing.
+- Conversation context exposes the estimated memory block size (notes plus
+  recall, no statistic updates) per participant so the colored indicator can
+  show a memory segment.
 - `.cowpkg` export/import for notes, entries, and settings; redaction before
   export; import normalizes unknown statuses to `archived` and unknown kinds to
   `note` so a foreign package cannot inject active memory silently.
@@ -352,6 +401,9 @@ branches are untouched.
 
 - Settings → Memory, the conversation notes block, the memory estimate line,
   the pending-candidate review, and the "Remember this message" action.
+- The colored segmented context indicator with its legend, until-auto-compact
+  line, compact action, and detailed-breakdown toggle, for single conversations
+  and each group participant tab.
 - ADR-0033 for memory storage, recall, extraction, and privacy; amend the PRD,
   ARCHITECTURE, ROADMAP, USER_GUIDE, PACKAGE_FORMAT, CLAUDE.md, docs index, and
   this plan's status and acceptance checkboxes.
@@ -389,6 +441,10 @@ branches are untouched.
       assignee and task channel.
 - [ ] Memory never leaks across workspaces or conversations; budgets are
       enforced and the estimated injected size is visible.
+- [ ] The context indicator is a colored stacked bar with a labeled legend,
+      token counts, percentages, remaining tokens until auto-compaction, and the
+      compact action, and it falls back to absolute tokens when the window is
+      unknown.
 - [ ] Packages round-trip notes, memories, and settings; secrets are redacted at
       write and export; imported non-active statuses cannot become active.
 - [ ] Single-agent conversations, direct conversations, group conversations,
@@ -407,6 +463,7 @@ branches are untouched.
 | Cross-workspace leakage | Workspace id in every query, foreign keys, and a dedicated isolation test |
 | FTS index drifts from entries | FTS maintenance in the same transaction; M4.2 tests insert, update, and delete |
 | Memory makes prompts non-deterministic | Deterministic ranking, stable rendering, timestamps in entries, and no runtime writes except recall stats |
+| Color-only encoding is unreadable for some users | Every segment has a text label, token count, and percentage; colors follow one fixed palette and have sufficient contrast on the dark theme |
 | Packages import malicious memory | Redaction at export, status normalization on import, bounded content, and pending review |
 
 ## Deferred decisions

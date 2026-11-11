@@ -11,6 +11,7 @@ mod channel_agents;
 mod channels;
 mod conversations;
 mod crew_runner;
+mod memory;
 mod permissions;
 mod permissions_rules;
 mod scheduler;
@@ -31,6 +32,10 @@ pub use channel_agents::{
 pub use channels::ChannelService;
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
+pub use memory::{
+    MemoryFilter, MemorySave, MemoryService, MemorySettingsUpdate, MemoryUpdate, NewMemory,
+    NoteSave, RecalledMemory,
+};
 pub use permissions::{
     ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
     PermissionRequest,

@@ -112,6 +112,22 @@ impl Store {
         row.map(ChannelRow::into_domain).transpose()
     }
 
+    /// Whether a channel belongs to the given workspace.
+    pub async fn channel_in_workspace(
+        &self,
+        id: &ChannelId,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<bool> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id = ? AND workspace_id = ?")
+                .bind(&id.0)
+                .bind(&workspace_id.0)
+                .fetch_one(self.pool())
+                .await
+                .map_err(db)?;
+        Ok(count > 0)
+    }
+
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         let rows = sqlx::query_as::<_, ChannelRow>(
             "SELECT id, name, topic, created_at, agent_id, pinned, kind FROM channels

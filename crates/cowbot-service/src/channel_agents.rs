@@ -17,6 +17,7 @@ use cowbot_tools::ToolRegistry;
 
 use crate::channels::ChannelService;
 use crate::conversations::ConversationService;
+use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
@@ -107,6 +108,7 @@ pub struct ChannelAgentService {
     workspace_id: WorkspaceId,
     channels: ChannelService,
     conversations: ConversationService,
+    memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
 }
 
@@ -118,6 +120,7 @@ impl ChannelAgentService {
                 bus.clone(),
                 workspace_id.clone(),
             ),
+            memory: MemoryService::new(store.clone(), workspace_id.clone()),
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
@@ -264,7 +267,22 @@ impl ChannelAgentService {
         let platform = Self::platform_context(&agents, options.platform_context.as_deref());
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
-            let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
+            let memory = if direct {
+                self.memory
+                    .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+                    .await
+            } else {
+                None
+            };
+            let task = Self::turn_task(
+                agent,
+                &channel,
+                message,
+                &history,
+                direct,
+                &platform,
+                memory.as_deref(),
+            );
             let mut task_options = run_options.clone();
             if options.approval_level == ApprovalLevel::PlanOnly {
                 task_options.capture_plan_task = Some(task.id.clone());
@@ -342,29 +360,34 @@ impl ChannelAgentService {
         history: &str,
         direct: bool,
         platform: &str,
+        memory: Option<&str>,
     ) -> Task {
         let author = match &message.sender {
             Sender::User(_) => "the user".to_string(),
             Sender::Agent(id) => format!("agent '{}'", id.0),
             Sender::System => "the system".to_string(),
         };
+        let memory = memory
+            .map(|memory| format!("\n\n{memory}"))
+            .unwrap_or_default();
 
         let description = if direct {
             format!(
-                "{platform}\n\n\
+                "{platform}{memory}\n\n\
                  You are the agent in a direct conversation with {author}.\n\n\
                  Recent messages in this conversation:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
                  Reply as yourself. Be concise, answer what was asked, and do not \
                  repeat the conversation history back to the user.",
                 platform = platform,
+                memory = memory,
                 history = history,
                 author = author,
                 content = message.content.trim(),
             )
         } else {
             format!(
-                "{platform}\n\n\
+                "{platform}{memory}\n\n\
                  You were mentioned in the channel #{channel_name}.\n\n\
                  Recent channel messages:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
@@ -372,6 +395,7 @@ impl ChannelAgentService {
                  Be concise, answer what was asked, and do not repeat the channel \
                  history back to the user.",
                 platform = platform,
+                memory = memory,
                 channel_name = channel.name,
                 history = history,
                 author = author,

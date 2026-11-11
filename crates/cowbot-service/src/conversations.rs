@@ -28,6 +28,7 @@ use crate::channel_agents::{
     ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
 };
 use crate::channels::{normalize_channel_name, ChannelService};
+use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
@@ -74,6 +75,7 @@ pub struct ConversationService {
     bus: EventBus,
     workspace_id: WorkspaceId,
     channels: ChannelService,
+    memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
 }
 
@@ -81,6 +83,7 @@ impl ConversationService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
         Self {
             channels: ChannelService::new(store.clone(), bus.clone()),
+            memory: MemoryService::new(store.clone(), workspace_id.clone()),
             store,
             bus,
             workspace_id,
@@ -414,7 +417,11 @@ impl ConversationService {
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
-        let messages = assemble_conversation_messages(&agent, &agents, &entries);
+        let memory = self
+            .memory
+            .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+            .await;
+        let messages = assemble_conversation_messages(&agent, &agents, &entries, memory.as_deref());
 
         let task = Task::new(
             message.content.trim(),
@@ -756,6 +763,10 @@ impl ConversationService {
                 .store
                 .list_context_entries(&channel.id, &agent.id)
                 .await?;
+            let memory = self
+                .memory
+                .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+                .await;
             let messages = assemble_group_messages(
                 agent,
                 &participants,
@@ -763,6 +774,7 @@ impl ConversationService {
                 platform,
                 &agents,
                 &entries,
+                memory.as_deref(),
             );
             let task = Task::new(
                 message.content.trim(),
@@ -1691,6 +1703,7 @@ pub(crate) fn assemble_group_messages(
     platform_context: Option<&str>,
     agents: &[AgentProfile],
     entries: &[ContextEntry],
+    memory: Option<&str>,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::system(group_system_prompt(
         agent,
@@ -1699,6 +1712,9 @@ pub(crate) fn assemble_group_messages(
         platform_context,
         agents,
     ))];
+    if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
+        messages.push(ChatMessage::system(memory));
+    }
     messages.extend(
         entries
             .iter()
@@ -1734,10 +1750,14 @@ pub(crate) fn assemble_conversation_messages(
     agent: &AgentProfile,
     agents: &[AgentProfile],
     entries: &[ContextEntry],
+    memory: Option<&str>,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::system(conversation_system_prompt(
         agent, agents,
     ))];
+    if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
+        messages.push(ChatMessage::system(memory));
+    }
     messages.extend(
         entries
             .iter()
@@ -1848,8 +1868,10 @@ mod tests {
             entry(ContextRole::User, "latest question"),
         ];
 
-        let first = assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries);
-        let second = assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries);
+        let first =
+            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
+        let second =
+            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
 
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(second.iter()) {
@@ -1861,6 +1883,36 @@ mod tests {
         assert_eq!(first[2].content, "first answer");
         assert_eq!(first[3].content, "latest question");
         assert!(!first.iter().any(|message| message.content == "forgotten"));
+    }
+
+    #[test]
+    fn assembly_inserts_memory_after_the_system_prompt() {
+        let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+        let entries = vec![entry(ContextRole::User, "question")];
+
+        let messages = assemble_conversation_messages(
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            Some(cowbot_core::memory::MEMORY_BLOCK_HEADER),
+        );
+        assert_eq!(messages[0].role, ChatRole::System);
+        assert_eq!(
+            messages[1].content,
+            cowbot_core::memory::MEMORY_BLOCK_HEADER
+        );
+        assert_eq!(messages[2].content, "question");
+
+        let blank = assemble_conversation_messages(
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            Some("  "),
+        );
+        assert_eq!(
+            blank[1].content, "question",
+            "a blank memory block adds no message"
+        );
     }
 
     #[test]
@@ -1881,6 +1933,7 @@ mod tests {
             &agent,
             std::slice::from_ref(&agent),
             &[assistant, tool],
+            None,
         );
         assert_eq!(
             messages[1].tool_calls.as_ref().unwrap()[0].name,
