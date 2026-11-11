@@ -1,5 +1,5 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{AgentUpdate, Client, NewTask};
+use cowbot_client::{AgentUpdate, Client, ConversationSummary, NewConversation, NewTask};
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
 use cowbot_core::assignment::{
@@ -8,8 +8,9 @@ use cowbot_core::assignment::{
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
-    context_usage_state, usable_window, CacheUsageSummary, CompactionOutcome, ContextUsageState,
-    ConversationContext, ConversationSettingsUpdate,
+    context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
+    ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
+    ConversationTurn,
 };
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -20,7 +21,7 @@ use cowbot_core::tool::ToolDefinition;
 use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
-use cowbot_service::ChannelTurnOptions;
+use cowbot_service::{ChannelTurnOptions, ParticipantCapacity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,18 @@ pub struct ChannelReplyFinished {
     pub message_id: String,
     pub reply_count: usize,
     pub error: Option<String>,
+    /// Group responders whose answer was posted.
+    pub replied: Vec<String>,
+    /// Group responders whose task failed.
+    pub failed: Vec<String>,
+    /// Group responders skipped because their branch was full.
+    pub skipped: Vec<String>,
+    /// Responders selected by mention, router, or default resolution.
+    pub selected: Vec<String>,
+    /// Route source of a group turn (`mention`, `router`, `default`, ...).
+    pub route: Option<String>,
+    /// Persisted group turn row.
+    pub turn_id: Option<String>,
 }
 
 #[tauri::command]
@@ -184,9 +197,10 @@ pub async fn post_message(
         .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
     let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
 
-    // A conversation has a fixed provider/model and a bounded context. Check
-    // capacity before persisting the message so a blocked send leaves no
-    // orphaned user turn behind.
+    // A single-agent conversation keeps the M2 pre-send capacity block. A
+    // group is not pre-blocked: the service checks each selected branch after
+    // routing. The view supplies the per-participant windows for that check.
+    let mut participant_capacity = Vec::new();
     let (llm, model) = if channel.is_conversation() {
         let settings = state
             .client
@@ -194,29 +208,43 @@ pub async fn post_message(
             .await
             .map_err(|error| error.to_string())?;
         let runtime = conversation_runtime(&state, &settings);
-        let pending = estimate_tokens(content.trim());
         let mut view = conversation_context_view(&state, &channel_id).await?;
 
+        if view.participants.len() <= 1 {
+            let pending = estimate_tokens(content.trim());
+            if let Some(usable) = view.usable_tokens {
+                let projected = view.total_tokens.saturating_add(pending);
+                let threshold_reached = settings.auto_compact
+                    && u64::from(projected) * 100
+                        >= u64::from(usable) * u64::from(settings.compact_threshold);
+                if threshold_reached {
+                    state
+                        .client
+                        .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    view = conversation_context_view(&state, &channel_id).await?;
+                }
+                if view.total_tokens.saturating_add(pending) >= usable {
+                    return Err(
+                        "This conversation's context is full. Compact the context, clear it, or \
+                         start a new conversation before sending."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
         if let Some(usable) = view.usable_tokens {
-            let projected = view.total_tokens.saturating_add(pending);
-            let threshold_reached = settings.auto_compact
-                && u64::from(projected) * 100
-                    >= u64::from(usable) * u64::from(settings.compact_threshold);
-            if threshold_reached {
-                state
-                    .client
-                    .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                view = conversation_context_view(&state, &channel_id).await?;
-            }
-            if view.total_tokens.saturating_add(pending) >= usable {
-                return Err(
-                    "This conversation's context is full. Compact the context, clear it, or \
-                     start a new conversation before sending."
-                        .to_string(),
-                );
-            }
+            participant_capacity = view
+                .participants
+                .iter()
+                .map(|participant| ParticipantCapacity {
+                    agent_id: AgentId::new(participant.agent_id.clone()),
+                    usable_window: usable,
+                    tool_tokens: participant.tool_tokens,
+                })
+                .collect();
         }
         runtime
     } else {
@@ -256,23 +284,35 @@ pub async fn post_message(
                     max_concurrency: 4,
                     use_model_permissions,
                     platform_context,
-                    participant_capacity: Vec::new(),
+                    participant_capacity,
                 },
             )
             .await;
         running.lock().remove(&reply_id);
 
         let payload = match outcome {
-            Ok(report) if report.is_empty() => None,
+            Ok(report) if report.is_empty() && report.route.is_none() => None,
             Ok(report) => Some(ChannelReplyFinished {
                 message_id: reply_id,
                 reply_count: report.agents.len(),
                 error: None,
+                replied: report.replied.iter().map(|agent| agent.0.clone()).collect(),
+                failed: report.failed.iter().map(|agent| agent.0.clone()).collect(),
+                skipped: report.skipped.iter().map(|agent| agent.0.clone()).collect(),
+                selected: report.agents.iter().map(|agent| agent.0.clone()).collect(),
+                route: report.route.map(|source| source.as_str().to_string()),
+                turn_id: report.turn_id.map(|turn| turn.0),
             }),
             Err(error) => Some(ChannelReplyFinished {
                 message_id: reply_id,
                 reply_count: 0,
                 error: Some(error.to_string()),
+                replied: Vec::new(),
+                failed: Vec::new(),
+                skipped: Vec::new(),
+                selected: Vec::new(),
+                route: None,
+                turn_id: None,
             }),
         };
         if let Some(payload) = payload {
@@ -1190,6 +1230,24 @@ pub fn get_model_settings(state: State<'_, AppState>) -> Result<ModelSettings, S
     Ok(model_settings(&state, &config))
 }
 
+/// Context meter values for one participant of a conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationParticipantView {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub system_tokens: u32,
+    pub tool_tokens: u32,
+    pub history_tokens: u32,
+    pub latest_tokens: u32,
+    pub total_tokens: u32,
+    pub active_entries: u32,
+    pub excluded_entries: u32,
+    pub percent_used: Option<f32>,
+    pub state: ContextUsageState,
+    pub cache_last_run: CacheUsageSummary,
+    pub cache_conversation: CacheUsageSummary,
+}
+
 /// Context meter values for one conversation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversationContextView {
@@ -1211,8 +1269,12 @@ pub struct ConversationContextView {
     pub state: ContextUsageState,
     pub auto_compact: bool,
     pub compact_threshold: u32,
+    pub router_enabled: bool,
+    pub default_responder: Option<String>,
     pub cache_last_turn: CacheUsageSummary,
     pub cache_conversation: CacheUsageSummary,
+    /// One entry per participant; the top-level fields mirror the first.
+    pub participants: Vec<ConversationParticipantView>,
 }
 
 /// Fixed provider/model of a conversation, falling back to the active runtime
@@ -1277,43 +1339,126 @@ async fn conversation_context_view(
         .list_agents()
         .await
         .map_err(|error| error.to_string())?;
-    let tool_tokens = agents
-        .iter()
-        .find(|agent| agent.id == context.agent_id)
-        .map(|agent| {
-            serde_json::to_value(state.tools.definitions_for(&agent.tools))
-                .map(|value| estimate_json_tokens(&value))
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-
+    let tool_tokens = participant_tool_tokens(state, &context, &agents);
     let (context_window, max_output_tokens) = conversation_window(state, &settings);
     Ok(context_view_from_parts(
         context,
         &settings,
-        tool_tokens,
+        &tool_tokens,
         context_window,
         max_output_tokens,
     ))
 }
 
+/// Tool-schema tokens each conversation participant pays in every request.
+fn participant_tool_tokens(
+    state: &AppState,
+    context: &ConversationContext,
+    agents: &[AgentProfile],
+) -> HashMap<AgentId, u32> {
+    let participant_ids: Vec<AgentId> = if context.participants.is_empty() {
+        vec![context.agent_id.clone()]
+    } else {
+        context
+            .participants
+            .iter()
+            .map(|participant| participant.agent_id.clone())
+            .collect()
+    };
+    let mut tool_tokens = HashMap::new();
+    for agent_id in participant_ids {
+        if let Some(agent) = agents.iter().find(|agent| agent.id == agent_id) {
+            let tokens = serde_json::to_value(state.tools.definitions_for(&agent.tools))
+                .map(|value| estimate_json_tokens(&value))
+                .unwrap_or(0);
+            tool_tokens.insert(agent_id, tokens);
+        }
+    }
+    tool_tokens
+}
+
 fn context_view_from_parts(
     context: ConversationContext,
     settings: &cowbot_core::conversation::ConversationSettings,
-    tool_tokens: u32,
+    tool_tokens: &HashMap<AgentId, u32>,
     context_window: Option<u32>,
     max_output_tokens: Option<u32>,
 ) -> ConversationContextView {
-    let projection = &context.projection;
-    let total_tokens = projection.total_tokens().saturating_add(tool_tokens);
     let usable_tokens = usable_window(context_window, max_output_tokens);
-    let (percent_used, usage_state) = context_usage_state(total_tokens, usable_tokens);
+    let mut participants = Vec::new();
+    if context.participants.is_empty() {
+        participants.push(participant_view(
+            context.agent_id.0.clone(),
+            String::new(),
+            &context.projection,
+            tool_tokens.get(&context.agent_id).copied().unwrap_or(0),
+            context.cache_last_turn.clone(),
+            context.cache_conversation.clone(),
+            usable_tokens,
+        ));
+    } else {
+        for participant in &context.participants {
+            participants.push(participant_view(
+                participant.agent_id.0.clone(),
+                participant.agent_name.clone(),
+                &participant.projection,
+                tool_tokens.get(&participant.agent_id).copied().unwrap_or(0),
+                participant.cache_last_run.clone(),
+                participant.cache_conversation.clone(),
+                usable_tokens,
+            ));
+        }
+    }
 
+    // The top-level fields mirror the first participant for older callers.
+    let first = participants
+        .first()
+        .cloned()
+        .expect("one participant view is always built");
     ConversationContextView {
         channel_id: context.channel_id.0,
         agent_id: context.agent_id.0,
         model: context.model,
         provider_id: context.provider_id,
+        system_tokens: first.system_tokens,
+        tool_tokens: first.tool_tokens,
+        history_tokens: first.history_tokens,
+        latest_tokens: first.latest_tokens,
+        total_tokens: first.total_tokens,
+        active_entries: first.active_entries,
+        excluded_entries: first.excluded_entries,
+        context_window,
+        max_output_tokens,
+        usable_tokens,
+        percent_used: first.percent_used,
+        state: first.state,
+        auto_compact: settings.auto_compact,
+        compact_threshold: settings.compact_threshold,
+        router_enabled: settings.router_enabled,
+        default_responder: settings
+            .default_responder
+            .as_ref()
+            .map(|agent| agent.0.clone()),
+        cache_last_turn: first.cache_last_run,
+        cache_conversation: first.cache_conversation,
+        participants,
+    }
+}
+
+fn participant_view(
+    agent_id: String,
+    agent_name: String,
+    projection: &ContextProjection,
+    tool_tokens: u32,
+    cache_last_run: CacheUsageSummary,
+    cache_conversation: CacheUsageSummary,
+    usable_tokens: Option<u32>,
+) -> ConversationParticipantView {
+    let total_tokens = projection.total_tokens().saturating_add(tool_tokens);
+    let (percent_used, state) = context_usage_state(total_tokens, usable_tokens);
+    ConversationParticipantView {
+        agent_id,
+        agent_name,
         system_tokens: projection.system_tokens,
         tool_tokens,
         history_tokens: projection.history_tokens,
@@ -1321,15 +1466,10 @@ fn context_view_from_parts(
         total_tokens,
         active_entries: projection.active_entries,
         excluded_entries: projection.excluded_entries,
-        context_window,
-        max_output_tokens,
-        usable_tokens,
         percent_used,
-        state: usage_state,
-        auto_compact: settings.auto_compact,
-        compact_threshold: settings.compact_threshold,
-        cache_last_turn: context.cache_last_turn,
-        cache_conversation: context.cache_conversation,
+        state,
+        cache_last_run,
+        cache_conversation,
     }
 }
 
@@ -1337,19 +1477,70 @@ fn context_view_from_parts(
 pub async fn create_conversation(
     state: State<'_, AppState>,
     title: Option<String>,
-    agent_id: String,
+    agent_id: Option<String>,
+    agent_ids: Option<Vec<String>>,
+    router_enabled: Option<bool>,
+    default_responder: Option<String>,
 ) -> Result<Channel, String> {
     let config = load_config(&state)?;
     let (_, model) = state.runtime_model();
     let provider_id = config.active_provider().map(|provider| provider.id.clone());
+    let mut participants = agent_ids
+        .unwrap_or_default()
+        .into_iter()
+        .map(AgentId::new)
+        .collect::<Vec<_>>();
+    if participants.is_empty() {
+        if let Some(agent_id) = agent_id {
+            participants.push(AgentId::new(agent_id));
+        }
+    }
     state
         .client
-        .create_conversation(
-            title.as_deref(),
-            &AgentId::new(agent_id),
+        .create_conversation(&NewConversation {
+            title,
+            agent_ids: participants,
             provider_id,
-            &model,
-        )
+            model,
+            router_enabled: router_enabled.unwrap_or(false),
+            default_responder: default_responder.map(AgentId::new),
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_conversation_summaries(
+    state: State<'_, AppState>,
+) -> Result<Vec<ConversationSummary>, String> {
+    state
+        .client
+        .list_conversation_summaries()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_conversation_participants(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<Vec<ChannelParticipant>, String> {
+    state
+        .client
+        .list_conversation_participants(&ChannelId::new(channel_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_conversation_turns(
+    state: State<'_, AppState>,
+    channel_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<ConversationTurn>, String> {
+    state
+        .client
+        .list_conversation_turns(&ChannelId::new(channel_id), limit.unwrap_or(50))
         .await
         .map_err(|error| error.to_string())
 }
@@ -1368,6 +1559,8 @@ pub async fn update_conversation_settings(
     channel_id: String,
     auto_compact: Option<bool>,
     compact_threshold: Option<u32>,
+    router_enabled: Option<bool>,
+    default_responder: Option<String>,
 ) -> Result<ConversationContextView, String> {
     let channel_id = ChannelId::new(channel_id);
     state
@@ -1377,8 +1570,8 @@ pub async fn update_conversation_settings(
             &ConversationSettingsUpdate {
                 auto_compact,
                 compact_threshold,
-                router_enabled: None,
-                default_responder: None,
+                router_enabled,
+                default_responder: default_responder.map(AgentId::new),
             },
         )
         .await
@@ -1390,6 +1583,7 @@ pub async fn update_conversation_settings(
 pub async fn compact_conversation(
     state: State<'_, AppState>,
     channel_id: String,
+    agent_id: Option<String>,
 ) -> Result<CompactionOutcome, String> {
     let channel_id = ChannelId::new(channel_id);
     let settings = state
@@ -1398,23 +1592,39 @@ pub async fn compact_conversation(
         .await
         .map_err(|error| error.to_string())?;
     let (llm, model) = conversation_runtime(&state, &settings);
-    state
-        .client
-        .compact_conversation(&channel_id, llm, &model)
-        .await
-        .map_err(|error| error.to_string())
+    match agent_id {
+        Some(agent_id) => state
+            .client
+            .compact_conversation_agent(&channel_id, &AgentId::new(agent_id), llm, &model)
+            .await
+            .map_err(|error| error.to_string()),
+        None => state
+            .client
+            .compact_conversation(&channel_id, llm, &model)
+            .await
+            .map_err(|error| error.to_string()),
+    }
 }
 
 #[tauri::command]
 pub async fn clear_conversation_context(
     state: State<'_, AppState>,
     channel_id: String,
+    agent_id: Option<String>,
 ) -> Result<u64, String> {
-    state
-        .client
-        .clear_conversation_context(&ChannelId::new(channel_id))
-        .await
-        .map_err(|error| error.to_string())
+    let channel_id = ChannelId::new(channel_id);
+    match agent_id {
+        Some(agent_id) => state
+            .client
+            .clear_conversation_participant_context(&channel_id, &AgentId::new(agent_id))
+            .await
+            .map_err(|error| error.to_string()),
+        None => state
+            .client
+            .clear_conversation_context(&channel_id)
+            .await
+            .map_err(|error| error.to_string()),
+    }
 }
 
 /// Values submitted by the provider editor.
@@ -1997,7 +2207,7 @@ mod tests {
     use cowbot_core::assignment::{
         AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
     };
-    use cowbot_core::conversation::ContextProjection;
+    use cowbot_core::conversation::{ContextProjection, ConversationParticipantContext};
 
     fn draft(name: &str, base_url: &str, model: &str, api_key: Option<&str>) -> ProviderDraft {
         ProviderDraft {
@@ -2278,7 +2488,7 @@ mod tests {
         let neutral = context_view_from_parts(
             context_with_tokens(5_000),
             &settings,
-            0,
+            &HashMap::new(),
             Some(10_000),
             Some(1_000),
         );
@@ -2289,11 +2499,15 @@ mod tests {
         assert_eq!(neutral.state, ContextUsageState::Neutral);
         assert_eq!(neutral.compact_threshold, 80);
         assert!(!neutral.auto_compact);
+        assert_eq!(neutral.participants.len(), 1);
+        assert_eq!(neutral.participants[0].agent_id, "agent-1");
+        assert!(!neutral.router_enabled);
+        assert_eq!(neutral.default_responder, None);
 
         let warning = context_view_from_parts(
             context_with_tokens(6_000),
             &settings,
-            0,
+            &HashMap::new(),
             Some(10_000),
             Some(1_000),
         );
@@ -2302,7 +2516,7 @@ mod tests {
         let danger = context_view_from_parts(
             context_with_tokens(7_500),
             &settings,
-            0,
+            &HashMap::new(),
             Some(10_000),
             Some(1_000),
         );
@@ -2311,13 +2525,19 @@ mod tests {
         let full = context_view_from_parts(
             context_with_tokens(8_000),
             &settings,
-            0,
+            &HashMap::new(),
             Some(10_000),
             Some(1_000),
         );
         assert_eq!(full.state, ContextUsageState::Full);
 
-        let unknown = context_view_from_parts(context_with_tokens(5_000), &settings, 0, None, None);
+        let unknown = context_view_from_parts(
+            context_with_tokens(5_000),
+            &settings,
+            &HashMap::new(),
+            None,
+            None,
+        );
         assert_eq!(unknown.state, ContextUsageState::Unknown);
         assert_eq!(unknown.percent_used, None);
         assert_eq!(unknown.usable_tokens, None);
@@ -2331,15 +2551,67 @@ mod tests {
             None,
             "test-model",
         );
+        let mut tool_tokens = HashMap::new();
+        tool_tokens.insert(AgentId::new("agent-1"), 250);
         let view = context_view_from_parts(
             context_with_tokens(1_000),
             &settings,
-            250,
+            &tool_tokens,
             Some(10_000),
             None,
         );
         assert_eq!(view.tool_tokens, 250);
         assert_eq!(view.total_tokens, 1_250);
+    }
+
+    #[test]
+    fn context_view_builds_one_entry_per_participant() {
+        let settings = cowbot_core::conversation::ConversationSettings::group(
+            ChannelId::new("channel-1"),
+            None,
+            "test-model",
+            Some(AgentId::new("agent-2")),
+        );
+        let mut context = context_with_tokens(1_000);
+        context.participants = vec![
+            ConversationParticipantContext {
+                agent_id: AgentId::new("agent-1"),
+                agent_name: "Planner".to_string(),
+                projection: ContextProjection {
+                    system_tokens: 1_000,
+                    ..ContextProjection::default()
+                },
+                cache_last_run: CacheUsageSummary::default(),
+                cache_conversation: CacheUsageSummary::default(),
+            },
+            ConversationParticipantContext {
+                agent_id: AgentId::new("agent-2"),
+                agent_name: "Coder".to_string(),
+                projection: ContextProjection {
+                    system_tokens: 2_000,
+                    ..ContextProjection::default()
+                },
+                cache_last_run: CacheUsageSummary::default(),
+                cache_conversation: CacheUsageSummary::default(),
+            },
+        ];
+        let mut tool_tokens = HashMap::new();
+        tool_tokens.insert(AgentId::new("agent-1"), 100);
+        tool_tokens.insert(AgentId::new("agent-2"), 300);
+
+        let view =
+            context_view_from_parts(context, &settings, &tool_tokens, Some(10_000), Some(1_000));
+
+        assert_eq!(view.participants.len(), 2);
+        assert_eq!(view.participants[0].agent_name, "Planner");
+        assert_eq!(view.participants[0].total_tokens, 1_100);
+        assert_eq!(view.participants[1].agent_name, "Coder");
+        assert_eq!(view.participants[1].total_tokens, 2_300);
+        assert!(!view.router_enabled);
+        assert_eq!(view.default_responder.as_deref(), Some("agent-2"));
+        // The top-level fields mirror the first participant.
+        assert_eq!(view.agent_id, "agent-1");
+        assert_eq!(view.total_tokens, 1_100);
     }
 
     fn assignment_with(status: AssignmentStatus) -> Assignment {

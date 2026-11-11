@@ -14,6 +14,9 @@ import type {
   ClientSession,
   CompactionOutcome,
   ConversationContext,
+  ConversationParticipant,
+  ConversationSummary,
+  ConversationTurn,
   CowEvent,
   ModelMetadata,
   ModelSettings,
@@ -90,6 +93,40 @@ export function createConversation(
   return invoke<Channel>("create_conversation", { title, agentId });
 }
 
+/** Create a group conversation with an ordered participant list. */
+export function createGroupConversation(
+  title: string | null,
+  agentIds: string[],
+  routerEnabled: boolean,
+  defaultResponder: string | null,
+): Promise<Channel> {
+  return invoke<Channel>("create_conversation", {
+    title,
+    agentIds,
+    routerEnabled,
+    defaultResponder,
+  });
+}
+
+export function listConversationSummaries(): Promise<ConversationSummary[]> {
+  return invoke<ConversationSummary[]>("list_conversation_summaries");
+}
+
+export function listConversationParticipants(
+  channelId: string,
+): Promise<ConversationParticipant[]> {
+  return invoke<ConversationParticipant[]>("list_conversation_participants", {
+    channelId,
+  });
+}
+
+export function listConversationTurns(
+  channelId: string,
+  limit = 50,
+): Promise<ConversationTurn[]> {
+  return invoke<ConversationTurn[]>("list_conversation_turns", { channelId, limit });
+}
+
 export function getConversationContext(channelId: string): Promise<ConversationContext> {
   return invoke<ConversationContext>("get_conversation_context", { channelId });
 }
@@ -98,20 +135,30 @@ export function updateConversationSettings(
   channelId: string,
   autoCompact: boolean,
   compactThreshold: number,
+  routerEnabled?: boolean,
+  defaultResponder?: string | null,
 ): Promise<ConversationContext> {
   return invoke<ConversationContext>("update_conversation_settings", {
     channelId,
     autoCompact,
     compactThreshold,
+    routerEnabled,
+    defaultResponder,
   });
 }
 
-export function compactConversation(channelId: string): Promise<CompactionOutcome> {
-  return invoke<CompactionOutcome>("compact_conversation", { channelId });
+export function compactConversation(
+  channelId: string,
+  agentId?: string,
+): Promise<CompactionOutcome> {
+  return invoke<CompactionOutcome>("compact_conversation", { channelId, agentId });
 }
 
-export function clearConversationContext(channelId: string): Promise<number> {
-  return invoke<number>("clear_conversation_context", { channelId });
+export function clearConversationContext(
+  channelId: string,
+  agentId?: string,
+): Promise<number> {
+  return invoke<number>("clear_conversation_context", { channelId, agentId });
 }
 
 export function postMessage(
@@ -211,6 +258,12 @@ export interface ChannelReplyFinished {
   message_id: string;
   reply_count: number;
   error: string | null;
+  replied: string[];
+  failed: string[];
+  skipped: string[];
+  selected: string[];
+  route: string | null;
+  turn_id: string | null;
 }
 
 export function onChannelReply(handler: (event: ChannelReplyFinished) => void): Promise<UnlistenFn> {

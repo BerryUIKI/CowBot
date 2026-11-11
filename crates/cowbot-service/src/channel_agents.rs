@@ -6,6 +6,7 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::approval::ApprovalStatus;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
+use cowbot_core::conversation::{RouteSource, TurnId};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
@@ -81,6 +82,10 @@ pub struct ChannelTurnReport {
     pub failed: Vec<AgentId>,
     /// Group responders skipped because their context branch was full.
     pub skipped: Vec<AgentId>,
+    /// How a group message selected its responders.
+    pub route: Option<RouteSource>,
+    /// Persisted group turn row.
+    pub turn_id: Option<TurnId>,
 }
 
 impl ChannelTurnReport {
