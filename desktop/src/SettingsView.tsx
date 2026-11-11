@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import ModelProviderSettings from "./ModelProviderSettings";
+import MemorySettings from "./MemorySettings";
 import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
@@ -59,6 +60,7 @@ interface SettingsViewProps {
 export type SettingsSection =
   | "model"
   | "team"
+  | "memory"
   | "approvals"
   | "audit"
   | "projects"
@@ -68,6 +70,7 @@ export type SettingsSection =
 export const settingsSections: { id: SettingsSection; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "team", label: "Team" },
+  { id: "memory", label: "Memory" },
   { id: "approvals", label: "Approvals" },
   { id: "audit", label: "Audit" },
   { id: "projects", label: "Projects" },
@@ -564,6 +567,8 @@ export default function SettingsView({
               </section>
             </>
           ) : null}
+
+          {section === "memory" ? <MemorySettings agents={agents} /> : null}
 
           {section === "approvals" ? (
             <section
