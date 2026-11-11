@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
@@ -11,7 +12,7 @@ use cowbot_core::conversation::{
     ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
     ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
     ConversationSettingsUpdate, ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS,
-    MAX_GROUP_PARTICIPANTS, MIN_GROUP_PARTICIPANTS,
+    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
@@ -19,7 +20,7 @@ use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord, UsageTotals};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
@@ -32,6 +33,35 @@ use crate::session_decisions::SessionDecisions;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
 const MAX_TITLE_CHARS: usize = 68;
+
+/// Time one router completion may take before the turn falls back.
+const ROUTER_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Display messages shown to the router.
+const ROUTER_HISTORY_LIMIT: usize = 10;
+
+/// Token budget for the router's rendered history.
+const ROUTER_INPUT_TOKENS: u32 = 4_000;
+
+/// Characters kept from one history message before rendering.
+const ROUTER_MESSAGE_CHARS: usize = 800;
+
+/// The router asks for one JSON object naming at most three participants.
+const ROUTER_SYSTEM_PROMPT: &str = "You route messages in a group conversation. Given the \
+participant roster, recent messages, and the latest user message, choose the participants who \
+should answer. Reply with one JSON object only, for example {\"agents\": [\"Planner\"], \
+\"reason\": \"why they should answer\"}. Name at most three participants exactly as they appear \
+in the roster, or return an empty list when nobody should answer. Do not add any other text.";
+
+/// One router decision attempt.
+struct RouterDecision {
+    agents: Vec<AgentProfile>,
+    reason: Option<String>,
+    /// Id shared by the turn row and the persisted router usage record.
+    call_id: String,
+    /// Why the router produced no usable selection, if it did.
+    failure: Option<String>,
+}
 
 /// Application service for user-created conversation sessions (ADR-0030).
 ///
@@ -510,29 +540,69 @@ impl ConversationService {
                 ..ChannelTurnReport::default()
             });
         } else {
-            let (responder, stale) = resolve_default_responder(settings, &participants);
-            let Some(responder) = responder else {
-                turn.source = RouteSource::Silent;
-                self.record_turn(&turn).await?;
-                return Ok(ChannelTurnReport {
-                    unknown_mentions: unknown,
-                    ..ChannelTurnReport::default()
-                });
-            };
-            if stale {
-                self.channels
-                    .post_system_notice(
-                        &channel.id,
-                        &format!(
-                            "The configured default responder is no longer a participant; {} \
-                             answered instead.",
-                            responder.name
-                        ),
+            let mut routed = None;
+            if settings.router_enabled {
+                let decision = self
+                    .route_with_model(
+                        channel,
+                        &participants,
+                        message,
+                        llm.clone(),
+                        &settings.model,
                     )
                     .await?;
+                turn.router_call_id = Some(decision.call_id.clone());
+                if let Some(failure) = decision.failure {
+                    turn.reason = Some(failure.clone());
+                    let fallback = if resolve_default_responder(settings, &participants)
+                        .0
+                        .is_some()
+                    {
+                        " Falling back to the default responder."
+                    } else {
+                        " The message was left unanswered."
+                    };
+                    self.channels
+                        .post_system_notice(
+                            &channel.id,
+                            &format!("Routing failed: {failure}.{fallback}"),
+                        )
+                        .await?;
+                } else {
+                    turn.source = RouteSource::Router;
+                    turn.reason = decision.reason;
+                    routed = Some(decision.agents);
+                }
             }
-            turn.source = RouteSource::Default;
-            vec![responder.clone()]
+
+            match routed {
+                Some(agents) => agents,
+                None => {
+                    let (responder, stale) = resolve_default_responder(settings, &participants);
+                    let Some(responder) = responder else {
+                        turn.source = RouteSource::Silent;
+                        self.record_turn(&turn).await?;
+                        return Ok(ChannelTurnReport {
+                            unknown_mentions: unknown,
+                            ..ChannelTurnReport::default()
+                        });
+                    };
+                    if stale {
+                        self.channels
+                            .post_system_notice(
+                                &channel.id,
+                                &format!(
+                                    "The configured default responder is no longer a participant; \
+                                     {} answered instead.",
+                                    responder.name
+                                ),
+                            )
+                            .await?;
+                    }
+                    turn.source = RouteSource::Default;
+                    vec![responder.clone()]
+                }
+            }
         };
 
         let default_name = resolve_default_responder(settings, &participants)
@@ -919,6 +989,165 @@ impl ConversationService {
             .unwrap_or(false))
     }
 
+    /// Ask the conversation's fixed model which participants should answer.
+    ///
+    /// One completion, temperature 0.0, a 20-second timeout, and no retries.
+    /// Every failure is returned as a decision with `failure` set so the caller
+    /// can post a notice and fall back to the default responder.
+    async fn route_with_model(
+        &self,
+        channel: &Channel,
+        participants: &[AgentProfile],
+        message: &ChannelMessage,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+    ) -> CowResult<RouterDecision> {
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let roster = participants
+            .iter()
+            .map(|participant| {
+                format!(
+                    "- {} — {}: {}",
+                    participant.name, participant.role, participant.goal
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let history = self
+            .render_router_history(channel, message, participants)
+            .await?;
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages: vec![
+                ChatMessage::system(ROUTER_SYSTEM_PROMPT),
+                ChatMessage::user(format!(
+                    "Participants:\n{roster}\n\nRecent messages:\n{history}\n\n\
+                     Latest message from the user:\n{}\n\nReply with JSON only.",
+                    message.content.trim()
+                )),
+            ],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+        };
+
+        let response = match complete_with_timeout(llm, &request, ROUTER_TIMEOUT).await {
+            Ok(response) => response,
+            Err(failure) => {
+                return Ok(RouterDecision {
+                    agents: Vec::new(),
+                    reason: None,
+                    call_id,
+                    failure: Some(failure),
+                })
+            }
+        };
+
+        self.record_router_usage(channel, model, &call_id, &response)
+            .await;
+
+        let Some(content) = response
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|content| !content.is_empty())
+        else {
+            return Ok(RouterDecision {
+                agents: Vec::new(),
+                reason: None,
+                call_id,
+                failure: Some("the router returned no text".to_string()),
+            });
+        };
+
+        match parse_router_response(content) {
+            Ok((names, reason)) => {
+                let agents = select_participants(&names, participants);
+                if agents.is_empty() {
+                    Ok(RouterDecision {
+                        agents,
+                        reason,
+                        call_id,
+                        failure: Some("the router named no participant".to_string()),
+                    })
+                } else {
+                    Ok(RouterDecision {
+                        agents,
+                        reason,
+                        call_id,
+                        failure: None,
+                    })
+                }
+            }
+            Err(failure) => Ok(RouterDecision {
+                agents: Vec::new(),
+                reason: None,
+                call_id,
+                failure: Some(failure),
+            }),
+        }
+    }
+
+    async fn record_router_usage(
+        &self,
+        channel: &Channel,
+        model: &str,
+        call_id: &str,
+        response: &ChatCompletionResponse,
+    ) {
+        let mut record = LlmCallRecord::new(LlmCallKind::Router, model.to_string());
+        record.id = call_id.to_string();
+        record.channel_id = Some(channel.id.clone());
+        record.usage = response.usage.clone();
+        record.raw_usage = response.raw_usage.clone();
+        if let Err(error) = self.store.record_llm_call(&record).await {
+            tracing::warn!(error = %error, "Failed to record router usage");
+        }
+    }
+
+    async fn render_router_history(
+        &self,
+        channel: &Channel,
+        message: &ChannelMessage,
+        participants: &[AgentProfile],
+    ) -> CowResult<String> {
+        let messages = self.store.list_messages(&channel.id, 50).await?;
+        let mut lines = Vec::new();
+        let mut tokens = 0_u32;
+        for entry in messages.iter().rev() {
+            if entry.id == message.id || entry.created_at >= message.created_at {
+                continue;
+            }
+            let author = match &entry.sender {
+                Sender::User(_) => "User".to_string(),
+                Sender::Agent(id) => participants
+                    .iter()
+                    .find(|participant| &participant.id == id)
+                    .map(|participant| participant.name.clone())
+                    .unwrap_or_else(|| format!("Agent {}", id.0)),
+                Sender::System => continue,
+            };
+            let line = format!(
+                "{author}: {}",
+                truncate_chars(entry.content.trim(), ROUTER_MESSAGE_CHARS)
+            );
+            let cost = estimate_tokens(&line);
+            if tokens.saturating_add(cost) > ROUTER_INPUT_TOKENS && !lines.is_empty() {
+                break;
+            }
+            tokens = tokens.saturating_add(cost);
+            lines.push(line);
+            if lines.len() >= ROUTER_HISTORY_LIMIT {
+                break;
+            }
+        }
+        lines.reverse();
+        Ok(if lines.is_empty() {
+            "(no earlier messages)".to_string()
+        } else {
+            lines.join("\n")
+        })
+    }
+
     /// Summarize older context entries and exclude them from future requests.
     ///
     /// Display messages are never touched. A system notice tells the user what
@@ -1274,6 +1503,95 @@ impl ConversationService {
     }
 }
 
+/// Run one router completion under its timeout.
+///
+/// The timeout is a separate helper so the failure paths are testable with a
+/// short duration; the caller always uses [`ROUTER_TIMEOUT`].
+async fn complete_with_timeout(
+    llm: Arc<dyn LlmProvider>,
+    request: &ChatCompletionRequest,
+    timeout: Duration,
+) -> Result<ChatCompletionResponse, String> {
+    match tokio::time::timeout(timeout, llm.chat_complete(request)).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(error)) => Err(format!("the router call failed: {error}")),
+        Err(_) => Err("the router timed out".to_string()),
+    }
+}
+
+/// Parse the router's JSON answer into names and an optional reason.
+fn parse_router_response(content: &str) -> Result<(Vec<String>, Option<String>), String> {
+    let (Some(start), Some(end)) = (content.find('{'), content.rfind('}')) else {
+        return Err("the router returned invalid JSON".to_string());
+    };
+    if end < start {
+        return Err("the router returned invalid JSON".to_string());
+    }
+    let value: serde_json::Value = serde_json::from_str(&content[start..=end])
+        .map_err(|_| "the router returned invalid JSON".to_string())?;
+
+    let mut names = Vec::new();
+    match value.get("agents") {
+        Some(serde_json::Value::Array(items)) => {
+            for item in items {
+                if let Some(name) = item.as_str() {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        Some(serde_json::Value::String(name)) => names.push(name.clone()),
+        _ => {}
+    }
+    if let Some(name) = value.get("agent").and_then(serde_json::Value::as_str) {
+        names.push(name.to_string());
+    }
+    if names.is_empty() {
+        return Err("the router selected nobody".to_string());
+    }
+
+    let reason = value
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_string);
+    Ok((names, reason))
+}
+
+/// Match router names against the roster, preserving the router's order.
+fn select_participants(names: &[String], participants: &[AgentProfile]) -> Vec<AgentProfile> {
+    let mut selected: Vec<AgentProfile> = Vec::new();
+    for name in names {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let Some(agent) = participants.iter().find(|agent| {
+            agent.name.eq_ignore_ascii_case(name) || agent.id.0.eq_ignore_ascii_case(name)
+        }) else {
+            continue;
+        };
+        if selected.iter().any(|existing| existing.id == agent.id) {
+            continue;
+        }
+        selected.push(agent.clone());
+        if selected.len() >= MAX_ROUTED_AGENTS {
+            break;
+        }
+    }
+    selected
+}
+
+fn truncate_chars(value: &str, max: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
 fn truncate_title(title: &str) -> String {
     let chars = title.chars().collect::<Vec<_>>();
     if chars.len() <= MAX_TITLE_CHARS {
@@ -1570,5 +1888,77 @@ mod tests {
         assert!(transcript.contains("[user] old"));
         assert!(transcript.contains("[assistant] answer"));
         assert!(!transcript.contains("omitted"));
+    }
+
+    #[test]
+    fn router_response_parses_fenced_json() {
+        let (names, reason) = parse_router_response(
+            "```json\n{\"agents\":[\"Planner\",\"Coder\"],\"reason\":\"both\"}\n```",
+        )
+        .unwrap();
+        assert_eq!(names, vec!["Planner", "Coder"]);
+        assert_eq!(reason.as_deref(), Some("both"));
+    }
+
+    #[test]
+    fn router_selection_preserves_order_deduplicates_and_caps_at_three() {
+        let participants = vec![
+            AgentProfile::new("Planner", "Architect", "Plan", "Careful"),
+            AgentProfile::new("Coder", "Engineer", "Ship", "Careful"),
+            AgentProfile::new("Reviewer", "Reviewer", "Review", "Careful"),
+            AgentProfile::new("Writer", "Writer", "Write", "Careful"),
+        ];
+        let names = [
+            "writer".to_string(),
+            "Planner".to_string(),
+            "WRITER".to_string(),
+            "Ghost".to_string(),
+            "Coder".to_string(),
+            "Reviewer".to_string(),
+        ];
+
+        let selected = select_participants(&names, &participants);
+        let picked = selected
+            .iter()
+            .map(|agent| agent.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(picked, vec!["Writer", "Planner", "Coder"]);
+    }
+
+    #[tokio::test]
+    async fn router_timeout_is_reported() {
+        struct SlowLlm;
+
+        #[async_trait::async_trait]
+        impl LlmProvider for SlowLlm {
+            fn name(&self) -> &str {
+                "slow"
+            }
+
+            async fn chat_complete(
+                &self,
+                _request: &ChatCompletionRequest,
+            ) -> CowResult<ChatCompletionResponse> {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok(ChatCompletionResponse {
+                    content: Some("late".to_string()),
+                    tool_calls: Vec::new(),
+                    finish_reason: None,
+                    usage: None,
+                    raw_usage: None,
+                })
+            }
+        }
+
+        let request = ChatCompletionRequest {
+            model: "mock-model".to_string(),
+            messages: vec![ChatMessage::user("route this")],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+        };
+        let failure = complete_with_timeout(Arc::new(SlowLlm), &request, Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert_eq!(failure, "the router timed out");
     }
 }

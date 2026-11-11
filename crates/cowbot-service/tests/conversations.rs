@@ -206,6 +206,76 @@ struct FailingLlm {
     fail_on: String,
 }
 
+enum RouterReply {
+    Json(&'static str),
+    Error,
+}
+
+struct RouterLlm {
+    reply: RouterReply,
+    requests: Mutex<Vec<ChatCompletionRequest>>,
+}
+
+impl RouterLlm {
+    fn new(reply: RouterReply) -> Self {
+        Self {
+            reply,
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn router_requests(&self) -> Vec<ChatCompletionRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+fn router_response(content: Option<String>) -> ChatCompletionResponse {
+    ChatCompletionResponse {
+        content,
+        tool_calls: Vec::new(),
+        finish_reason: Some("stop".to_string()),
+        usage: Some(TokenUsage {
+            uncached_input_tokens: 60,
+            cached_input_tokens: 40,
+            output_tokens: 5,
+            ..TokenUsage::default()
+        }),
+        raw_usage: None,
+    }
+}
+
+#[async_trait]
+impl LlmProvider for RouterLlm {
+    fn name(&self) -> &str {
+        "router"
+    }
+
+    async fn chat_complete(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        let routing = request
+            .messages
+            .first()
+            .map(|message| {
+                message
+                    .content
+                    .starts_with("You route messages in a group conversation")
+            })
+            .unwrap_or(false);
+        if routing {
+            self.requests.lock().unwrap().push(request.clone());
+            return match self.reply {
+                RouterReply::Json(content) => Ok(router_response(Some(content.to_string()))),
+                RouterReply::Error => {
+                    Err(CowError::Agent("router provider unavailable".to_string()))
+                }
+            };
+        }
+        Ok(router_response(Some("agent answer".to_string())))
+    }
+}
+
 #[async_trait]
 impl LlmProvider for FailingLlm {
     fn name(&self) -> &str {
@@ -1097,4 +1167,239 @@ async fn group_partial_failure_keeps_the_other_answers() {
     assert!(messages.iter().any(|message| {
         message.sender == Sender::System && message.content.contains("Coder could not answer")
     }));
+}
+
+async fn enable_router(fixture: &GroupFixture, default_responder: Option<AgentId>) {
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                auto_compact: None,
+                compact_threshold: None,
+                router_enabled: Some(true),
+                default_responder,
+            },
+        )
+        .await
+        .unwrap();
+}
+
+async fn run_routed_turn(
+    fixture: &GroupFixture,
+    llm: Arc<RouterLlm>,
+    content: &str,
+) -> (ChannelMessage, cowbot_service::ChannelTurnReport) {
+    let message = post_user(&fixture.channels, &fixture.channel, content).await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            llm,
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    (message, report)
+}
+
+#[tokio::test]
+async fn router_selects_participants_and_records_usage() {
+    let fixture = group_fixture(None).await;
+    enable_router(&fixture, None).await;
+    let coder = fixture.participants[1].id.clone();
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json(
+        r#"{"agents":["Coder"],"reason":"implementation work"}"#,
+    )));
+
+    let (message, report) = run_routed_turn(&fixture, llm.clone(), "who should take this?").await;
+
+    assert_eq!(report.agents, vec![coder.clone()]);
+    assert_eq!(report.replied, vec![coder.clone()]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Router);
+    assert_eq!(turn.selected_agents, vec![coder.clone()]);
+    assert_eq!(turn.reason.as_deref(), Some("implementation work"));
+    assert!(turn.router_call_id.is_some());
+
+    let requests = llm.router_requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.temperature, Some(0.0));
+    assert!(request.tools.is_empty());
+    let prompt = &request.messages[1].content;
+    assert!(prompt.contains("- Planner — Architect: Plan"));
+    assert!(prompt.contains("- Coder — Engineer: Ship"));
+    assert!(prompt.contains("Latest message from the user:\nwho should take this?"));
+
+    // Router usage is billed to the channel but never to the agent's run.
+    let total = fixture
+        .store
+        .sum_llm_usage_for_channel(&fixture.channel.id)
+        .await
+        .unwrap();
+    assert_eq!(total.calls, 2);
+    let coder_usage = fixture
+        .store
+        .latest_run_usage_for_channel_agent(&fixture.channel.id, &coder)
+        .await
+        .unwrap();
+    assert_eq!(coder_usage.calls, 1);
+}
+
+#[tokio::test]
+async fn router_accepts_a_single_agent_name_case_insensitively() {
+    let fixture = group_fixture(None).await;
+    enable_router(&fixture, None).await;
+    let coder = fixture.participants[1].id.clone();
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json(
+        r#"{"agent":"coder","reason":"coding task"}"#,
+    )));
+
+    let (message, report) = run_routed_turn(&fixture, llm, "who should take this?").await;
+
+    assert_eq!(report.agents, vec![coder.clone()]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Router);
+    assert_eq!(turn.selected_agents, vec![coder]);
+    assert_eq!(turn.reason.as_deref(), Some("coding task"));
+}
+
+#[tokio::test]
+async fn explicit_mentions_skip_the_router() {
+    let fixture = group_fixture(None).await;
+    enable_router(&fixture, None).await;
+    let coder = fixture.participants[1].id.clone();
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json(
+        r#"{"agents":["Planner"]}"#,
+    )));
+
+    let (message, report) = run_routed_turn(&fixture, llm.clone(), "@Coder ship it").await;
+
+    assert_eq!(report.agents, vec![coder]);
+    assert!(llm.router_requests().is_empty());
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Mention);
+}
+
+#[tokio::test]
+async fn router_invalid_json_falls_back_to_the_default_responder() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    enable_router(&fixture, Some(planner.clone())).await;
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json("not json at all")));
+
+    let (message, report) = run_routed_turn(&fixture, llm, "who should take this?").await;
+
+    assert_eq!(report.agents, vec![planner]);
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message.content.contains("Routing failed")
+            && message.content.contains("the router returned invalid JSON")
+    }));
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Default);
+    assert_eq!(
+        turn.reason.as_deref(),
+        Some("the router returned invalid JSON")
+    );
+    assert!(turn.router_call_id.is_some());
+}
+
+#[tokio::test]
+async fn router_empty_selection_falls_back_to_the_default_responder() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    enable_router(&fixture, Some(planner.clone())).await;
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json(
+        r#"{"agents":[],"reason":"nobody fits"}"#,
+    )));
+
+    let (message, report) = run_routed_turn(&fixture, llm, "who should take this?").await;
+
+    assert_eq!(report.agents, vec![planner]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Default);
+    assert_eq!(turn.reason.as_deref(), Some("the router selected nobody"));
+}
+
+#[tokio::test]
+async fn router_unknown_names_fall_back_to_the_default_responder() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    enable_router(&fixture, Some(planner.clone())).await;
+    let llm = Arc::new(RouterLlm::new(RouterReply::Json(
+        r#"{"agents":["Ghost"],"reason":"unknown"}"#,
+    )));
+
+    let (message, report) = run_routed_turn(&fixture, llm, "who should take this?").await;
+
+    assert_eq!(report.agents, vec![planner]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Default);
+    assert_eq!(
+        turn.reason.as_deref(),
+        Some("the router named no participant")
+    );
+}
+
+#[tokio::test]
+async fn router_provider_error_falls_back_to_the_default_responder() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    enable_router(&fixture, Some(planner.clone())).await;
+    let llm = Arc::new(RouterLlm::new(RouterReply::Error));
+
+    let (message, report) = run_routed_turn(&fixture, llm, "who should take this?").await;
+
+    assert_eq!(report.agents, vec![planner]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Default);
+    let reason = turn.reason.unwrap_or_default();
+    assert!(
+        reason.contains("the router call failed"),
+        "unexpected reason: {reason}"
+    );
 }
