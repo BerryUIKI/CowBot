@@ -55,6 +55,7 @@ pub const WORKSPACE_NOTE_TITLE: &str = "Workspace note";
 /// Title of a lazily created conversation note.
 pub const CONVERSATION_NOTE_TITLE: &str = "Conversation note";
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What kind of durable information an entry carries.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +95,7 @@ impl FromStr for MemoryKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where an entry is in its review lifecycle.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +132,7 @@ impl FromStr for MemoryStatus {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Who wrote an entry.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +169,7 @@ impl FromStr for MemorySource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One durable memory entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -319,6 +323,7 @@ impl MemoryEntry {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a memory entry applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -333,6 +338,7 @@ pub enum MemoryScope {
     AgentInConversation,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A workspace or conversation note.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
@@ -394,6 +400,7 @@ impl Note {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Per-workspace memory behavior.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemorySettings {
@@ -711,6 +718,7 @@ pub fn select_recalled_entries<'a>(
     plan_recalled_entries(ranked, budget_tokens).selected
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why one ranked candidate was not injected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -786,6 +794,7 @@ pub fn plan_recalled_entries<'a>(
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One memory entry a recall considered, as reported to an inspector.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecallCandidate {
@@ -804,6 +813,7 @@ pub struct RecallCandidate {
     pub skip_reason: Option<RecallSkipReason>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What one recall would inject and every candidate it considered.
 ///
 /// The block is rendered for a prompt; the candidates carry the selection

@@ -14,6 +14,7 @@ import type {
   ClientSession,
   CommandInfo,
   CommandParseResult,
+  SideAnswer,
   CompactionOutcome,
   ContextPreview,
   ConversationContext,
@@ -430,7 +431,7 @@ export function cancelTask(taskId: string, reason: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId, reason });
 }
 
-/// Stop a running turn; returns whether a live turn was stopped (ADR-0039).
+/// Stop a running turn; returns whether a live turn was stopped (ADR-0041).
 export function cancelTurn(turnId: string): Promise<boolean> {
   return invoke<boolean>("cancel_turn", { turnId });
 }
@@ -643,6 +644,24 @@ export function listCommands(): Promise<CommandInfo[]> {
 
 export function parseCommand(input: string): Promise<CommandParseResult> {
   return invoke<CommandParseResult>("parse_command", { input });
+}
+
+export function askSideQuestion(
+  channelId: string,
+  question: string,
+  options: {
+    agentId?: string;
+    model?: string;
+    approvalLevel?: ApprovalLevel;
+  } = {},
+): Promise<SideAnswer> {
+  return invoke<SideAnswer>("ask_side_question", {
+    channelId,
+    question,
+    agentId: options.agentId,
+    model: options.model,
+    approvalLevel: options.approvalLevel,
+  });
 }
 
 export function addProject(path: string): Promise<Project[]> {

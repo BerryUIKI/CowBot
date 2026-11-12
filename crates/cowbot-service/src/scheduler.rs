@@ -121,7 +121,7 @@ struct Execution<'a> {
     plan_mode: bool,
     memory: Option<String>,
     /// The turn's cancellation scope; a stopped turn aborts the model request
-    /// and keeps the partial text (ADR-0039).
+    /// and keeps the partial text (ADR-0041).
     cancel: cowbot_core::cancel::CancelSignal,
     /// The turn the agent reports deltas and tool progress to.
     observer: Option<Arc<dyn cowbot_agent::TurnObserver>>,
@@ -260,7 +260,7 @@ pub struct AssignmentScheduler {
     prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
     /// Tasks whose completed Plan-mode output becomes their stored plan.
     plan_tasks: Arc<StdMutex<HashSet<TaskId>>>,
-    /// One lifecycle owner for every turn this scheduler runs (ADR-0039).
+    /// One lifecycle owner for every turn this scheduler runs (ADR-0041).
     turns: Arc<TurnRunner>,
 }
 
@@ -342,7 +342,7 @@ impl AssignmentScheduler {
     ///
     /// Idempotent: an unknown or already finished turn reports `false` and does
     /// nothing. The runner aborts the upstream request and stores the partial
-    /// text with the stopped marker (ADR-0039).
+    /// text with the stopped marker (ADR-0041).
     pub fn cancel_turn(&self, turn: &TurnId) -> bool {
         self.turns.cancel(turn)
     }
@@ -828,7 +828,7 @@ impl AssignmentScheduler {
 
         // Every assignment runs inside a turn and the runner owns its
         // lifecycle, so chat, group, and task paths stop and settle the same
-        // way (ADR-0039).
+        // way (ADR-0041).
         let (spec, channel_id) = match &prepared {
             Some(turn) => (
                 TurnSpec {
@@ -946,7 +946,7 @@ impl AssignmentScheduler {
             Err(error) => {
                 // A stopped turn keeps the text it produced; a failed turn
                 // persists its partial reply too, so a reload shows what the
-                // user already saw (ADR-0039).
+                // user already saw (ADR-0041).
                 let partial = draft.trim().to_string();
                 let stopped = matches!(error, CowError::Cancelled);
                 let completion = if stopped {

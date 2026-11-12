@@ -1,6 +1,6 @@
 //! Turn lifecycle tests: normal completion, a stop mid-text, a stop during a
 //! tool call, an approval pause, and a provider error after partial text
-//! (ADR-0039).
+//! (ADR-0041).
 
 use std::sync::Arc;
 use std::time::Duration;

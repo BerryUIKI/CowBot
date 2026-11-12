@@ -27,7 +27,7 @@ pub trait LlmProvider: Send + Sync {
     ///
     /// Cancellation is cooperative: `cancel` is checked before the request
     /// starts and races the upstream call, and a tripped signal returns
-    /// [`CowError::Cancelled`] rather than a provider error (ADR-0039).
+    /// [`CowError::Cancelled`] rather than a provider error (ADR-0041).
     async fn chat_stream(
         &self,
         request: &ChatCompletionRequest,

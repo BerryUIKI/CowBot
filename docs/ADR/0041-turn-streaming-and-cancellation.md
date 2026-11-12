@@ -1,4 +1,4 @@
-# ADR 0039: Turn streaming and cancellation
+# ADR 0041: Turn streaming and cancellation
 
 - Status: Accepted
 - Date: 2026-11-13

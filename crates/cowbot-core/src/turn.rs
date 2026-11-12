@@ -8,6 +8,7 @@ use crate::tool::{ToolCall, ToolResult};
 use serde::{Deserialize, Serialize};
 
 /// Where a turn came from.
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TurnTarget {
@@ -23,6 +24,7 @@ pub enum TurnTarget {
 }
 
 /// A tool call that is waiting for a human decision.
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingApproval {
     pub approval: Approval,
@@ -35,7 +37,8 @@ pub struct PendingApproval {
 ///
 /// Every variant except [`TurnEvent::TurnStarted`] carries the turn id, and
 /// [`TurnEvent::is_terminal`] marks the two that end it. The final message is
-/// persisted before a terminal event is published (ADR-0039).
+/// persisted before a terminal event is published (ADR-0041).
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::agent::{AgentId, AgentProfile};
 use crate::task::TaskId;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a task run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RunId(pub String);
@@ -26,6 +27,7 @@ impl std::fmt::Display for RunId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Status of a single agent run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +39,7 @@ pub enum RunStatus {
     Cancelled,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A single execution of a task by an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
@@ -76,6 +79,7 @@ impl Run {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A persisted tool invocation associated with a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {

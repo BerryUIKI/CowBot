@@ -1,13 +1,150 @@
+// Types the desktop uses.
+//
+// API-shaped types come from `./generated`, which `scripts/generate-types.sh`
+// produces from the Rust definitions in `crates/cowbot-core` (ADR-0040). Do not
+// hand-write a type a Tauri command returns: annotate the Rust type with
+// `ts(export)` and regenerate instead.
+//
+// Below the re-export block are the types that exist only in the desktop: view
+// state, the composer's command surface, and the presentation helpers.
+
+import type {
+  AgentProfile,
+  ApprovalLevel,
+  AssignmentStatus,
+  CacheUsageSummary,
+  Channel,
+  ChannelParticipant,
+  CommandTarget,
+  ConversationSettings,
+  MemoryEntry,
+  MemoryKind,
+  MemoryStatus,
+  Note,
+  PromptKind,
+  PromptPlan,
+  RuleDecision,
+  TaskWorktree,
+  TokenSource,
+  ToolCallRecord,
+  Workspace,
+} from "./generated/index";
+
+
+
+
+
+
+export type {
+  AgentId,
+  AgentProfile,
+  AgentTemplate,
+  Approval,
+  ApprovalId,
+  ApprovalLevel,
+  ApprovalStatus,
+  Assignment,
+  AssignmentBudgets,
+  AssignmentEvent,
+  AssignmentEventKind,
+  AssignmentId,
+  AssignmentMode,
+  AssignmentOrigin,
+  AssignmentOutcome,
+  AssignmentRequester,
+  AssignmentStatus,
+  AuditEvent,
+  AuditSource,
+  BypassCritical,
+  CacheUsageSummary,
+  Channel,
+  ChannelId,
+  ChannelKind,
+  ChannelMessage,
+  ChannelParticipant,
+  CommandArg,
+  CommandSpec,
+  CommandTarget,
+  CompactionOutcome,
+  ContextEntry,
+  ContextEntryKind,
+  ContextEventKind,
+  ContextProjection,
+  ContextRole,
+  ContextToolCall,
+  ConversationMode,
+  ConversationParticipantContext,
+  ConversationSettings,
+  ConversationSettingsUpdate,
+  ConversationTurn,
+  LlmCallKind,
+  LlmPromptSnapshot,
+  MemoryEntry,
+  MemoryKind,
+  MemoryScope,
+  MemorySettings,
+  MemorySource,
+  MemoryStatus,
+  Note,
+  PermissionRule,
+  PromptKind,
+  PromptMemory,
+  PromptMessage,
+  PromptPlan,
+  PromptRole,
+  PromptSlot,
+  PromptSlotName,
+  PromptSnapshotDetail,
+  PromptSnapshotSettings,
+  PromptSnapshotSummary,
+  PromptTool,
+  RecallCandidate,
+  RecallPreview,
+  RecallSkipReason,
+  ReplyMode,
+  RouteSource,
+  RuleDecision,
+  RuleSource,
+  Run,
+  RunId,
+  RunStatus,
+  Sender,
+  SnapshotMessage,
+  SnapshotToolCall,
+  Task,
+  TaskId,
+  TaskSource,
+  TaskTemplate,
+  TaskWorktree,
+  TaskWorktreeDiff,
+  TemplateDocument,
+  TemplateKind,
+  TokenSource,
+  ToolCallRecord,
+  ToolDefinition,
+  TurnId,
+  Workspace,
+  WorkspaceId,
+  WorkspacePolicy,
+  WorktreeStatus,
+  PendingApproval,
+  ToolResult,
+  TurnEvent,
+  TurnTarget,
+} from "./generated/index";
+
+// Values that the generated surface does not carry: the desktop owns them.
+//
+// A few view types share a name with a core type the desktop also imports (the
+// meter's `ConversationContext`, the composer's `CommandArgKind`), so they are
+// declared locally rather than re-exported.
+export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
+export type CommandArgKind = "text" | "participant" | "choice";
+
 export interface ClientUser {
   id: string;
   name: string;
   email: string;
-}
-
-export interface Workspace {
-  id: string;
-  name: string;
-  created_at: string;
 }
 
 export interface ClientSession {
@@ -15,41 +152,45 @@ export interface ClientSession {
   workspace: Workspace;
 }
 
-export type ChannelKind = "channel" | "direct" | "conversation";
+export const approvalModes: ApprovalMode[] = [
+  {
+    value: "safe_auto",
+    label: "Auto",
+    description: "Low-risk tools run automatically; medium and high risk ask.",
+  },
+  {
+    value: "ask",
+    label: "Manual",
+    description: "Read-only tools run; anything that changes state waits for approval.",
+  },
+  {
+    value: "accept_edits",
+    label: "Accept edits",
+    description: "Workspace file edits run; other tools follow Manual.",
+  },
+  {
+    value: "plan_only",
+    label: "Plan",
+    description: "Only read-only tools run; everything else is denied.",
+  },
+  {
+    value: "trusted",
+    label: "Bypass permissions",
+    description:
+      "Every tool call runs; critical-risk calls follow the Bypass setting in Settings → Approvals.",
+  },
+];
 
-export interface Channel {
-  id: string;
-  name: string;
-  topic: string;
-  created_at: string;
-  agent_id: string | null;
-  pinned: boolean;
-  kind: ChannelKind;
+export type TaskStatus =
+  | "pending"
+  | "in_progress"
+  | "cancelled"
+  | { completed: { output: string } }
+  | { failed: { error: string } };
+
+export function isActiveOverviewStatus(status: TaskOverviewStatus): boolean {
+  return status !== "completed" && status !== "failed" && status !== "cancelled";
 }
-
-export interface ConversationSettings {
-  channel_id: string;
-  mode: "single" | "group";
-  provider_id: string | null;
-  model: string;
-  default_responder: string | null;
-  router_enabled: boolean;
-  auto_compact: boolean;
-  compact_threshold: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CacheUsageSummary {
-  calls: number;
-  cached_input_tokens: number;
-  total_input_tokens: number;
-}
-
-export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
-
-/** Where a token count came from: an exact tokenizer or the estimator. */
-export type TokenSource = "tiktoken" | "provider" | "estimate";
 
 export interface ConversationParticipantView {
   agent_id: string;
@@ -97,107 +238,6 @@ export interface ConversationContext {
   participants: ConversationParticipantView[];
 }
 
-/** A read-only plan of the request one turn or task run would send. */
-export type PromptKind = "conversation" | "group" | "task_run";
-export type PromptRole = "system" | "user" | "assistant" | "tool";
-export type PromptSlotName =
-  | "agent"
-  | "platform"
-  | "roster"
-  | "default_responder"
-  | "peer_convention"
-  | "conversation_convention"
-  | "mode_instruction"
-  | "instruction";
-
-export interface PromptSlot {
-  name: PromptSlotName;
-  content: string;
-  tokens: number;
-}
-
-export interface PromptMessage {
-  role: PromptRole;
-  content: string;
-  tokens: number;
-  entry_id?: string | null;
-  latest: boolean;
-  tool_calls: string[];
-  tool_call_id?: string | null;
-}
-
-export interface PromptTool {
-  name: string;
-  description: string;
-  parameters: unknown;
-  tokens: number;
-}
-
-export interface PromptMemory {
-  block: string;
-  tokens: number;
-}
-
-export type MemoryScope =
-  | "workspace"
-  | "agent"
-  | "conversation"
-  | "agent_in_conversation";
-
-export type RecallSkipReason =
-  | { kind: "inactive" }
-  | { kind: "over_budget"; remaining_tokens: number };
-
-export interface RecallCandidate {
-  entry_id: string;
-  content: string;
-  kind: MemoryKind;
-  scope: MemoryScope;
-  pinned: boolean;
-  score?: number | null;
-  tokens: number;
-  selected: boolean;
-  skip_reason?: RecallSkipReason | null;
-}
-
-export interface RecallPreview {
-  enabled: boolean;
-  /** The trimmed search query; empty means only notes and pinned entries. */
-  query: string;
-  block?: string | null;
-  estimated_tokens: number;
-  budget_tokens: number;
-  notes_budget_tokens: number;
-  notes_tokens: number;
-  candidates: RecallCandidate[];
-}
-
-export interface ContextProjection {
-  system_tokens: number;
-  tool_tokens: number;
-  history_tokens: number;
-  latest_tokens: number;
-  active_entries: number;
-  excluded_entries: number;
-  token_source: TokenSource;
-  token_counter: string | null;
-}
-
-export interface PromptPlan {
-  kind: PromptKind;
-  model: string;
-  provider_id?: string | null;
-  slots: PromptSlot[];
-  messages: PromptMessage[];
-  memory?: PromptMemory | null;
-  recall: RecallPreview;
-  tools: PromptTool[];
-  projection: ContextProjection;
-  auto_compact: boolean;
-  compact_threshold: number;
-}
-
-/** A conversation or task-run preview with its window metadata. */
 export interface ContextPreview {
   kind: PromptKind;
   channel_id: string | null;
@@ -216,138 +256,19 @@ export interface ContextPreview {
   over_budget: boolean;
 }
 
-/** Why an LLM call was made (ADR-0037). */
-export type LlmCallKind =
-  | "agent"
-  | "router"
-  | "summary"
-  | "compact"
-  | "memory_extract";
-
-export interface SnapshotToolCall {
-  id: string;
-  name: string;
-  arguments: unknown;
-}
-
-/** One message exactly as the provider received it. */
-export interface SnapshotMessage {
-  role: PromptRole;
-  content: string;
-  name?: string | null;
-  tool_calls: SnapshotToolCall[];
-  tool_call_id?: string | null;
-}
-
-/**
- * A sealed, redacted record of one model request.
- *
- * Unlike a `PromptPlan`, which rebuilds the next request, this is the request
- * that was actually sent and cannot be reconstructed.
- */
-export interface LlmPromptSnapshot {
-  schema_version: number;
-  call_kind: LlmCallKind;
-  model: string;
-  messages: SnapshotMessage[];
-  tools: ToolDefinition[];
-  slots: PromptSlot[];
-  memory?: PromptMemory | null;
-  selected_memory_ids: string[];
-  projection?: ContextProjection | null;
-  token_count: number;
-  content_hash: string;
-  redacted: boolean;
-  truncated: boolean;
-  omitted_messages: number;
-  created_at: string;
-}
-
-/** What a stored snapshot is, without its payload. */
-export interface PromptSnapshotSummary {
-  llm_call_id: string;
-  run_id: string | null;
-  task_id: string | null;
-  channel_id: string | null;
-  agent_id: string | null;
-  call_kind: LlmCallKind;
-  model: string;
-  token_count: number;
-  byte_size: number;
-  truncated: boolean;
-  redacted: boolean;
-  created_at: string;
-}
-
-/** A stored snapshot together with the call it belongs to. */
-export interface PromptSnapshotDetail {
-  summary: PromptSnapshotSummary;
-  snapshot: LlmPromptSnapshot;
-  /** True when the stored payload no longer matches its content hash. */
-  hash_mismatch: boolean;
-}
-
-export interface PromptSnapshotSettings {
-  workspace_id: string;
-  enabled: boolean;
-  retention_days: number;
-  updated_at: string;
-}
-
-export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "note";
-export type MemoryStatus = "active" | "pending" | "archived";
-export type MemorySource = "user" | "agent" | "extraction" | "compaction";
-
-export interface MemoryNote {
-  id: string;
-  workspace_id: string;
-  channel_id?: string;
-  title: string;
-  content: string;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface MemoryNotes {
-  workspace: MemoryNote | null;
-  conversation: MemoryNote | null;
+  workspace: Note | null;
+  conversation: Note | null;
 }
 
 export interface NoteSave {
-  note: MemoryNote;
+  note: Note;
   redacted: boolean;
-}
-
-export interface MemoryEntry {
-  id: string;
-  workspace_id: string;
-  agent_id?: string;
-  channel_id?: string;
-  kind: MemoryKind;
-  content: string;
-  source: MemorySource;
-  source_ref?: string;
-  status: MemoryStatus;
-  pinned: boolean;
-  tokens: number;
-  recall_count: number;
-  last_recalled_at?: string;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface MemorySave {
   entry: MemoryEntry;
   redacted: boolean;
-}
-
-export interface MemorySettings {
-  workspace_id: string;
-  extraction_enabled: boolean;
-  recall_enabled: boolean;
-  notes_budget_tokens: number;
-  recall_budget_tokens: number;
-  updated_at: string;
 }
 
 export interface MemorySettingsUpdate {
@@ -375,83 +296,10 @@ export interface RecalledMemory {
   tokens: number;
 }
 
-export type RouteSource = "mention" | "router" | "default" | "silent" | "unmatched";
-
-export interface ConversationParticipant {
-  channel_id: string;
-  agent_id: string;
-  position: number;
-  joined_at: string;
-}
-
-export interface ConversationTurn {
-  id: string;
-  channel_id: string;
-  message_id: string;
-  source: RouteSource;
-  selected_agents: string[];
-  unknown_mentions: string[];
-  reason: string | null;
-  router_call_id: string | null;
-  task_ids: string[];
-  mirrored_at: string | null;
-  created_at: string;
-}
-
 export interface ConversationSummary {
   channel: Channel;
   settings: ConversationSettings;
   participants: AgentProfile[];
-}
-
-export interface CompactionOutcome {
-  compacted: boolean;
-  summarized_entries: number;
-  tokens_before: number;
-  tokens_after: number;
-  summary: string | null;
-  in_progress: boolean;
-  reason: string | null;
-}
-
-export type Sender =
-  | { type: "Agent"; id: string }
-  | { type: "User"; id: string }
-  | { type: "System" };
-
-export interface ChannelMessage {
-  id: string;
-  channel_id: string;
-  sender: Sender;
-  content: string;
-  thread_id: string | null;
-  created_at: string;
-}
-
-/// One event in a turn's streaming lifecycle (ADR-0039).
-export interface TurnEvent {
-  turn_id: string;
-  type:
-    | "turn_started"
-    | "text_delta"
-    | "reasoning_delta"
-    | "tool_call_started"
-    | "tool_call_finished"
-    | "approval_required"
-    | "turn_done"
-    | "turn_error";
-  agent_ids?: string[];
-  text?: string;
-  call?: { id: string; name: string; arguments: unknown };
-  result?: { call_id: string; output: string; success: boolean; error: string | null };
-  approval?: {
-    approval: { id: string; task_id: string; tool_call_id: string; status: string };
-    call: { id: string; name: string; arguments: unknown };
-  };
-  message?: string;
-  stopped?: boolean;
-  error?: string;
-  partial?: string;
 }
 
 export interface CowEvent {
@@ -463,162 +311,11 @@ export interface CowEvent {
   };
 }
 
-export type ApprovalLevel =
-  | "ask"
-  | "accept_edits"
-  | "safe_auto"
-  | "plan_only"
-  | "trusted";
-
-export type BypassCritical = "allow" | "ask" | "block";
-
-export interface WorkspacePolicy {
-  workspace_id: string;
-  bypass_critical: BypassCritical;
-}
-
 export interface ApprovalMode {
   value: ApprovalLevel;
   label: string;
   description: string;
 }
-
-/// Modes in the order Claude presents them.
-export const approvalModes: ApprovalMode[] = [
-  {
-    value: "safe_auto",
-    label: "Auto",
-    description: "Low-risk tools run automatically; medium and high risk ask.",
-  },
-  {
-    value: "ask",
-    label: "Manual",
-    description: "Read-only tools run; anything that changes state waits for approval.",
-  },
-  {
-    value: "accept_edits",
-    label: "Accept edits",
-    description: "Workspace file edits run; other tools follow Manual.",
-  },
-  {
-    value: "plan_only",
-    label: "Plan",
-    description: "Only read-only tools run; everything else is denied.",
-  },
-  {
-    value: "trusted",
-    label: "Bypass permissions",
-    description:
-      "Every tool call runs; critical-risk calls follow the Bypass setting in Settings → Approvals.",
-  },
-];
-
-export type TaskStatus =
-  | "pending"
-  | "in_progress"
-  | "cancelled"
-  | { completed: { output: string } }
-  | { failed: { error: string } };
-
-export type TaskSource = "user" | "channel_turn" | "conversation_turn";
-
-export interface Task {
-  id: string;
-  title: string;
-  description: string;
-  expected_output: string;
-  assigned_agent: string | null;
-  channel_id: string | null;
-  context_tasks: string[];
-  run_group: string | null;
-  source: TaskSource;
-  status: TaskStatus;
-  archived: boolean;
-  plan?: string | null;
-  plan_approved?: boolean;
-}
-
-export type AssignmentStatus =
-  | "queued"
-  | "running"
-  | "waiting"
-  | "resume"
-  | "needs_input"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export type AssignmentOutcome =
-  | { status: "completed"; detail: { output: string } }
-  | { status: "failed"; detail: { error: string } }
-  | { status: "cancelled"; detail: { reason: string } };
-
-export interface Assignment {
-  id: string;
-  root_id: string;
-  parent_id: string | null;
-  depth: number;
-  task_id: string;
-  assignee: string;
-  status: AssignmentStatus;
-  executions: number;
-  restarts: number;
-  wakes: number;
-  approval_level: ApprovalLevel;
-  outcome: AssignmentOutcome | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export type AssignmentEventKind =
-  | "enqueued"
-  | "started"
-  | "waiting"
-  | "resumed"
-  | "needs_input"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "restarted"
-  | "stalled"
-  | "budget_exhausted";
-
-export interface AssignmentEvent {
-  id: string;
-  assignment_id: string;
-  kind: AssignmentEventKind;
-  detail: string | null;
-  created_at: string;
-}
-
-export type RunStatus =
-  | "running"
-  | "waiting_approval"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export interface Run {
-  id: string;
-  task_id: string;
-  agent_id: string;
-  status: RunStatus;
-  started_at: string;
-  finished_at: string | null;
-}
-
-export interface ToolCallRecord {
-  id: string;
-  run_id: string;
-  name: string;
-  arguments: unknown;
-  result: unknown;
-  approved_by: string | null;
-  created_at: string;
-}
-
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
 export interface ToolCallDetail {
   name: string;
@@ -637,73 +334,9 @@ export interface ApprovalRuleMatch {
   decision: RuleDecision;
 }
 
-export type RuleDecision = "allow" | "ask" | "deny";
-
-export type RuleSource = "local" | "imported";
-
-export interface PermissionRule {
-  id: string;
-  workspace_id: string;
-  tool: string;
-  command: string | null;
-  decision: RuleDecision;
-  enabled: boolean;
-  source: RuleSource;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AuditEvent {
-  id: string;
-  workspace_id: string;
-  actor: string;
-  action: string;
-  target: string;
-  source?: string | null;
-  created_at: string;
-}
-
-export interface Approval {
-  id: string;
-  task_id: string;
-  tool_call_id: string;
-  status: ApprovalStatus;
-  decided_by: string | null;
-  decided_at: string | null;
-  created_at: string;
-}
-
 export interface SessionDecisionEntry {
   key: string;
   decision: "approved" | "rejected" | "unknown";
-}
-
-export interface AgentProfile {
-  id: string;
-  name: string;
-  role: string;
-  goal: string;
-  backstory: string;
-  model: string | null;
-  tools: string[];
-  allow_delegation: boolean;
-  max_iterations: number;
-  verbose: boolean;
-}
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  parameters: unknown;
-}
-
-export interface TemplateDocument {
-  id: string;
-  name: string;
-  description: string;
-  kind: string;
-  agents: unknown[];
-  tasks: unknown[];
 }
 
 export type ProviderProtocol = "openai" | "anthropic" | "openai-responses";
@@ -756,27 +389,6 @@ export interface ProjectBranches {
   branches: string[];
 }
 
-export type WorktreeStatus = "requested" | "ready" | "removed" | "missing";
-
-export interface TaskWorktree {
-  task_id: string;
-  project_id: string;
-  project_path: string;
-  base_branch: string;
-  branch: string;
-  worktree_path: string;
-  status: WorktreeStatus;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TaskWorktreeDiff {
-  status: string;
-  stat: string;
-  patch: string;
-  truncated: boolean;
-}
-
 export type TaskOverviewStatus =
   | "running"
   | "needs_input"
@@ -812,19 +424,10 @@ export interface TaskOverviewEntry {
   updated_at: string;
 }
 
-/** Whether an overview run still has work to show in the active sections. */
-export function isActiveOverviewStatus(status: TaskOverviewStatus): boolean {
-  return status !== "completed" && status !== "failed" && status !== "cancelled";
-}
-
 export interface AppInfo {
   version: string;
   autoCheckUpdates: boolean;
 }
-
-export type CommandTarget = "chat" | "conversation";
-
-export type CommandArgKind = "text" | "participant" | "choice";
 
 export interface CommandArgInfo {
   placeholder: string;
@@ -842,11 +445,30 @@ export interface CommandInfo {
   args: CommandArgInfo[];
 }
 
+/// The face the desktop uses of a conversation participant.
+///
+/// The Tauri command returns `ChannelParticipant`, whose ids are branded
+/// newtypes; the desktop needs them as strings, so this is the alias it has
+/// always used. Regenerating does not change it.
+export type ConversationParticipant = ChannelParticipant;
+
 export type CommandParseResult =
   | { kind: "not_a_command" }
   | { kind: "invocation"; name: string; args: string[]; raw_args: string }
   | { kind: "unknown"; name: string }
   | { kind: "missing_argument"; name: string; usage: string };
+
+/**
+ * One `/btw` answer. It is deliberately not a {@link ChannelMessage}: nothing
+ * was posted, so the panel that shows it is the only place it exists.
+ */
+export interface SideAnswer {
+  agent_id: string;
+  agent_name: string;
+  content: string;
+  model: string;
+  call_id: string;
+}
 
 const taskStatusLabels = {
   pending: "Pending",

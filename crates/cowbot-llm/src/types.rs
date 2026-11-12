@@ -116,7 +116,7 @@ impl ChatCompletionResponse {
 /// One normalized piece of a streamed completion.
 ///
 /// Every protocol is reduced to these four kinds, so the agent loop and the
-/// turn runner never branch on the provider (ADR-0039).
+/// turn runner never branch on the provider (ADR-0041).
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     /// Visible answer text.

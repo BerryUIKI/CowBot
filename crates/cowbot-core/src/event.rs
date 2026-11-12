@@ -77,7 +77,7 @@ pub enum EventPayload {
     ApprovalDecided { approval: Approval },
     /// Intermediate reasoning or thought emitted by an agent
     AgentThought { agent_id: AgentId, thought: String },
-    /// One event in a turn's streaming lifecycle (ADR-0039).
+    /// One event in a turn's streaming lifecycle (ADR-0041).
     ///
     /// Direct chat, group reply, channel mention, and task turns all publish
     /// this same variant, so a client needs a single subscription.

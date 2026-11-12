@@ -25,6 +25,7 @@ const callKindLabels: Record<LlmCallKind, string> = {
   summary: "Summary",
   compact: "Compaction",
   memory_extract: "Memory extraction",
+  side_question: "Side question",
 };
 
 const roleLabels: Record<string, string> = {
@@ -148,11 +149,11 @@ export function PromptSnapshotViewer({
             </p>
           ) : null}
 
-          {snapshot.slots.length > 0 ? (
+          {(snapshot.slots?.length ?? 0) > 0 ? (
             <section className="snapshot-section">
               <h4>System prompt slots</h4>
               <ul className="prompt-slots">
-                {snapshot.slots.map((slot) => (
+                {(snapshot.slots ?? []).map((slot) => (
                   <li key={slot.name}>
                     <details>
                       <summary>
@@ -172,7 +173,7 @@ export function PromptSnapshotViewer({
           <section className="snapshot-section">
             <h4>Messages</h4>
             <ol className="prompt-messages">
-              {snapshot.messages.map((message, index) => (
+              {(snapshot.messages ?? []).map((message, index) => (
                 <li key={`${index}-${message.role}`}>
                   <details>
                     <summary>
@@ -190,9 +191,9 @@ export function PromptSnapshotViewer({
                     <pre className="context-inspector-content">
                       {message.content || "(no text)"}
                     </pre>
-                    {message.tool_calls.length > 0 ? (
+                    {(message.tool_calls?.length ?? 0) > 0 ? (
                       <ul className="snapshot-tool-calls">
-                        {message.tool_calls.map((call) => (
+                        {(message.tool_calls ?? []).map((call) => (
                           <li key={call.id}>
                             <span className="tool-name">{call.name}</span>
                             <pre className="context-inspector-content">
@@ -240,9 +241,9 @@ export function PromptSnapshotViewer({
               <pre className="context-inspector-content">
                 {snapshot.memory.block}
               </pre>
-              {snapshot.selected_memory_ids.length > 0 ? (
+              {(snapshot.selected_memory_ids?.length ?? 0) > 0 ? (
                 <p className="muted">
-                  Selected entries: {snapshot.selected_memory_ids.join(", ")}
+                  Selected entries: {(snapshot.selected_memory_ids ?? []).join(", ")}
                 </p>
               ) : null}
             </section>

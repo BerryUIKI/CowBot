@@ -5,7 +5,7 @@
 //! events, stores the final message before the terminal event, and turns a stop
 //! request into a partial reply with a stopped marker. The chat, group, and task
 //! paths call into it; none of them reimplements stopping or persistence
-//! (ADR-0039).
+//! (ADR-0041).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};

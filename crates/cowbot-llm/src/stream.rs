@@ -4,7 +4,7 @@
 //! applying each payload to a protocol-specific accumulator. Abort is observed
 //! through [`CancelSignal`], a clonable flag with a wakeup, so a stop request
 //! drops the in-flight HTTP response instead of waiting for the next chunk
-//! (ADR-0039).
+//! (ADR-0041).
 
 pub use cowbot_core::cancel::CancelSignal;
 

@@ -72,7 +72,7 @@ const segmentClasses: Record<string, string> = {
   tools: "context-segment-tools",
 };
 
-function sourceLabel(source: TokenSource, counter: string | null): string {
+function sourceLabel(source: TokenSource, counter: string | null | undefined): string {
   if (source === "estimate") return "Estimated from characters";
   return `Exact · ${counter ?? source}`;
 }

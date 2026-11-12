@@ -22,7 +22,7 @@ pub trait ConversationRecorder: Send + Sync {
 /// Receives the incremental output and tool progress of one agent run.
 ///
 /// The turn runner implements this to publish turn events; the agent loop stays
-/// unaware of turn ids, transports, and persistence (ADR-0039).
+/// unaware of turn ids, transports, and persistence (ADR-0041).
 pub trait TurnObserver: Send + Sync {
     /// Model reasoning, shown apart from the answer.
     fn reasoning_delta(&self, _text: &str) {}

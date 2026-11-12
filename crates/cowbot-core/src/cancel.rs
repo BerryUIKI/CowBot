@@ -11,7 +11,7 @@ use std::task::{Context, Poll, Waker};
 /// The primitive lives in `cowbot-core` because both the turn runner and the
 /// LLM stream observe it; `cowbot-llm` re-exports it as `CancelSignal`.
 /// Cancelling is idempotent and wakes every waiter, so a stopped turn aborts
-/// the upstream request instead of waiting for the next chunk (ADR-0039).
+/// the upstream request instead of waiting for the next chunk (ADR-0041).
 #[derive(Clone, Default)]
 pub struct CancelSignal {
     state: Arc<CancelState>,

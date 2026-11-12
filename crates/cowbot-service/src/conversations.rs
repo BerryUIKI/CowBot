@@ -92,7 +92,7 @@ pub struct ConversationService {
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
     compaction_locks: Arc<CompactionLocks>,
-    /// Shared turn registry for every turn this service spawns (ADR-0039).
+    /// Shared turn registry for every turn this service spawns (ADR-0041).
     turns: Arc<TurnRunner>,
 }
 
@@ -542,7 +542,7 @@ impl ConversationService {
         let outcome = scheduler.run_until_idle().await;
         // The turn runner posts a conversation reply with its text and its
         // stopped marker, so this path only needs the text for memory
-        // extraction (ADR-0039).
+        // extraction (ADR-0041).
         let reply = self.store.task_output(&task_id).await?;
         outcome?;
 
@@ -1066,7 +1066,7 @@ impl ConversationService {
 
         // The turn runner already posted the reply, including a stopped one, so
         // settling mirrors it into the other branches and reports the outcome
-        // instead of posting a second copy (ADR-0039).
+        // instead of posting a second copy (ADR-0041).
         match &task.status {
             cowbot_core::task::TaskStatus::Completed { output } => {
                 let content = output.trim();

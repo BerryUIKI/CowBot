@@ -86,6 +86,14 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Regenerate the desktop types from Rust
+        working-directory: .
+        run: bash desktop/scripts/generate-types.sh
+
+      - name: Check the generated types are committed
+        working-directory: .
+        run: node desktop/scripts/check-types.mjs
+
       - name: Build frontend
         run: pnpm run build
 

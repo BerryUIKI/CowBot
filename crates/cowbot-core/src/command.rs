@@ -23,6 +23,7 @@
 
 use serde::Serialize;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Which composer a command belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +43,7 @@ impl CommandTarget {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// The shape of a command argument, used by the desktop for completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandArgKind {
@@ -72,6 +74,7 @@ impl CommandArgKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One positional argument of a command.
 ///
 /// Serializes flat — `{"placeholder": "<name>", "required": true, "kind":
@@ -102,6 +105,7 @@ impl Serialize for CommandArg {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A command the composer understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -198,6 +202,18 @@ pub const COMMANDS: &[CommandSpec] = &[
             placeholder: "safe_auto|ask|accept_edits|plan_only|trusted",
             required: false,
             kind: CommandArgKind::Choice(APPROVAL_CHOICES),
+        }],
+        target: CommandTarget::Chat,
+    },
+    CommandSpec {
+        name: "btw",
+        aliases: &["side"],
+        usage: "/btw <question>",
+        summary: "Ask a side question; the answer never enters the conversation.",
+        args: &[CommandArg {
+            placeholder: "<question>",
+            required: true,
+            kind: CommandArgKind::Text,
         }],
         target: CommandTarget::Chat,
     },
@@ -575,6 +591,7 @@ mod tests {
             ("/rename   ", "rename"),
             ("/task", "task"),
             ("/remember", "remember"),
+            ("/btw", "btw"),
         ] {
             let usage = find_command(name).expect("command exists").usage;
             assert_eq!(
@@ -652,8 +669,8 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
-                "approval", "clear", "compact", "delete", "help", "model", "new", "note", "pin",
-                "remember", "rename", "settings", "stop", "task", "unpin",
+                "approval", "btw", "clear", "compact", "delete", "help", "model", "new", "note",
+                "pin", "remember", "rename", "settings", "stop", "task", "unpin",
             ]
         );
     }

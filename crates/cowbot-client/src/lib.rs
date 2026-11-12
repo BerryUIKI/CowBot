@@ -359,7 +359,7 @@ pub trait Client: Send + Sync {
     ///
     /// Idempotent: an unknown or already finished turn returns `false` and does
     /// nothing. A stopped turn keeps the text it produced, stored with a
-    /// stopped marker (ADR-0039).
+    /// stopped marker (ADR-0041).
     async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool>;
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;

@@ -25,6 +25,7 @@ pub fn inherit_approval_level(parent: ApprovalLevel, requested: ApprovalLevel) -
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for an assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AssignmentId(pub String);
@@ -45,6 +46,7 @@ impl std::fmt::Display for AssignmentId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where the work originated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +58,7 @@ pub enum AssignmentOrigin {
     External,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// How the assigned work should be performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +68,7 @@ pub enum AssignmentMode {
     Notify,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// How the requester expects to receive the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,6 +78,7 @@ pub enum ReplyMode {
     None,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Lifecycle status of an assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -101,6 +106,7 @@ impl AssignmentStatus {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Who requested the work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "id", rename_all = "snake_case")]
@@ -110,6 +116,7 @@ pub enum AssignmentRequester {
     System,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Final result of an assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "detail", rename_all = "snake_case")]
@@ -119,6 +126,7 @@ pub enum AssignmentOutcome {
     Cancelled { reason: String },
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Per-root budgets. Child assignments copy the root's budgets; enforcement
 /// always reads the root totals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +146,7 @@ impl Default for AssignmentBudgets {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A single unit of agent work with a parent/root tree position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {
@@ -246,6 +255,7 @@ impl Assignment {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Kinds of append-only assignment events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -263,6 +273,7 @@ pub enum AssignmentEventKind {
     BudgetExhausted,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// An append-only event recording an assignment transition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssignmentEvent {

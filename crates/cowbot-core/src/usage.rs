@@ -48,6 +48,7 @@ impl TokenUsage {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why an LLM call was made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +63,9 @@ pub enum LlmCallKind {
     Compact,
     /// Memory extraction from a completed conversation.
     MemoryExtract,
+    /// A side question asked with `/btw`: one turn whose answer is shown to the
+    /// user but never posted or appended to a context branch (ADR-0041).
+    SideQuestion,
 }
 
 impl LlmCallKind {
@@ -72,6 +76,7 @@ impl LlmCallKind {
             Self::Summary => "summary",
             Self::Compact => "compact",
             Self::MemoryExtract => "memory_extract",
+            Self::SideQuestion => "side_question",
         }
     }
 }
@@ -92,6 +97,7 @@ impl std::str::FromStr for LlmCallKind {
             "summary" => Ok(Self::Summary),
             "compact" => Ok(Self::Compact),
             "memory_extract" => Ok(Self::MemoryExtract),
+            "side_question" => Ok(Self::SideQuestion),
             _ => Err(()),
         }
     }
@@ -191,6 +197,7 @@ pub trait LlmUsageRecorder: Send + Sync {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a token count came from.
 ///
 /// Counts are not interchangeable: only [`Self::Tiktoken`] and

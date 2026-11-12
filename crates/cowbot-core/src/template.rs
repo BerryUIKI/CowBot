@@ -11,6 +11,7 @@ use crate::error::{CowError, CowResult};
 /// Current schema version for template documents.
 pub const TEMPLATE_SCHEMA_VERSION: u32 = 1;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Kind of reusable template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +46,7 @@ impl Template {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A portable template document (`.cowtemplate` JSON payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateDocument {
@@ -195,6 +197,7 @@ impl TemplateDocument {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A single agent inside a template.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTemplate {
@@ -229,6 +232,7 @@ impl AgentTemplate {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A task definition inside a team template.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskTemplate {
