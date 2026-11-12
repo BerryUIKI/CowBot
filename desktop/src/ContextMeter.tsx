@@ -20,6 +20,8 @@ interface ContextMeterProps {
   onDefaultResponderChange: (agentId: string) => void;
   onMemoryChanged: () => void;
   onNewConversation: () => void;
+  /** Open the read-only prompt and recall inspector for one participant. */
+  onInspect: (agentId: string) => void;
 }
 
 const RADIUS = 13;
@@ -157,6 +159,7 @@ export default function ContextMeter({
   onDefaultResponderChange,
   onMemoryChanged,
   onNewConversation,
+  onInspect,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -594,6 +597,16 @@ export default function ContextMeter({
             </p>
 
             <div className="context-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  setOpen(false);
+                  onInspect(current.agent_id);
+                }}
+              >
+                Inspect
+              </button>
               <button
                 type="button"
                 className="ghost-button"

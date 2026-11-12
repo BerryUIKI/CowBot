@@ -38,6 +38,8 @@ interface TaskDetailProps {
   discardingWorktree: boolean;
   onDiscardWorktree: () => void;
   onOpenTask: (taskId: string) => void;
+  /** Open the read-only prompt inspector for one run. */
+  onInspectRun: (runId: string) => void;
   cancelling: boolean;
   onCancel: () => void;
   running: boolean;
@@ -84,6 +86,7 @@ export default function TaskDetail({
   discardingWorktree,
   onDiscardWorktree,
   onOpenTask,
+  onInspectRun,
   cancelling,
   onCancel,
   running,
@@ -513,6 +516,22 @@ export default function TaskDetail({
                   {formatTime(run.started_at)} — {run.finished_at ? formatTime(run.finished_at) : "running"}
                 </time>
               </summary>
+              {task.source === "user" ? (
+                <div className="run-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => onInspectRun(run.id)}
+                  >
+                    Inspect context
+                  </button>
+                </div>
+              ) : (
+                <p className="muted">
+                  This run executed a conversation or channel turn. Inspect its
+                  request from that conversation's context meter.
+                </p>
+              )}
               {calls.length === 0 ? (
                 <p className="muted">No tool calls.</p>
               ) : (

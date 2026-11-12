@@ -185,6 +185,24 @@ fn title_from_description(description: &str) -> String {
     truncate_title(line)
 }
 
+/// The user message an agent receives for one task execution.
+///
+/// The agent runtime and the context preview both use this function, so what an
+/// inspector shows stays identical to what the model was sent.
+pub fn task_execution_prompt(task: &Task, context_outputs: &[String]) -> String {
+    let mut prompt = format!(
+        "Task Description:\n{}\n\nExpected Output Format:\n{}",
+        task.description, task.expected_output
+    );
+    if !context_outputs.is_empty() {
+        prompt.push_str("\n\nPrerequisite Context from Prior Tasks:\n");
+        for (index, output) in context_outputs.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", index + 1, output));
+        }
+    }
+    prompt
+}
+
 fn truncate_title(title: &str) -> String {
     const MAX_CHARS: usize = 80;
     let mut chars = title.chars();
@@ -207,6 +225,20 @@ mod tests {
     fn task_titles_use_the_first_non_empty_line() {
         let task = Task::new("\n  First line  \nSecond line", "Output");
         assert_eq!(task.title, "First line");
+    }
+
+    #[test]
+    fn task_execution_prompt_appends_prerequisite_outputs() {
+        let task = Task::new("Build the thing", "A diff");
+        assert_eq!(
+            task_execution_prompt(&task, &[]),
+            "Task Description:\nBuild the thing\n\nExpected Output Format:\nA diff"
+        );
+        assert_eq!(
+            task_execution_prompt(&task, &["first result".to_string(), "second".to_string()]),
+            "Task Description:\nBuild the thing\n\nExpected Output Format:\nA diff\n\n\
+             Prerequisite Context from Prior Tasks:\n1. first result\n2. second\n"
+        );
     }
 
     #[test]

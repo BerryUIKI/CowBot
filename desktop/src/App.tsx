@@ -13,6 +13,8 @@ import GroupAvatar from "./GroupAvatar";
 import Inspector from "./Inspector";
 import type { InspectorTab } from "./Inspector";
 import ContextMeter from "./ContextMeter";
+import ContextInspector from "./ContextInspector";
+import type { ContextTarget } from "./ContextInspector";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
@@ -306,6 +308,7 @@ export default function App() {
   >({});
   const [conversationContext, setConversationContext] =
     useState<ConversationContext | null>(null);
+  const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
   const [contextVersion, setContextVersion] = useState(0);
   const [rememberMessage, setRememberMessage] = useState<ChannelMessage | null>(
@@ -640,6 +643,12 @@ export default function App() {
       cancelled = true;
     };
   }, [contextVersion, selectedChannel]);
+
+  // A preview belongs to one conversation; switching chats clears it so the
+  // inspector never shows another conversation's request.
+  useEffect(() => {
+    setContextTarget(null);
+  }, [selectedId]);
 
   useEffect(() => {
     refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
@@ -1568,6 +1577,13 @@ export default function App() {
           : null,
       );
       setDraft("");
+      // The sent message is now in the branch, so a captured draft must not be
+      // appended a second time by the context preview.
+      setContextTarget((current) =>
+        current && current.kind === "conversation" && current.draft
+          ? { ...current, draft: undefined }
+          : current,
+      );
       setPreviews((current) => ({ ...current, [selectedChannel.id]: posted }));
       await refreshMessages(selectedChannel.id);
     } catch (err) {
@@ -1642,6 +1658,28 @@ export default function App() {
 
   function toggleInspector(tab: InspectorTab) {
     setInspectorTab((current) => (current === tab ? null : tab));
+  }
+
+  function inspectConversationContext(agentId: string) {
+    if (!selectedChannel) return;
+    const participant = conversationParticipants.find(
+      (candidate) => candidate.agent_id === agentId,
+    );
+    setContextTarget({
+      kind: "conversation",
+      channelId: selectedChannel.id,
+      agentId,
+      agentName: participant?.agent_name ?? "",
+      title: selectedChannel.name,
+      draft: draft.trim() ? draft.trim() : undefined,
+      planMode: channelApproval === "plan_only",
+    });
+    setInspectorTab("context");
+  }
+
+  function inspectRunContext(runId: string) {
+    setContextTarget({ kind: "run", runId });
+    setInspectorTab("context");
   }
 
   function startCreatingTask() {
@@ -2102,6 +2140,7 @@ export default function App() {
       discardingWorktree={busy === "discard-worktree"}
       onDiscardWorktree={() => void handleDiscardWorktree()}
       onOpenTask={openTask}
+      onInspectRun={inspectRunContext}
       cancelling={busy === "cancel-task"}
       onCancel={handleCancelTask}
       running={runningTasks.has(selectedTask.id)}
@@ -2119,6 +2158,10 @@ export default function App() {
       onOpenTask={openTask}
       onNewTask={startCreatingTask}
     />
+  );
+
+  const contextInspectorPanel = (
+    <ContextInspector target={contextTarget} version={contextVersion} />
   );
 
   return (
@@ -2839,6 +2882,7 @@ export default function App() {
                             setContextVersion((version) => version + 1)
                           }
                           onNewConversation={openNewConversation}
+                          onInspect={inspectConversationContext}
                         />
                       ) : null}
                       <span className="chat-kind">
@@ -3428,6 +3472,7 @@ export default function App() {
           onTabChange={setInspectorTab}
           onClose={() => setInspectorTab(null)}
           taskPanel={taskInspectorPanel}
+          contextPanel={contextInspectorPanel}
           overview={overview}
           agents={agents}
           now={overviewNow}

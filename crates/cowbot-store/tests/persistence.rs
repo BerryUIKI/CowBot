@@ -351,7 +351,8 @@ async fn tasks_runs_approvals_and_audit_roundtrip() {
     let completed = store.get_task(&task.id).await.unwrap().unwrap();
     assert!(matches!(completed.status, TaskStatus::Completed { .. }));
 
-    let run = Run::new(task.id.clone(), agent_id.clone());
+    let profile = AgentProfile::new("Crew Planner", "Architect", "Plan", "Careful");
+    let run = Run::new(task.id.clone(), agent_id.clone()).with_agent_profile(profile.clone());
     store.create_run(&run).await.unwrap();
     store
         .update_run_status(&run.id, RunStatus::Completed, Some(chrono::Utc::now()))
@@ -360,6 +361,12 @@ async fn tasks_runs_approvals_and_audit_roundtrip() {
     let loaded_run = store.get_run(&run.id).await.unwrap().unwrap();
     assert_eq!(loaded_run.status, RunStatus::Completed);
     assert!(loaded_run.finished_at.is_some());
+    let snapshot = loaded_run
+        .agent_profile
+        .expect("the executing profile is stored with the run");
+    assert_eq!(snapshot.id, profile.id);
+    assert_eq!(snapshot.name, "Crew Planner");
+    assert_eq!(snapshot.role, "Architect");
     assert_eq!(store.list_runs(&task.id).await.unwrap().len(), 1);
 
     let tool_call = ToolCallRecord::new(

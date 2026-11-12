@@ -10,6 +10,7 @@ pub mod identity;
 pub mod memory;
 pub mod mention;
 pub mod permission;
+pub mod prompt;
 pub mod risk;
 pub mod run;
 pub mod task;
@@ -45,13 +46,14 @@ pub use identity::{
     ApiToken, Invite, Membership, Role, Session, User, UserId, Workspace, WorkspaceId,
 };
 pub use memory::{
-    clamp_memory_budget, rank_memories, redact_secrets, render_memory_block, render_memory_entry,
-    render_notes_for_prompt, select_recalled_entries, truncate_to_tokens, MemoryEntry, MemoryKind,
-    MemorySettings, MemorySource, MemoryStatus, Note, RedactionOutcome, ScoredMemory,
-    CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS, DEFAULT_RECALL_BUDGET_TOKENS,
-    MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER, MEMORY_ENTRY_MAX_CHARS,
-    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS, MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER,
-    WORKSPACE_NOTE_TITLE,
+    clamp_memory_budget, plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,
+    render_memory_entry, render_notes_for_prompt, select_recalled_entries, truncate_to_tokens,
+    MemoryEntry, MemoryKind, MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note,
+    RecallCandidate, RecallPlan, RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome,
+    ScoredMemory, CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS,
+    DEFAULT_RECALL_BUDGET_TOKENS, MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER,
+    MEMORY_ENTRY_MAX_CHARS, MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
+    MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER, WORKSPACE_NOTE_TITLE,
 };
 pub use mention::{
     is_broadcast_mention, parse_mentions, resolve_mentions, MentionResolution, BROADCAST_MENTIONS,
@@ -59,9 +61,13 @@ pub use mention::{
 pub use permission::{
     glob_matches, matching_rule, PermissionRule, PermissionRuleMatch, RuleDecision, RuleSource,
 };
+pub use prompt::{
+    PromptKind, PromptMemory, PromptMessage, PromptPlan, PromptRole, PromptSlot, PromptSlotName,
+    PromptTool,
+};
 pub use risk::RiskLevel;
 pub use run::{Run, RunId, RunStatus, ToolCallRecord};
-pub use task::{Task, TaskId, TaskStatus};
+pub use task::{task_execution_prompt, Task, TaskId, TaskStatus};
 pub use template::{
     AgentTemplate, TaskTemplate, Template, TemplateDocument, TemplateKind, TEMPLATE_SCHEMA_VERSION,
 };

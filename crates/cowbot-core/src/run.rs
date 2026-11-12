@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentProfile};
 use crate::task::TaskId;
 
 /// Unique identifier for a task run.
@@ -46,6 +46,14 @@ pub struct Run {
     pub status: RunStatus,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// The agent profile as it was when the run started.
+    ///
+    /// Standard crew roles are transient profiles that are never written to
+    /// the agent table, so a run could otherwise not name its own agent. The
+    /// snapshot also lets the context inspector rebuild the run's request
+    /// after the profile changes (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<AgentProfile>,
 }
 
 impl Run {
@@ -57,7 +65,14 @@ impl Run {
             status: RunStatus::Running,
             started_at: Utc::now(),
             finished_at: None,
+            agent_profile: None,
         }
+    }
+
+    /// Attach the profile that executed the run.
+    pub fn with_agent_profile(mut self, profile: AgentProfile) -> Self {
+        self.agent_profile = Some(profile);
+        self
     }
 }
 

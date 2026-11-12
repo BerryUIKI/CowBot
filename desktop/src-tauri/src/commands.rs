@@ -19,6 +19,7 @@ use cowbot_core::conversation::{
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
+use cowbot_core::prompt::{PromptKind, PromptPlan};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -1342,6 +1343,27 @@ fn conversation_window(
         .unwrap_or((None, None))
 }
 
+/// Window metadata for a model the run recorded, from any configured provider.
+///
+/// A task run records its model with its LLM calls but not the provider that
+/// served it, so the active provider is preferred and the rest are searched.
+fn model_window(state: &AppState, model: &str) -> (Option<u32>, Option<u32>) {
+    let Ok(config) = load_config(state) else {
+        return (None, None);
+    };
+    config
+        .active_provider()
+        .and_then(|provider| provider.model_metadata.get(model))
+        .or_else(|| {
+            config
+                .providers
+                .iter()
+                .find_map(|provider| provider.model_metadata.get(model))
+        })
+        .map(|metadata| (metadata.context_window, metadata.max_output_tokens))
+        .unwrap_or((None, None))
+}
+
 async fn conversation_context_view(
     state: &AppState,
     channel_id: &ChannelId,
@@ -1508,6 +1530,182 @@ fn participant_view(
         cache_last_run,
         cache_conversation,
     }
+}
+
+/// A read-only preview of the request one turn or task run would send.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextPreviewView {
+    /// `conversation`, `group`, or `task_run`.
+    pub kind: PromptKind,
+    pub channel_id: Option<String>,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub agent_id: String,
+    pub agent_name: String,
+    /// Conversation name or task title.
+    pub title: String,
+    pub plan: PromptPlan,
+    /// Total the request would send, including the memory message.
+    pub request_tokens: u32,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub usable_tokens: Option<u32>,
+    pub percent_used: Option<f32>,
+    pub state: ContextUsageState,
+    /// True when the request would not fit the usable window.
+    pub over_budget: bool,
+}
+
+impl ContextPreviewView {
+    /// Attach window metadata and the over-budget state to a plan.
+    #[allow(clippy::too_many_arguments)]
+    fn from_plan(
+        kind: PromptKind,
+        channel_id: Option<String>,
+        run_id: Option<String>,
+        task_id: Option<String>,
+        agent_id: String,
+        agent_name: String,
+        title: String,
+        plan: PromptPlan,
+        context_window: Option<u32>,
+        max_output_tokens: Option<u32>,
+    ) -> Self {
+        let request_tokens = plan.request_tokens();
+        let usable_tokens = usable_window(context_window, max_output_tokens);
+        let (percent_used, state) = context_usage_state(request_tokens, usable_tokens);
+        Self {
+            kind,
+            channel_id,
+            run_id,
+            task_id,
+            agent_id,
+            agent_name,
+            title,
+            plan,
+            request_tokens,
+            context_window,
+            max_output_tokens,
+            usable_tokens,
+            percent_used,
+            state,
+            over_budget: usable_tokens.is_some_and(|usable| request_tokens >= usable),
+        }
+    }
+}
+
+/// Rebuild one conversation participant's next request without writing.
+#[tauri::command]
+pub async fn get_conversation_context_preview(
+    state: State<'_, AppState>,
+    channel_id: String,
+    agent_id: String,
+    draft: Option<String>,
+    plan_mode: Option<bool>,
+) -> Result<ContextPreviewView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let agent_id = AgentId::new(agent_id);
+    let settings = state
+        .client
+        .conversation_settings(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    let agent = agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .ok_or_else(|| format!("agent '{}' was not found", agent_id.0))?;
+    let tools = state.tools.definitions_for(&agent.tools);
+    let platform_context = project_platform_context(&state);
+    let preview = state
+        .client
+        .conversation_context_preview(
+            &channel_id,
+            &agent_id,
+            draft.as_deref(),
+            platform_context.as_deref(),
+            plan_mode.unwrap_or(false),
+            &tools,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let title = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|channel| channel.name)
+        .unwrap_or_default();
+    let (context_window, max_output_tokens) = conversation_window(&state, &settings);
+    Ok(ContextPreviewView::from_plan(
+        preview.plan.kind,
+        Some(preview.channel_id.0),
+        None,
+        None,
+        preview.agent_id.0,
+        preview.agent_name,
+        title,
+        preview.plan,
+        context_window,
+        max_output_tokens,
+    ))
+}
+
+/// Rebuild the first request one task run sent without writing.
+#[tauri::command]
+pub async fn get_task_run_context_preview(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<ContextPreviewView, String> {
+    let run_id = RunId::new(run_id);
+    let (_, fallback_model) = state.runtime_model();
+    let run = state
+        .client
+        .get_run(&run_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("run '{}' was not found", run_id.0))?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    // Standard crew roles are transient; the run's snapshot is the profile
+    // that actually executed it.
+    let profile = run
+        .agent_profile
+        .clone()
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|agent| agent.id == run.agent_id)
+                .cloned()
+        })
+        .ok_or_else(|| format!("agent '{}' was not found", run.agent_id.0))?;
+    let tools = state.tools.definitions_for(&profile.tools);
+    let preview = state
+        .client
+        .task_run_context_preview(&run_id, &fallback_model, &tools)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("run '{}' was not found", run_id.0))?;
+    let (context_window, max_output_tokens) = model_window(&state, &preview.plan.model);
+    Ok(ContextPreviewView::from_plan(
+        preview.plan.kind,
+        None,
+        Some(preview.run_id.0),
+        Some(preview.task_id.0),
+        preview.agent_id.0,
+        preview.agent_name,
+        preview.task_title,
+        preview.plan,
+        context_window,
+        max_output_tokens,
+    ))
 }
 
 #[tauri::command]
@@ -2440,6 +2638,7 @@ mod tests {
         AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
     };
     use cowbot_core::conversation::{ContextProjection, ConversationParticipantContext};
+    use cowbot_core::memory::RecallPreview;
 
     fn draft(name: &str, base_url: &str, model: &str, api_key: Option<&str>) -> ProviderDraft {
         ProviderDraft {
@@ -2940,5 +3139,67 @@ mod tests {
         assert_eq!(overview_detail(&assignment), Some("boom".to_string()));
         assignment.last_error = Some("stalled".to_string());
         assert_eq!(overview_detail(&assignment), Some("stalled".to_string()));
+    }
+
+    fn preview_plan(tokens: u32) -> PromptPlan {
+        PromptPlan {
+            kind: PromptKind::Conversation,
+            model: "gpt-4o".to_string(),
+            provider_id: Some("provider-1".to_string()),
+            slots: Vec::new(),
+            messages: Vec::new(),
+            memory: None,
+            recall: RecallPreview {
+                enabled: true,
+                query: String::new(),
+                block: None,
+                estimated_tokens: 0,
+                budget_tokens: 100,
+                notes_budget_tokens: 100,
+                notes_tokens: 0,
+                candidates: Vec::new(),
+            },
+            tools: Vec::new(),
+            projection: ContextProjection {
+                system_tokens: tokens,
+                ..ContextProjection::default()
+            },
+            auto_compact: true,
+            compact_threshold: 80,
+        }
+    }
+
+    fn preview_view(tokens: u32, window: Option<u32>, output: Option<u32>) -> ContextPreviewView {
+        ContextPreviewView::from_plan(
+            PromptKind::Conversation,
+            Some("channel-1".to_string()),
+            None,
+            None,
+            "agent-1".to_string(),
+            "Planner".to_string(),
+            "Design review".to_string(),
+            preview_plan(tokens),
+            window,
+            output,
+        )
+    }
+
+    #[test]
+    fn context_preview_view_reports_the_over_budget_state() {
+        let over = preview_view(8_000, Some(10_000), Some(1_000));
+        assert_eq!(over.usable_tokens, Some(7_976));
+        assert_eq!(over.request_tokens, 8_000);
+        assert!(over.over_budget);
+        assert_eq!(over.state, ContextUsageState::Full);
+        assert_eq!(over.title, "Design review");
+
+        let inside = preview_view(1_000, Some(10_000), Some(1_000));
+        assert!(!inside.over_budget);
+        assert_eq!(inside.state, ContextUsageState::Neutral);
+
+        let unknown = preview_view(8_000, None, None);
+        assert_eq!(unknown.percent_used, None);
+        assert_eq!(unknown.state, ContextUsageState::Unknown);
+        assert!(!unknown.over_budget);
     }
 }

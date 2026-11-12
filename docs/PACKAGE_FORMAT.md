@@ -68,7 +68,9 @@ serialize.
   counts before and after.
 - `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
   attribution).
-- `runs.jsonl`: one run per line.
+- `runs.jsonl`: one run per line, with the agent profile snapshot taken when
+  the run started. Packages written before the snapshot omit it; import keeps
+  the run and the preview falls back to the stored agent.
 - `audit.jsonl`: one audit event per line, newest first; optional `source`
   records whether a decision came from a rule, model, session, human, policy,
   or the system (ADR-0003).

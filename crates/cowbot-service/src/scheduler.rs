@@ -34,7 +34,7 @@ use crate::session_decisions::SessionDecisions;
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
 /// approval policy; the agent is asked to finish with the plan itself.
-const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
+pub(crate) const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
 
 /// A conversation turn whose model request is assembled before the assignment
 /// is enqueued. The per-agent context branch receives the assistant and tool
@@ -678,7 +678,8 @@ impl AssignmentScheduler {
 
         self.assignments.start(&assignment.id).await?;
 
-        let run = Run::new(task.id.clone(), assignment.assignee.clone());
+        let run = Run::new(task.id.clone(), assignment.assignee.clone())
+            .with_agent_profile(executor.profile.clone());
         self.assignments.store().create_run(&run).await?;
 
         let mut approvals = self

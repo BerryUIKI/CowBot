@@ -19,6 +19,7 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
+use cowbot_core::prompt::{PromptSlot, PromptSlotName};
 use cowbot_core::task::{Task, TaskId, TaskSource};
 use cowbot_core::usage::{LlmCallKind, LlmCallRecord, TokenCounter, UsageTotals};
 use cowbot_llm::{
@@ -314,15 +315,21 @@ impl ConversationService {
                 .list_context_entries(channel_id, &agent.id)
                 .await?;
             let system_tokens = if group {
-                counter.count_message(&group_system_prompt(
-                    agent,
-                    &participants,
-                    default_name.as_deref(),
-                    None,
-                    &agents,
-                ))
+                counter.count_message(
+                    &group_system_prompt(
+                        counter.as_ref(),
+                        agent,
+                        &participants,
+                        default_name.as_deref(),
+                        None,
+                        &agents,
+                    )
+                    .text,
+                )
             } else {
-                counter.count_message(&conversation_system_prompt(agent, &agents))
+                counter.count_message(
+                    &conversation_system_prompt(counter.as_ref(), agent, &agents).text,
+                )
             };
             let projection = project_context(counter.as_ref(), system_tokens, 0, &entries);
             // What this participant's next turn would inject, without touching
@@ -431,6 +438,7 @@ impl ConversationService {
             return Ok(ChannelTurnReport::default());
         };
         let agents = self.store.list_agents(&self.workspace_id).await?;
+        let counter = token_counter_for_model(&settings.model);
 
         // The user message enters the branch before assembly, so the model
         // request is exactly the active branch plus a fresh system prompt.
@@ -451,7 +459,13 @@ impl ConversationService {
             .memory
             .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
             .await;
-        let messages = assemble_conversation_messages(&agent, &agents, &entries, memory.as_deref());
+        let messages = assemble_conversation_messages(
+            counter.as_ref(),
+            &agent,
+            &agents,
+            &entries,
+            memory.as_deref(),
+        );
 
         let task = Task::new(
             message.content.trim(),
@@ -741,13 +755,17 @@ impl ConversationService {
                     .store
                     .list_context_entries(&channel.id, &agent.id)
                     .await?;
-                let system_tokens = counter.count_message(&group_system_prompt(
-                    agent,
-                    &participants,
-                    default_name.as_deref(),
-                    options.platform_context.as_deref(),
-                    &agents,
-                ));
+                let system_tokens = counter.count_message(
+                    &group_system_prompt(
+                        counter.as_ref(),
+                        agent,
+                        &participants,
+                        default_name.as_deref(),
+                        options.platform_context.as_deref(),
+                        &agents,
+                    )
+                    .text,
+                );
                 let projection =
                     project_context(counter.as_ref(), system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
@@ -848,6 +866,7 @@ impl ConversationService {
                 .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
                 .await;
             let messages = assemble_group_messages(
+                counter.as_ref(),
                 agent,
                 &participants,
                 default_name.as_deref(),
@@ -861,7 +880,8 @@ impl ConversationService {
                 "A concise reply addressed to the user in this group conversation.",
             )
             .in_channel(channel.id.clone())
-            .assign_to(agent.id.clone());
+            .assign_to(agent.id.clone())
+            .from_source(TaskSource::ConversationTurn);
             let mut task_options = run_options.clone();
             if options.approval_level == ApprovalLevel::PlanOnly {
                 task_options.capture_plan_task = Some(task.id.clone());
@@ -1120,13 +1140,17 @@ impl ConversationService {
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
-        let system_tokens = counter.count_message(&group_system_prompt(
-            agent,
-            participants,
-            default_name,
-            platform_context,
-            agents,
-        ));
+        let system_tokens = counter.count_message(
+            &group_system_prompt(
+                counter,
+                agent,
+                participants,
+                default_name,
+                platform_context,
+                agents,
+            )
+            .text,
+        );
         let projection = project_context(counter, system_tokens, tool_tokens, &entries);
         let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
         Ok(percent
@@ -1832,7 +1856,7 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 /// participant named `main` (the built-in Main Assistant), then to the first
 /// participant in order. The boolean reports that fallback happened so the
 /// turn can explain it. An unset responder stays silent.
-fn resolve_default_responder<'a>(
+pub(crate) fn resolve_default_responder<'a>(
     settings: &ConversationSettings,
     participants: &'a [AgentProfile],
 ) -> (Option<&'a AgentProfile>, bool) {
@@ -1849,18 +1873,81 @@ fn resolve_default_responder<'a>(
     (fallback, fallback.is_some())
 }
 
+/// A rendered system prompt and the named slots it was built from.
+///
+/// Slot token counts are prefix differences over [`Self::text`], so they sum to
+/// the token count of the prompt. Sending it costs message framing on top
+/// (ADR-0035, ADR-0036).
+#[derive(Debug, Clone)]
+pub(crate) struct SystemPromptDraft {
+    pub text: String,
+    pub slots: Vec<PromptSlot>,
+}
+
+/// Builds a system prompt slot by slot, pricing each slot as the difference
+/// between the counted prefix and the previous one.
+struct SlotWriter<'a> {
+    counter: &'a dyn TokenCounter,
+    text: String,
+    slots: Vec<PromptSlot>,
+    counted: u32,
+}
+
+impl<'a> SlotWriter<'a> {
+    fn new(counter: &'a dyn TokenCounter) -> Self {
+        Self {
+            counter,
+            text: String::new(),
+            slots: Vec::new(),
+            counted: 0,
+        }
+    }
+
+    fn push(&mut self, name: PromptSlotName, separator: &str, content: String) {
+        self.text.push_str(separator);
+        self.text.push_str(&content);
+        let total = self.counter.count(&self.text);
+        let tokens = total.saturating_sub(self.counted);
+        self.counted = total;
+        self.slots.push(PromptSlot {
+            name,
+            content,
+            tokens,
+        });
+    }
+
+    fn finish(self) -> SystemPromptDraft {
+        SystemPromptDraft {
+            text: self.text,
+            slots: self.slots,
+        }
+    }
+}
+
+/// The private-conversation instruction of a single-agent conversation.
+const CONVERSATION_CONVENTION: &str = "You are in a private, continuous conversation with the \
+user. The messages that follow are the retained conversation context. Reply to the latest user \
+message, use tools when they help, and do not restate the context.";
+
+/// How peer replies appear to a group participant.
+const PEER_CONVENTION: &str = "Replies from other participants appear as user messages prefixed \
+with the speaker's name in brackets, for example [Planner] ... . They are teammate history: not \
+the user's words and not your own reply. Answer the latest user message as yourself and do not \
+speak for other participants.";
+
 /// System prompt for one participant of a group conversation.
 ///
 /// It is stable across turns: agent prompt, platform context, participant
 /// roster, default responder, and the peer-reply convention. The active branch
 /// follows as ordinary chat messages.
 pub(crate) fn group_system_prompt(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     participants: &[AgentProfile],
     default_responder: Option<&str>,
     platform_context: Option<&str>,
     agents: &[AgentProfile],
-) -> String {
+) -> SystemPromptDraft {
     let roster = participants
         .iter()
         .map(|participant| format!("- {}", participant.name))
@@ -1871,22 +1958,33 @@ pub(crate) fn group_system_prompt(
         None => "Messages that address nobody stay unanswered.".to_string(),
     };
 
-    format!(
-        "{agent}\n\n{platform}\n\n\
-         You are one participant in a group conversation. Participants, in order:\n{roster}\n\n\
-         {default_line} Replies from other participants appear as user messages prefixed \
-         with the speaker's name in brackets, for example [Planner] ... . They are teammate \
-         history: not the user's words and not your own reply. Answer the latest user \
-         message as yourself and do not speak for other participants.",
-        agent = agent.build_system_prompt(),
-        platform = ChannelAgentService::platform_context(agents, platform_context),
-        roster = roster,
-        default_line = default_line,
-    )
+    let mut writer = SlotWriter::new(counter);
+    writer.push(PromptSlotName::Agent, "", agent.build_system_prompt());
+    writer.push(
+        PromptSlotName::Platform,
+        "\n\n",
+        ChannelAgentService::platform_context(agents, platform_context),
+    );
+    writer.push(
+        PromptSlotName::Roster,
+        "\n\n",
+        format!(
+            "You are one participant in a group conversation. Participants, in order:\n{roster}"
+        ),
+    );
+    writer.push(PromptSlotName::DefaultResponder, "\n\n", default_line);
+    writer.push(
+        PromptSlotName::PeerConvention,
+        " ",
+        PEER_CONVENTION.to_string(),
+    );
+    writer.finish()
 }
 
 /// Assemble a group participant's request from its active branch.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble_group_messages(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     participants: &[AgentProfile],
     default_responder: Option<&str>,
@@ -1895,13 +1993,15 @@ pub(crate) fn assemble_group_messages(
     entries: &[ContextEntry],
     memory: Option<&str>,
 ) -> Vec<ChatMessage> {
-    let mut messages = vec![ChatMessage::system(group_system_prompt(
+    let prompt = group_system_prompt(
+        counter,
         agent,
         participants,
         default_responder,
         platform_context,
         agents,
-    ))];
+    );
+    let mut messages = vec![ChatMessage::system(prompt.text)];
     if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
         messages.push(ChatMessage::system(memory));
     }
@@ -1930,30 +2030,39 @@ struct SettledGroupReply {
     content: Option<String>,
 }
 
-/// System prompt for a conversation turn.
-pub(crate) fn conversation_system_prompt(agent: &AgentProfile, agents: &[AgentProfile]) -> String {
-    format!(
-        "{}\n\n{}\n\n\
-         You are in a private, continuous conversation with the user. The messages that \
-         follow are the retained conversation context. Reply to the latest user message, \
-         use tools when they help, and do not restate the context.",
-        agent.build_system_prompt(),
-        ChannelAgentService::platform_context(agents, None)
-    )
+/// System prompt for a single-agent conversation turn.
+pub(crate) fn conversation_system_prompt(
+    counter: &dyn TokenCounter,
+    agent: &AgentProfile,
+    agents: &[AgentProfile],
+) -> SystemPromptDraft {
+    let mut writer = SlotWriter::new(counter);
+    writer.push(PromptSlotName::Agent, "", agent.build_system_prompt());
+    writer.push(
+        PromptSlotName::Platform,
+        "\n\n",
+        ChannelAgentService::platform_context(agents, None),
+    );
+    writer.push(
+        PromptSlotName::ConversationConvention,
+        "\n\n",
+        CONVERSATION_CONVENTION.to_string(),
+    );
+    writer.finish()
 }
 
 /// Assemble the model request from the conversation's active branch.
 ///
 /// The order is deterministic: system prompt first, then entries by sequence.
 pub(crate) fn assemble_conversation_messages(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     agents: &[AgentProfile],
     entries: &[ContextEntry],
     memory: Option<&str>,
 ) -> Vec<ChatMessage> {
-    let mut messages = vec![ChatMessage::system(conversation_system_prompt(
-        agent, agents,
-    ))];
+    let prompt = conversation_system_prompt(counter, agent, agents);
+    let mut messages = vec![ChatMessage::system(prompt.text)];
     if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
         messages.push(ChatMessage::system(memory));
     }
@@ -2042,6 +2151,7 @@ fn render_entry(entry: &ContextEntry) -> String {
 mod tests {
     use super::*;
     use cowbot_core::conversation::ContextToolCall;
+    use cowbot_core::usage::ESTIMATE_COUNTER;
     use cowbot_llm::ChatRole;
 
     fn entry(role: ContextRole, content: &str) -> ContextEntry {
@@ -2056,6 +2166,55 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_slots_render_the_original_text() {
+        let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+        let coder = AgentProfile::new("Coder", "Engineer", "Ship", "Careful");
+        let participants = vec![planner.clone(), coder.clone()];
+
+        let group = group_system_prompt(
+            &ESTIMATE_COUNTER,
+            &planner,
+            &participants,
+            Some("Coder"),
+            None,
+            &participants,
+        );
+        assert_eq!(
+            group.text,
+            format!(
+                "{}\n\n{}\n\nYou are one participant in a group conversation. Participants, in \
+                 order:\n- Planner\n- Coder\n\nMessages that address nobody are answered by Coder. \
+                 Replies from other participants appear as user messages prefixed with the \
+                 speaker's name in brackets, for example [Planner] ... . They are teammate \
+                 history: not the user's words and not your own reply. Answer the latest user \
+                 message as yourself and do not speak for other participants.",
+                planner.build_system_prompt(),
+                ChannelAgentService::platform_context(&participants, None),
+            )
+        );
+        assert_eq!(
+            group.slots.iter().map(|slot| slot.tokens).sum::<u32>(),
+            ESTIMATE_COUNTER.count(&group.text)
+        );
+
+        let single = conversation_system_prompt(&ESTIMATE_COUNTER, &planner, &participants);
+        assert_eq!(
+            single.text,
+            format!(
+                "{}\n\n{}\n\nYou are in a private, continuous conversation with the user. The \
+                 messages that follow are the retained conversation context. Reply to the latest \
+                 user message, use tools when they help, and do not restate the context.",
+                planner.build_system_prompt(),
+                ChannelAgentService::platform_context(&participants, None),
+            )
+        );
+        assert_eq!(
+            single.slots.iter().map(|slot| slot.tokens).sum::<u32>(),
+            ESTIMATE_COUNTER.count(&single.text)
+        );
+    }
+
+    #[test]
     fn assembly_is_deterministic_and_skips_excluded_entries() {
         let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
         let mut excluded = entry(ContextRole::User, "forgotten");
@@ -2067,10 +2226,20 @@ mod tests {
             entry(ContextRole::User, "latest question"),
         ];
 
-        let first =
-            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
-        let second =
-            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
+        let first = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            None,
+        );
+        let second = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            None,
+        );
 
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(second.iter()) {
@@ -2090,6 +2259,7 @@ mod tests {
         let entries = vec![entry(ContextRole::User, "question")];
 
         let messages = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &entries,
@@ -2103,6 +2273,7 @@ mod tests {
         assert_eq!(messages[2].content, "question");
 
         let blank = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &entries,
@@ -2129,6 +2300,7 @@ mod tests {
         tool.recount();
 
         let messages = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &[assistant, tool],

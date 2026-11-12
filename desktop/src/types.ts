@@ -48,6 +48,9 @@ export interface CacheUsageSummary {
 
 export type ContextUsageState = "neutral" | "warning" | "danger" | "full" | "unknown";
 
+/** Where a token count came from: an exact tokenizer or the estimator. */
+export type TokenSource = "tiktoken" | "provider" | "estimate";
+
 export interface ConversationParticipantView {
   agent_id: string;
   agent_name: string;
@@ -77,7 +80,7 @@ export interface ConversationContext {
   total_tokens: number;
   active_entries: number;
   excluded_entries: number;
-  token_source: "tiktoken" | "provider" | "estimate";
+  token_source: TokenSource;
   token_counter: string | null;
   memory_tokens: number;
   context_window: number | null;
@@ -92,6 +95,124 @@ export interface ConversationContext {
   cache_last_turn: CacheUsageSummary;
   cache_conversation: CacheUsageSummary;
   participants: ConversationParticipantView[];
+}
+
+/** A read-only plan of the request one turn or task run would send. */
+export type PromptKind = "conversation" | "group" | "task_run";
+export type PromptRole = "system" | "user" | "assistant" | "tool";
+export type PromptSlotName =
+  | "agent"
+  | "platform"
+  | "roster"
+  | "default_responder"
+  | "peer_convention"
+  | "conversation_convention"
+  | "mode_instruction";
+
+export interface PromptSlot {
+  name: PromptSlotName;
+  content: string;
+  tokens: number;
+}
+
+export interface PromptMessage {
+  role: PromptRole;
+  content: string;
+  tokens: number;
+  entry_id?: string | null;
+  latest: boolean;
+  tool_calls: string[];
+  tool_call_id?: string | null;
+}
+
+export interface PromptTool {
+  name: string;
+  description: string;
+  parameters: unknown;
+  tokens: number;
+}
+
+export interface PromptMemory {
+  block: string;
+  tokens: number;
+}
+
+export type MemoryScope =
+  | "workspace"
+  | "agent"
+  | "conversation"
+  | "agent_in_conversation";
+
+export type RecallSkipReason =
+  | { kind: "inactive" }
+  | { kind: "over_budget"; remaining_tokens: number };
+
+export interface RecallCandidate {
+  entry_id: string;
+  content: string;
+  kind: MemoryKind;
+  scope: MemoryScope;
+  pinned: boolean;
+  score?: number | null;
+  tokens: number;
+  selected: boolean;
+  skip_reason?: RecallSkipReason | null;
+}
+
+export interface RecallPreview {
+  enabled: boolean;
+  /** The trimmed search query; empty means only notes and pinned entries. */
+  query: string;
+  block?: string | null;
+  estimated_tokens: number;
+  budget_tokens: number;
+  notes_budget_tokens: number;
+  notes_tokens: number;
+  candidates: RecallCandidate[];
+}
+
+export interface ContextProjection {
+  system_tokens: number;
+  tool_tokens: number;
+  history_tokens: number;
+  latest_tokens: number;
+  active_entries: number;
+  excluded_entries: number;
+  token_source: TokenSource;
+  token_counter: string | null;
+}
+
+export interface PromptPlan {
+  kind: PromptKind;
+  model: string;
+  provider_id?: string | null;
+  slots: PromptSlot[];
+  messages: PromptMessage[];
+  memory?: PromptMemory | null;
+  recall: RecallPreview;
+  tools: PromptTool[];
+  projection: ContextProjection;
+  auto_compact: boolean;
+  compact_threshold: number;
+}
+
+/** A conversation or task-run preview with its window metadata. */
+export interface ContextPreview {
+  kind: PromptKind;
+  channel_id: string | null;
+  run_id: string | null;
+  task_id: string | null;
+  agent_id: string;
+  agent_name: string;
+  title: string;
+  plan: PromptPlan;
+  request_tokens: number;
+  context_window: number | null;
+  max_output_tokens: number | null;
+  usable_tokens: number | null;
+  percent_used: number | null;
+  state: ContextUsageState;
+  over_budget: boolean;
 }
 
 export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "note";

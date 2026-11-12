@@ -4967,3 +4967,245 @@ button {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Context inspector (ADR-0036) */
+
+.inspector-hint {
+  margin: 0;
+  padding: 18px;
+  color: var(--paper-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.context-inspector {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.context-inspector-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-inspector-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.context-inspector-meta {
+  margin: 4px 0 0;
+  color: var(--paper-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.context-inspector-tabs {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.context-inspector-tab {
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-inspector-tab:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.context-inspector-tab.is-active {
+  border-color: var(--rule-strong);
+  background: var(--brass-soft);
+  color: var(--paper);
+}
+
+.context-inspector-note {
+  margin: 0;
+  color: var(--paper-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.context-inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.context-inspector-section h4 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-inspector-section h4 span {
+  color: var(--paper-faint);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-inspector-content {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--ink-raised);
+  color: var(--paper-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-slots,
+.prompt-messages,
+.recall-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-slots summary,
+.prompt-messages summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.prompt-slots summary:hover,
+.prompt-messages summary:hover {
+  background: var(--ink-hover);
+}
+
+.prompt-slots summary > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.prompt-message-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--paper-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-role {
+  padding: 1px 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  color: var(--paper-dim);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.prompt-role-system {
+  color: var(--brass);
+}
+
+.prompt-role-user {
+  color: #9db8d8;
+}
+
+.prompt-role-assistant {
+  color: var(--sage);
+}
+
+.prompt-latest {
+  padding: 1px 6px;
+  border: 1px solid var(--brass);
+  border-radius: 999px;
+  color: var(--brass);
+  font-size: 10px;
+}
+
+.recall-candidates li {
+  padding: 9px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+}
+
+.recall-candidates li.is-skipped {
+  opacity: 0.78;
+}
+
+.recall-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.recall-status {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.recall-status.is-selected {
+  border: 1px solid var(--sage);
+  color: var(--sage);
+}
+
+.recall-status.is-skipped {
+  border: 1px solid var(--rule-strong);
+  color: var(--paper-faint);
+}
+
+.recall-content {
+  margin: 6px 0 0;
+  color: var(--paper);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.recall-reason {
+  margin: 5px 0 0;
+  color: var(--brass);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.run-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
