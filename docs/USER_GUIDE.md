@@ -127,15 +127,20 @@ on the next start.
 
 ## Navigation
 
-Chat is the main surface. The left sidebar lists conversations, agent contacts,
-channels, and tasks. The header row switches back to Chat and starts a new
-channel; the local user row at the bottom holds Settings.
+Chat is the main surface. The left sidebar holds one **Chats** list — agent
+direct chats and group channels together, sorted by pin and then recent
+activity — and a **Conversations** section for user-created sessions, which
+collapses and expands from its header. The header row switches back to Chat,
+opens the task list, and starts a new channel; the local user row at the bottom
+holds Settings.
 
-Select a task to open its **Task** tab in the right inspector; the conversation
-stays visible. The chat header has an approval button and a background button,
-each with a count, and they open the **Approvals** and **Background** tabs of the
-same inspector. Task detail, approvals, and running work share one right-side
-panel instead of replacing Chat.
+Tasks live in the right inspector. The **Tasks** button in the sidebar header
+opens the **Task** tab: select a task there to read its detail, and use
+**← All tasks** to return to the list. A background card also opens its owning
+task. The chat header has an approval button and a background button, each with
+a count, and they open the **Approvals** and **Background** tabs of the same
+inspector. Task detail, approvals, and running work share one right-side panel
+instead of replacing Chat.
 
 The inspector remembers its last tab and closes with **×**. On windows narrower
 than about 1080 px the sidebar hides while the inspector is open so the chat and
@@ -208,13 +213,13 @@ from templates; a standalone agent editor is not part of this release.
 
 ## Agents, channels, and tasks
 
-- **Agents** — the sidebar lists every agent as a contact with its latest
-  message and time. Select one and write in the composer: the message goes to
-  that agent directly and no mention is needed. The header shows the agent's
+- **Agents** — every agent appears in **Chats** with its latest message and
+  time. Select one and write in the composer: the message goes to that agent
+  directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
-- **Conversations** — the **Conversations** section holds user-created sessions
-  with one agent or a group of two to eight. Choose **New conversation**, give
+- **Conversations** — the collapsible **Conversations** section holds
+  user-created sessions with one agent or a group of two to eight. Choose **New conversation**, give
   it a title, and select participants in the order you want them listed; use
   ↑ and ↓ to reorder a selected participant. With two or more selected, choose
   the **default responder** — preselected to the Main Assistant (`main`) when it
@@ -231,8 +236,9 @@ from templates; a standalone agent editor is not part of this release.
   the conversation's model picks up to three participants first and falls back
   to the default responder when it cannot. Type `@` in the composer to open a
   participant list: arrow keys move, Enter or Tab inserts, and Escape closes it.
-- **Channels** — group rooms sit below the agents. Create one with **New
-  channel** or the **+** button, post messages, and follow the timeline. Names
+- **Channels** — group rooms share the **Chats** list with agent chats and are
+  marked with their channel avatar. Create one with **New channel** or the
+  **+** button, post messages, and follow the timeline. Names
   must be unique in the workspace, case-insensitively. Mention an agent by name
   to get an answer in the channel: `@Planner, which module owns the parser?`
   The agents in the workspace are listed in the
@@ -248,8 +254,8 @@ from templates; a standalone agent editor is not part of this release.
   tasks keep their history but are no longer linked to that channel. Clearing an
   agent conversation keeps the agent and removes only its messages. Agent
   conversations cannot be deleted from the channel list.
-- **Search** — the field above the sidebar list filters agents, conversations,
-  channels, and tasks by name.
+- **Search** — the field above the sidebar list filters chats and
+  conversations by name.
 - **Rich answers** — agent and user messages render Markdown: headings, lists,
   tables, code blocks, and links. Links open in your system browser. A fenced
   `html` code block appears as an **HTML preview** card with **Preview**,
@@ -263,17 +269,19 @@ from templates; a standalone agent editor is not part of this release.
   risky tool call raised while an agent answers appears in **Approvals**.
   Settings → Approvals also manages workspace allow / ask / deny rules and
   session decisions; Settings → Audit filters decisions by source.
-- A direct message or a mention becomes a task for that agent: it is listed in
-  **Tasks** with its assignment, run, and tool calls, and it can be cancelled
-  there. The answer is also posted back to the conversation as a message from
-  that agent.
+- A direct message or a mention becomes a task for that agent: enable **Show
+  conversation turns** in the task list to see it with its assignment, run, and
+  tool calls, and to cancel it. The answer is also posted back to the
+  conversation as a message from that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
   optional channel, an approval policy, and optionally a project worktree.
-  Tasks are listed in the sidebar; select one to open its **Task** tab in the
-  right inspector and choose **Run** to execute the Planner → Coder → Reviewer
-  crew. The submitted task becomes the run's owning task: its detail shows the
-  run tasks, assignments, assignment events, runs, tool calls, and the worktree
-  when one exists.
+  **New task** in the task list opens the form. The **Task** tab lists tasks and
+  opens one for detail; choose **Run** there to execute the Planner → Coder →
+  Reviewer crew. The list hides conversation turns by default. Long task prompts
+  and expected output collapse behind **Show more** / **Show less**. The
+  submitted task becomes the run's owning task: its detail shows the run tasks,
+  assignments, assignment events, runs, tool calls, and the worktree when one
+  exists.
 - **Crew runs** create three related tasks (Planner, Coder, Reviewer) under the
   task you ran.
 - **Cancel** stops a running task.

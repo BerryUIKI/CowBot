@@ -22,7 +22,7 @@ import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
 import TaskDetail from "./TaskDetail";
-import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
+import TaskList from "./TaskList";import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
   addProject,
@@ -104,11 +104,7 @@ import type {
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import {
-  isActiveOverviewStatus,
-  taskStatusKind,
-  taskStatusLabel,
-} from "./types";
+import { isActiveOverviewStatus } from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "settings";
@@ -276,9 +272,6 @@ export default function App() {
   const [previews, setPreviews] = useState<Record<string, ChannelMessage | null>>({});
   const [query, setQuery] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskFilter, setTaskFilter] = useState<"active" | "archived" | "all">(
-    "active",
-  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
@@ -352,7 +345,13 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab | null>(() => {
     try {
       const stored = window.localStorage.getItem("cowbot.inspector-tab");
-      if (stored === "approvals" || stored === "background") return stored;
+      if (
+        stored === "approvals" ||
+        stored === "background" ||
+        stored === "task"
+      ) {
+        return stored;
+      }
       if (stored === "closed") return null;
       if (
         window.localStorage.getItem("cowbot.background-panel") === "open"
@@ -364,8 +363,14 @@ export default function App() {
       return null;
     }
   });
-  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
-  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [conversationsOpen, setConversationsOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("cowbot.conversations-open") === "open";
+    } catch {
+      return false;
+    }
+  });
+  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);  const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
@@ -546,6 +551,17 @@ export default function App() {
       // Storage can be unavailable in restricted webviews; the panel still works.
     }
   }, [inspectorTab]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "cowbot.conversations-open",
+        conversationsOpen ? "open" : "closed",
+      );
+    } catch {
+      // Storage can be unavailable in restricted webviews; the section still works.
+    }
+  }, [conversationsOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -993,20 +1009,25 @@ export default function App() {
 
   const normalizedQuery = query.trim().toLowerCase();
 
-  const visibleAgentRows = useMemo(
+  const chatRows = useMemo(
     () =>
-      normalizedQuery
-        ? agentRows.filter((row) => row.agent.name.toLowerCase().includes(normalizedQuery))
-        : agentRows,
-    [agentRows, normalizedQuery],
+      [
+        ...agentRows.map((row) => ({ ...row, kind: "agent" as const })),
+        ...groupChannels.map((row) => ({ ...row, kind: "channel" as const })),
+      ].sort((left, right) => byRecentActivity(left, right, previews)),
+    [agentRows, groupChannels, previews],
   );
 
-  const visibleChannels = useMemo(
+  const visibleChats = useMemo(
     () =>
       normalizedQuery
-        ? groupChannels.filter((row) => row.channel.name.toLowerCase().includes(normalizedQuery))
-        : groupChannels,
-    [groupChannels, normalizedQuery],
+        ? chatRows.filter((row) =>
+            (row.kind === "agent" ? row.agent.name : row.channel.name)
+              .toLowerCase()
+              .includes(normalizedQuery),
+          )
+        : chatRows,
+    [chatRows, normalizedQuery],
   );
 
   const visibleConversations = useMemo(
@@ -1019,22 +1040,11 @@ export default function App() {
     [conversationRows, normalizedQuery],
   );
 
-  const visibleTasks = useMemo(() => {
-    const filtered = tasks.filter((task) =>
-      taskFilter === "all"
-        ? true
-        : taskFilter === "archived"
-          ? task.archived
-          : !task.archived,
-    );
-    if (!normalizedQuery) return filtered;
-    return filtered.filter(
-      (task) =>
-        (task.title || task.description).toLowerCase().includes(normalizedQuery) ||
-        task.description.toLowerCase().includes(normalizedQuery) ||
-        agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
-    );
-  }, [agents, normalizedQuery, taskFilter, tasks]);
+  const showConversations =
+    conversationsOpen ||
+    creatingConversation ||
+    selectedChannel?.kind === "conversation" ||
+    (normalizedQuery.length > 0 && visibleConversations.length > 0);
 
   const channelMentionNames = useMemo(() => {
     const seen = new Set<string>();
@@ -1164,6 +1174,7 @@ export default function App() {
 
   function openNewConversation() {
     setView("chat");
+    setConversationsOpen(true);
     setCreatingConversation(true);
     setError(null);
     if (conversationIds.length === 0 && agents.length > 0) {
@@ -1368,23 +1379,6 @@ export default function App() {
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
     setMenu({ kind, channel, agent, task: null, x: rect.left + 24, y: rect.bottom + 4 });
-  }
-
-  function openTaskMenu(
-    event: ReactMouseEvent<HTMLButtonElement>,
-    task: Task,
-  ) {
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({
-      kind: "task",
-      channel: null,
-      agent: null,
-      task,
-      x: rect.right - 4,
-      y: rect.bottom + 4,
-    });
   }
 
   async function togglePin(channel: Channel) {
@@ -1999,19 +1993,6 @@ export default function App() {
 
   const menuItems: ContextMenuItem[] = (() => {
     if (!menu) return [];
-    if (menu.kind === "task" && menu.task) {
-      const task = menu.task;
-      const kind = taskStatusKind(task.status);
-      const terminal =
-        kind === "completed" || kind === "failed" || kind === "cancelled";
-      if (!terminal) return [];
-      return [
-        {
-          label: task.archived ? "Unarchive task" : "Archive task",
-          onSelect: () => void handleToggleArchive(task),
-        },
-      ];
-    }
 
     const channel = menu.channel;
     if (!channel) return [];
@@ -2126,8 +2107,16 @@ export default function App() {
       approvingPlan={busy === "approve-plan"}
       onToggleArchive={() => void handleToggleArchive(selectedTask)}
       archiveBusy={busy === "archive-task"}
+      onBack={() => setSelectedTaskId(null)}
     />
-  ) : null;
+  ) : (
+    <TaskList
+      tasks={tasks}
+      agents={agents}
+      onOpenTask={openTask}
+      onNewTask={startCreatingTask}
+    />
+  );
 
   return (
     <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
@@ -2151,6 +2140,29 @@ export default function App() {
                 aria-hidden="true"
               >
                 <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`icon-button${inspectorTab === "task" ? " is-active" : ""}`}
+              title="Tasks"
+              aria-label="Tasks"
+              aria-pressed={inspectorTab === "task"}
+              onClick={() =>
+                setInspectorTab((current) => (current === "task" ? null : "task"))
+              }
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                aria-hidden="true"
+              >
+                <path d="M9 6h11M9 12h11M9 18h11" />
+                <path d="M4 6l1.5 1.5L8 5" />
+                <path d="M4 12l1.5 1.5L8 11" />
+                <path d="M4 18l1.5 1.5L8 17" />
               </svg>
             </button>
             <button
@@ -2181,8 +2193,8 @@ export default function App() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search conversations and tasks"
-              aria-label="Search conversations and tasks"
+              placeholder="Search chats and conversations"
+              aria-label="Search chats and conversations"
             />
           </label>
         ) : null}
@@ -2190,9 +2202,166 @@ export default function App() {
         <div className="sidebar-scroll">
           {view !== "settings" ? (
             <>
+              <section className="sidebar-section" aria-label="Chats">
+                <div className="nav-heading">
+                  <span>Chats</span>
+                  <button type="button" className="text-button" onClick={openNewChannel}>
+                    New
+                  </button>
+                </div>
+                {chatRows.length === 0 ? (
+                  <p className="nav-note">
+                    Add a team from a template in Settings to start a conversation.
+                  </p>
+                ) : visibleChats.length === 0 ? (
+                  <p className="nav-note">No chats match.</p>
+                ) : (
+                  <ul className="contact-list">
+                    {visibleChats.map((row) => {
+                      const preview = previews[row.channel.id] ?? null;
+                      const isAgent = row.kind === "agent";
+                      const name = isAgent ? row.agent.name : row.channel.name;
+                      return (
+                        <li key={row.channel.id} className="contact-item">
+                          <button
+                            type="button"
+                            className="contact-row"
+                            aria-current={row.channel.id === selectedId ? "page" : undefined}
+                            onClick={() => openChannel(row.channel.id)}
+                            onContextMenu={(event) =>
+                              isAgent
+                                ? openMenu(event, "agent", row.channel, row.agent)
+                                : openMenu(event, "channel", row.channel)
+                            }
+                            onKeyDown={(event) =>
+                              isAgent
+                                ? openMenuFromKey(event, "agent", row.channel, row.agent)
+                                : openMenuFromKey(event, "channel", row.channel)
+                            }
+                          >
+                            <Avatar name={name} kind={isAgent ? "agent" : "channel"} />
+                            <span className="contact-text">
+                              <span className="contact-top">
+                                <span className="contact-name">
+                                  {row.channel.pinned ? <PinMark /> : null}
+                                  {name}
+                                </span>
+                                <time className="contact-time">
+                                  {preview ? formatListTime(preview.created_at) : ""}
+                                </time>
+                              </span>
+                              <span className="contact-snippet">
+                                {preview
+                                  ? previewSnippet(preview, row.channel)
+                                  : isAgent
+                                    ? row.agent.role
+                                    : row.channel.topic || "No messages yet"}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="contact-more"
+                            title={isAgent ? "Conversation actions" : "Channel actions"}
+                            aria-label={`Actions for ${name}`}
+                            onClick={(event) =>
+                              isAgent
+                                ? openMenuFromButton(event, "agent", row.channel, row.agent)
+                                : openMenuFromButton(event, "channel", row.channel)
+                            }
+                          >
+                            ⋯
+                          </button>
+                          {!isAgent &&
+                          (activeOverviewByChannel.get(row.channel.id) ?? []).length > 0 ? (
+                            <div className="background-cards">
+                              {(activeOverviewByChannel.get(row.channel.id) ?? []).map(
+                                (entry) => (
+                                  <BackgroundTaskCard
+                                    key={entry.run_id}
+                                    entry={entry}
+                                    now={overviewNow}
+                                    onOpen={() => openTask(entry.run_id)}
+                                  />
+                                ),
+                              )}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+
+                {creatingChannel ? (
+                  <form className="new-channel" onSubmit={handleCreateChannel}>
+                    <label className="field">
+                      <span>Name</span>
+                      <input
+                        ref={channelNameRef}
+                        value={channelName}
+                        onChange={(event) => setChannelName(event.target.value)}
+                        placeholder="engineering"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Topic</span>
+                      <input
+                        value={channelTopic}
+                        onChange={(event) => setChannelTopic(event.target.value)}
+                        placeholder="What is this channel for?"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={!channelName.trim()}
+                      >
+                        Create channel
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setCreatingChannel(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    className="new-channel-button"
+                    onClick={openNewChannel}
+                  >
+                    <span aria-hidden="true">+</span> New channel
+                  </button>
+                )}
+              </section>
+
               <section className="sidebar-section" aria-label="Conversations">
                 <div className="nav-heading">
-                  <span>Conversations</span>
+                  <button
+                    type="button"
+                    className="nav-disclosure"
+                    aria-expanded={showConversations}
+                    aria-controls="sidebar-conversations"
+                    onClick={() => setConversationsOpen((open) => !open)}
+                  >
+                    <span
+                      className={`disclosure-mark${showConversations ? " is-open" : ""}`}
+                      aria-hidden="true"
+                    >
+                      ▸
+                    </span>
+                    <span>Conversations</span>
+                    {conversationRows.length > 0 ? (
+                      <span className="nav-count-soft">{conversationRows.length}</span>
+                    ) : null}
+                  </button>
                   <button
                     type="button"
                     className="text-button"
@@ -2202,6 +2371,7 @@ export default function App() {
                     New
                   </button>
                 </div>
+                <div id="sidebar-conversations" hidden={!showConversations}>
                 {visibleConversations.length > 0 ? (
                   <ul className="contact-list">
                     {visibleConversations.map(({ channel }) => {
@@ -2404,278 +2574,11 @@ export default function App() {
                     <span aria-hidden="true">+</span> New conversation
                   </button>
                 )}
+                </div>
               </section>
 
-              <section className="sidebar-section" aria-label="Agents">
-                <div className="nav-heading">
-                  <span>Agents</span>
-                  <span className="nav-count-soft">{agentRows.length}</span>
-                </div>
-                {agentRows.length === 0 ? (
-                  <p className="nav-note">
-                    Add a team from a template in Settings to start a conversation.
-                  </p>
-                ) : visibleAgentRows.length === 0 ? (
-                  <p className="nav-note">No agents match.</p>
-                ) : (
-                  <ul className="contact-list">
-                    {visibleAgentRows.map(({ agent, channel }) => {
-                      const preview = previews[channel.id] ?? null;
-                      return (
-                        <li key={agent.id} className="contact-item">
-                          <button
-                            type="button"
-                            className="contact-row"
-                            aria-current={channel.id === selectedId ? "page" : undefined}
-                            onClick={() => openChannel(channel.id)}
-                            onContextMenu={(event) =>
-                              openMenu(event, "agent", channel, agent)
-                            }
-                            onKeyDown={(event) =>
-                              openMenuFromKey(event, "agent", channel, agent)
-                            }
-                          >
-                            <Avatar name={agent.name} kind="agent" />
-                            <span className="contact-text">
-                              <span className="contact-top">
-                                <span className="contact-name">
-                                  {channel.pinned ? <PinMark /> : null}
-                                  {agent.name}
-                                </span>
-                                <time className="contact-time">
-                                  {preview ? formatListTime(preview.created_at) : ""}
-                                </time>
-                              </span>
-                              <span className="contact-snippet">
-                                {preview ? previewSnippet(preview, channel) : agent.role}
-                              </span>
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className="contact-more"
-                            title="Conversation actions"
-                            aria-label={`Actions for ${agent.name}`}
-                            onClick={(event) =>
-                              openMenuFromButton(event, "agent", channel, agent)
-                            }
-                          >
-                            ⋯
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </section>
 
-              <section className="sidebar-section" aria-label="Channels">
-                <div className="nav-heading">
-                  <span>Channels</span>
-                  <button type="button" className="text-button" onClick={openNewChannel}>
-                    New
-                  </button>
-                </div>
-                {groupChannels.length > 0 ? (
-                  visibleChannels.length > 0 ? (
-                    <ul className="contact-list">
-                      {visibleChannels.map(({ channel }) => {
-                        const preview = previews[channel.id] ?? null;
-                        return (
-                          <li key={channel.id} className="contact-item">
-                            <button
-                              type="button"
-                              className="contact-row"
-                              aria-current={channel.id === selectedId ? "page" : undefined}
-                              onClick={() => openChannel(channel.id)}
-                              onContextMenu={(event) => openMenu(event, "channel", channel)}
-                              onKeyDown={(event) =>
-                                openMenuFromKey(event, "channel", channel)
-                              }
-                            >
-                              <Avatar name={channel.name} kind="channel" />
-                              <span className="contact-text">
-                                <span className="contact-top">
-                                  <span className="contact-name">
-                                    {channel.pinned ? <PinMark /> : null}
-                                    {channel.name}
-                                  </span>
-                                  <time className="contact-time">
-                                    {preview ? formatListTime(preview.created_at) : ""}
-                                  </time>
-                                </span>
-                                <span className="contact-snippet">
-                                  {preview
-                                    ? previewSnippet(preview, channel)
-                                    : channel.topic || "No messages yet"}
-                                </span>
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className="contact-more"
-                              title="Channel actions"
-                              aria-label={`Actions for ${channel.name}`}
-                              onClick={(event) =>
-                                openMenuFromButton(event, "channel", channel)
-                              }
-                            >
-                              ⋯
-                            </button>
-                            {(activeOverviewByChannel.get(channel.id) ?? []).length > 0 ? (
-                              <div className="background-cards">
-                                {(activeOverviewByChannel.get(channel.id) ?? []).map(
-                                  (entry) => (
-                                    <BackgroundTaskCard
-                                      key={entry.run_id}
-                                      entry={entry}
-                                      now={overviewNow}
-                                      onOpen={() => openTask(entry.run_id)}
-                                    />
-                                  ),
-                                )}
-                              </div>
-                            ) : null}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="nav-note">No channels match.</p>
-                  )
-                ) : null}
 
-                {creatingChannel ? (
-                  <form className="new-channel" onSubmit={handleCreateChannel}>
-                    <label className="field">
-                      <span>Name</span>
-                      <input
-                        ref={channelNameRef}
-                        value={channelName}
-                        onChange={(event) => setChannelName(event.target.value)}
-                        placeholder="engineering"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Topic</span>
-                      <input
-                        value={channelTopic}
-                        onChange={(event) => setChannelTopic(event.target.value)}
-                        placeholder="What is this channel for?"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <div className="form-actions">
-                      <button
-                        type="submit"
-                        className="primary-button"
-                        disabled={!channelName.trim()}
-                      >
-                        Create channel
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => setCreatingChannel(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <button
-                    type="button"
-                    className="new-channel-button"
-                    onClick={openNewChannel}
-                  >
-                    <span aria-hidden="true">+</span> New channel
-                  </button>
-                )}
-              </section>
-
-              <section className="sidebar-section" aria-label="Tasks">
-                <div className="nav-heading">
-                  <span>Tasks</span>
-                  <button type="button" className="text-button" onClick={startCreatingTask}>
-                    New
-                  </button>
-                </div>
-                <div className="task-filter" role="group" aria-label="Task filter">
-                  {(["active", "archived", "all"] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      type="button"
-                      className="task-filter-item"
-                      aria-pressed={taskFilter === filter}
-                      onClick={() => setTaskFilter(filter)}
-                    >
-                      {filter === "active"
-                        ? "Active"
-                        : filter === "archived"
-                          ? "Archived"
-                          : "All"}
-                    </button>
-                  ))}
-                </div>
-                <ul className="contact-list">
-                  {visibleTasks.map((task) => {
-                    const kind = taskStatusKind(task.status);
-                    return (
-                      <li key={task.id} className="task-row">
-                        <button
-                          type="button"
-                          className="contact-row"
-                          aria-current={
-                            task.id === selectedTaskId &&
-                            inspectorTab === "task" &&
-                            !creatingTask
-                              ? "page"
-                              : undefined
-                          }
-                          onClick={() => openTask(task.id)}
-                        >
-                          <Avatar
-                            name={agentName(agents, task.assigned_agent)}
-                            kind="agent"
-                            size="small"
-                          />
-                          <span className="contact-text">
-                            <span className="contact-top">
-                              <span className="contact-name">
-                                {task.title || task.description}
-                              </span>
-                            </span>
-                            <span className="contact-snippet">
-                              <span className={`status-dot status-${kind}`} />{" "}
-                              {taskStatusLabel(task.status)} ·{" "}
-                              {agentName(agents, task.assigned_agent)}
-                              {task.archived ? " · Archived" : ""}
-                            </span>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="contact-more"
-                          title="Task actions"
-                          aria-label={`Actions for ${task.title || task.description}`}
-                          onClick={(event) => openTaskMenu(event, task)}
-                        >
-                          ⋯
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {visibleTasks.length === 0 ? (
-                    <li className="nav-empty">
-                      {tasks.length === 0 ? "No tasks yet." : "No tasks match."}
-                    </li>
-                  ) : null}
-                </ul>
-                <button type="button" className="new-channel-button" onClick={startCreatingTask}>
-                  <span aria-hidden="true">+</span> New task
-                </button>
-              </section>
             </>
           ) : (
             <section className="sidebar-section" aria-label="Settings sections">
@@ -3486,29 +3389,10 @@ export default function App() {
                 </form>
               )}
             </div>
-          ) : selectedTask ? (
-            <TaskDetail
-              task={selectedTask}
-              assignments={taskAssignments}
-              runs={taskRuns}
-              runTasks={taskRunTasks}
-              worktree={taskWorktree}
-              discardingWorktree={busy === "discard-worktree"}
-              onDiscardWorktree={() => void handleDiscardWorktree()}
-              onOpenTask={openTask}
-              cancelling={busy === "cancel-task"}
-              onCancel={handleCancelTask}
-              running={runningTasks.has(selectedTask.id)}
-              onRun={() => handleRunTask(selectedTask.id)}
-              onApprovePlan={() => void handleApprovePlan(selectedTask.id)}
-              approvingPlan={busy === "approve-plan"}
-              onToggleArchive={() => void handleToggleArchive(selectedTask)}
-              archiveBusy={busy === "archive-task"}
-            />
           ) : (
             <div className="empty-workspace">
               <p className="empty-title">No task selected.</p>
-              <p>Create a task and choose an agent to own it.</p>
+              <p>Pick a task in the inspector, or create a new one.</p>
               <button type="button" className="primary-button" onClick={startCreatingTask}>
                 New task
               </button>
