@@ -297,6 +297,9 @@ pub struct ContextEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_agent_id: Option<AgentId>,
     /// Monotonic position inside the `(channel, agent)` branch.
+    ///
+    /// Compaction renumbers the kept tail to free the cutoff, so this is an
+    /// ordering key, not a stable identifier.
     pub seq: i64,
     pub role: ContextRole,
     pub kind: ContextEntryKind,
@@ -535,13 +538,42 @@ pub struct ConversationContext {
 }
 
 /// Result of a manual or automatic compaction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompactionOutcome {
     pub compacted: bool,
     pub summarized_entries: u32,
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub summary: Option<String>,
+    /// True when another compaction already held the branch.
+    #[serde(default)]
+    pub in_progress: bool,
+    /// Why nothing was written, for the in-progress, stale, empty, and
+    /// nothing-to-summarize paths.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Result of the guarded store write behind one compaction.
+///
+/// The service decides what to summarize; the store decides whether the
+/// branch still matches that decision and applies the summary at the cutoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionWrite {
+    /// The summary was inserted at the cutoff.
+    Applied {
+        summary_seq: i64,
+        /// Active tokens at write time, including entries appended during the
+        /// model call.
+        tokens_before: u32,
+        tokens_after: u32,
+    },
+    /// The summarized prefix is no longer active, or the cutoff no longer
+    /// matches the branch. Nothing was written.
+    Stale,
+    /// The branch was cleared while the summary was being generated. Nothing
+    /// was written.
+    Empty,
 }
 
 /// Why a group message selected the participants it did.
@@ -732,6 +764,19 @@ pub fn compaction_split(entries: &[ContextEntry]) -> usize {
     while index > 0 && entries[index].role == ContextRole::Tool {
         index -= 1;
     }
+
+    // A previous summary already compresses older history. Summarizing it
+    // alone would replace one summary with another without incorporating new
+    // messages; this is the state right after a compaction, when the summary
+    // is the oldest active entry.
+    if index > 0
+        && entries[..index]
+            .iter()
+            .all(|entry| entry.kind == ContextEntryKind::Summary)
+    {
+        return 0;
+    }
+
     index
 }
 
@@ -1056,5 +1101,38 @@ mod tests {
         });
         let context: ConversationContext = serde_json::from_value(json).unwrap();
         assert!(context.participants.is_empty());
+    }
+
+    #[test]
+    fn compaction_outcome_defaults_new_fields_for_old_payloads() {
+        let json = r#"{"compacted":true,"summarized_entries":2,"tokens_before":10,
+            "tokens_after":4,"summary":"earlier history"}"#;
+        let outcome: CompactionOutcome = serde_json::from_str(json).unwrap();
+        assert!(outcome.compacted);
+        assert!(!outcome.in_progress);
+        assert_eq!(outcome.reason, None);
+    }
+
+    #[test]
+    fn compaction_split_does_not_resummarize_a_lone_summary() {
+        let mut summary = ContextEntry::summary(
+            ChannelId::new("channel"),
+            AgentId::new("agent"),
+            "earlier history",
+        );
+        summary.tokens = 10;
+        let first = entry(ContextRole::User, 1_000);
+        let second = entry(ContextRole::Assistant, 1_000);
+        let third = entry(ContextRole::User, 1_000);
+
+        // A summary plus the two kept entries: only the summary is old.
+        assert_eq!(
+            compaction_split(&[summary.clone(), first.clone(), second.clone()]),
+            0
+        );
+
+        // A summary with an older message and two kept entries: there is new
+        // material to fold into the next summary.
+        assert_eq!(compaction_split(&[summary, first, second, third]), 2);
     }
 }
