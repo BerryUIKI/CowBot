@@ -23,6 +23,7 @@
 
 use serde::Serialize;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Which composer a command belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +43,7 @@ impl CommandTarget {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// The shape of a command argument, used by the desktop for completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandArgKind {
@@ -72,6 +74,7 @@ impl CommandArgKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One positional argument of a command.
 ///
 /// Serializes flat — `{"placeholder": "<name>", "required": true, "kind":
@@ -102,6 +105,7 @@ impl Serialize for CommandArg {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A command the composer understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::task::TaskId;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Lifecycle of a task's git worktree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +18,7 @@ pub enum WorktreeStatus {
     Missing,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One task's git worktree.
 ///
 /// Records are keyed by the owning task (the run group task for a crew run)
@@ -38,6 +40,7 @@ pub struct TaskWorktree {
     pub updated_at: DateTime<Utc>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A worktree's uncommitted state relative to its base branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskWorktreeDiff {

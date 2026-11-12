@@ -3,6 +3,7 @@ use crate::error::CowError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Definition and schema of a callable tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {

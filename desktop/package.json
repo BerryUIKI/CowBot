@@ -11,7 +11,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "generate:types": "bash scripts/generate-types.sh",
+    "check:types": "node scripts/check-types.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

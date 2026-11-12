@@ -22,6 +22,7 @@ impl std::fmt::Display for UserId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WorkspaceId(pub String);
@@ -77,6 +78,7 @@ impl User {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A workspace that owns channels, agents, tasks, and templates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {

@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::identity::WorkspaceId;
 use crate::task::TaskId;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for an approval request.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ApprovalId(pub String);
@@ -25,6 +26,7 @@ impl std::fmt::Display for ApprovalId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Status of an approval request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +37,7 @@ pub enum ApprovalStatus {
     Expired,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What Bypass permissions does with a Critical-risk tool call.
 ///
 /// Every other approval mode blocks Critical calls regardless of this
@@ -64,6 +67,7 @@ impl std::fmt::Display for BypassCritical {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Per-workspace approval settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePolicy {
@@ -80,6 +84,7 @@ impl WorkspacePolicy {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Effective approval level for an assignment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +97,7 @@ pub enum ApprovalLevel {
     Trusted,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A human decision required before a tool call executes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Approval {

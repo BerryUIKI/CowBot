@@ -3,6 +3,7 @@ use crate::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a task.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub String);
@@ -23,6 +24,7 @@ impl std::fmt::Display for TaskId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Status of a task in the platform.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +46,7 @@ impl TaskStatus {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a task came from.
 ///
 /// Conversation turns reuse the task pipeline but are not work items, so the
@@ -70,6 +73,7 @@ impl TaskSource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Task abstraction inspired by CrewAI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
