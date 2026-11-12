@@ -16,6 +16,7 @@ mod memory;
 mod permissions;
 mod permissions_rules;
 mod preview;
+mod prompt_snapshots;
 mod remember;
 mod scheduler;
 mod session_decisions;
@@ -46,6 +47,7 @@ pub use permissions::{
 };
 pub use permissions_rules::PermissionService;
 pub use preview::{ConversationPreview, PreviewService, TaskRunPreview};
+pub use prompt_snapshots::PromptSnapshotService;
 pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
