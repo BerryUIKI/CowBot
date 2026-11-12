@@ -30,13 +30,14 @@ pub use assignment::{
 pub use audit::{AuditEvent, AuditSource};
 pub use channel::{Channel, ChannelId, ChannelMessage, Sender};
 pub use conversation::{
-    compaction_split, context_usage_state, project_context, usable_window, CacheUsageSummary,
-    ChannelKind, ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind,
-    ContextEvent, ContextEventKind, ContextProjection, ContextRole, ContextToolCall,
-    ContextUsageState, ConversationContext, ConversationMode, ConversationParticipantContext,
-    ConversationSettings, ConversationSettingsUpdate, ConversationTurn, RouteSource, TurnId,
-    CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
-    DEFAULT_COMPACT_THRESHOLD, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    compaction_split, compaction_split_by, context_entry_tokens, context_usage_state,
+    project_context, usable_window, CacheUsageSummary, ChannelKind, ChannelParticipant,
+    CompactionOutcome, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
+    ContextProjection, ContextRole, ContextToolCall, ContextUsageState, ConversationContext,
+    ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, TurnId, CONTEXT_KEEP_RECENT_TOKENS,
+    CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS, DEFAULT_COMPACT_THRESHOLD,
+    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 pub use error::{CowError, CowResult};
 pub use event::{Event, EventPayload};
@@ -66,7 +67,8 @@ pub use template::{
 };
 pub use tool::{Tool, ToolAuthorization, ToolCall, ToolDefinition, ToolGate, ToolResult};
 pub use usage::{
-    estimate_json_tokens, estimate_tokens, LlmCallKind, LlmCallRecord, LlmCallUsage,
-    LlmUsageRecorder, TokenUsage, UsageTotals,
+    estimate_json_tokens, estimate_tokens, EstimateTokenCounter, LlmCallKind, LlmCallRecord,
+    LlmCallUsage, LlmUsageRecorder, TokenCounter, TokenSource, TokenUsage, UsageTotals,
+    ESTIMATE_COUNTER, MESSAGE_OVERHEAD_TOKENS,
 };
 pub use worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus, WORKTREE_PATCH_LIMIT};

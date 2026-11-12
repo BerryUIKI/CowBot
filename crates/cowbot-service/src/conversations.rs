@@ -8,19 +8,23 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split, context_usage_state, project_context, CacheUsageSummary, CompactionOutcome,
-    CompactionWrite, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
-    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS,
-    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    compaction_split_by, context_entry_tokens, context_usage_state, project_context,
+    CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
+    ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
+    ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
+    ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
+    MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
 use cowbot_core::task::{Task, TaskId, TaskSource};
-use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord, UsageTotals};
-use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
+use cowbot_core::usage::{LlmCallKind, LlmCallRecord, TokenCounter, UsageTotals};
+use cowbot_llm::{
+    token_counter_for_model, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
+    LlmProvider,
+};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
@@ -295,6 +299,7 @@ impl ConversationService {
         }
         let settings = self.settings(channel_id).await?;
         let agents = self.store.list_agents(&self.workspace_id).await?;
+        let counter = token_counter_for_model(&settings.model);
         let default_name = resolve_default_responder(&settings, &participants)
             .0
             .map(|agent| agent.name.clone());
@@ -309,7 +314,7 @@ impl ConversationService {
                 .list_context_entries(channel_id, &agent.id)
                 .await?;
             let system_tokens = if group {
-                estimate_tokens(&group_system_prompt(
+                counter.count_message(&group_system_prompt(
                     agent,
                     &participants,
                     default_name.as_deref(),
@@ -317,9 +322,9 @@ impl ConversationService {
                     &agents,
                 ))
             } else {
-                estimate_tokens(&conversation_system_prompt(agent, &agents))
+                counter.count_message(&conversation_system_prompt(agent, &agents))
             };
-            let projection = project_context(system_tokens, 0, &entries);
+            let projection = project_context(counter.as_ref(), system_tokens, 0, &entries);
             // What this participant's next turn would inject, without touching
             // recall statistics. An empty query leaves notes and pinned entries.
             let memory_tokens = self
@@ -536,6 +541,7 @@ impl ConversationService {
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
         let participants = self.load_participants(channel).await?;
+        let counter = token_counter_for_model(&settings.model);
         if participants.is_empty() {
             self.channels
                 .post_system_notice(
@@ -689,6 +695,7 @@ impl ConversationService {
                             default_name.as_deref(),
                             options.platform_context.as_deref(),
                             &agents,
+                            counter.as_ref(),
                             tool_tokens,
                             window,
                             settings.compact_threshold,
@@ -734,14 +741,15 @@ impl ConversationService {
                     .store
                     .list_context_entries(&channel.id, &agent.id)
                     .await?;
-                let system_tokens = estimate_tokens(&group_system_prompt(
+                let system_tokens = counter.count_message(&group_system_prompt(
                     agent,
                     &participants,
                     default_name.as_deref(),
                     options.platform_context.as_deref(),
                     &agents,
                 ));
-                let projection = project_context(system_tokens, tool_tokens, &entries);
+                let projection =
+                    project_context(counter.as_ref(), system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
                     skipped.push(agent.id.clone());
                     let notice = match compaction_notice {
@@ -1103,6 +1111,7 @@ impl ConversationService {
         default_name: Option<&str>,
         platform_context: Option<&str>,
         agents: &[AgentProfile],
+        counter: &dyn TokenCounter,
         tool_tokens: u32,
         window: u32,
         compact_threshold: u32,
@@ -1111,14 +1120,14 @@ impl ConversationService {
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
-        let system_tokens = estimate_tokens(&group_system_prompt(
+        let system_tokens = counter.count_message(&group_system_prompt(
             agent,
             participants,
             default_name,
             platform_context,
             agents,
         ));
-        let projection = project_context(system_tokens, tool_tokens, &entries);
+        let projection = project_context(counter, system_tokens, tool_tokens, &entries);
         let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
         Ok(percent
             .map(|percent| percent >= compact_threshold as f32)
@@ -1149,8 +1158,9 @@ impl ConversationService {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let counter = token_counter_for_model(model);
         let history = self
-            .render_router_history(channel, message, participants)
+            .render_router_history(channel, message, participants, counter.as_ref())
             .await?;
         let request = ChatCompletionRequest {
             model: model.to_string(),
@@ -1245,6 +1255,7 @@ impl ConversationService {
         channel: &Channel,
         message: &ChannelMessage,
         participants: &[AgentProfile],
+        counter: &dyn TokenCounter,
     ) -> CowResult<String> {
         let messages = self.store.list_messages(&channel.id, 50).await?;
         let mut lines = Vec::new();
@@ -1266,7 +1277,7 @@ impl ConversationService {
                 "{author}: {}",
                 truncate_chars(entry.content.trim(), ROUTER_MESSAGE_CHARS)
             );
-            let cost = estimate_tokens(&line);
+            let cost = counter.count(&line);
             if tokens.saturating_add(cost) > ROUTER_INPUT_TOKENS && !lines.is_empty() {
                 break;
             }
@@ -1351,6 +1362,7 @@ impl ConversationService {
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
+        let counter = token_counter_for_model(model);
         let active = entries
             .iter()
             .filter(|entry| !entry.excluded)
@@ -1378,7 +1390,9 @@ impl ConversationService {
             });
         }
 
-        let split = compaction_split(&active);
+        let split = compaction_split_by(&active, |entry| {
+            context_entry_tokens(counter.as_ref(), entry)
+        });
         if split == 0 {
             return Ok(CompactionOutcome {
                 compacted: false,
@@ -1391,7 +1405,7 @@ impl ConversationService {
         }
 
         let summarized = &active[..split];
-        // `compaction_split` guarantees at least one kept entry, so this is
+        // `compaction_split_by` guarantees at least one kept entry, so this is
         // the sequence the summary will occupy after the tail shifts.
         let cutoff_seq = active[split].seq;
         let transcript = summary_transcript(summarized);

@@ -172,12 +172,100 @@ pub trait LlmUsageRecorder: Send + Sync {
     async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()>;
 }
 
+/// Where a token count came from.
+///
+/// Counts are not interchangeable: only [`Self::Tiktoken`] and
+/// [`Self::Provider`] are exact for the model that produced them. A caller
+/// that mixes sources in one display must label them (ADR-0035).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenSource {
+    /// A model-specific tokenizer counted the text.
+    Tiktoken,
+    /// The provider reported how many tokens it processed.
+    Provider,
+    /// A character heuristic estimated the count.
+    #[default]
+    Estimate,
+}
+
+impl TokenSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tiktoken => "tiktoken",
+            Self::Provider => "provider",
+            Self::Estimate => "estimate",
+        }
+    }
+
+    /// True when the count is a heuristic rather than an exact tokenization.
+    pub fn is_estimate(&self) -> bool {
+        matches!(self, Self::Estimate)
+    }
+}
+
+impl fmt::Display for TokenSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Tokens a chat request spends on message framing beyond the text itself.
+///
+/// Chat protocols add role and separator tokens per message. Four is a
+/// conservative constant for the meter and budget checks; providers' reported
+/// usage remains authoritative after a request ran (ADR-0035).
+pub const MESSAGE_OVERHEAD_TOKENS: u32 = 4;
+
+/// Counts tokens the way one model will bill a request.
+///
+/// Implementations are object-safe so a service can pick a counter from the
+/// model name at request time. The contract is intentionally small: callers
+/// count text, count a whole chat message, and label the numbers they show.
+pub trait TokenCounter: Send + Sync {
+    /// Number of tokens in `text`.
+    fn count(&self, text: &str) -> u32;
+
+    /// Where the counts come from.
+    fn source(&self) -> TokenSource;
+
+    /// Short label for the UI, for example `o200k_base`.
+    fn label(&self) -> &'static str;
+
+    /// Tokens one chat message costs, including framing overhead.
+    fn count_message(&self, text: &str) -> u32 {
+        self.count(text).saturating_add(MESSAGE_OVERHEAD_TOKENS)
+    }
+}
+
+/// Character-heuristic counter for models without a licensed tokenizer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EstimateTokenCounter;
+
+impl TokenCounter for EstimateTokenCounter {
+    fn count(&self, text: &str) -> u32 {
+        estimate_tokens(text)
+    }
+
+    fn source(&self) -> TokenSource {
+        TokenSource::Estimate
+    }
+
+    fn label(&self) -> &'static str {
+        "character estimate"
+    }
+}
+
+/// Shared estimator for callers that have no model-specific counter.
+pub static ESTIMATE_COUNTER: EstimateTokenCounter = EstimateTokenCounter;
+
 /// Deterministic character-based token estimate.
 ///
 /// ASCII characters count as a quarter token, CJK characters as one token, and
-/// other non-ASCII characters as half a token. This is a fallback for providers
-/// that omit usage and for projections before a request is sent; provider
-/// reported usage is authoritative.
+/// other non-ASCII characters as half a token. This is the fallback behind
+/// [`EstimateTokenCounter`] for providers without a licensed tokenizer and for
+/// persisted, model-independent counts; an exact counter is preferred wherever
+/// the model is known (ADR-0035).
 pub fn estimate_tokens(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
@@ -267,6 +355,43 @@ mod tests {
         assert_eq!(estimate_tokens("abc"), 1);
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcde"), 2);
+    }
+
+    #[test]
+    fn estimator_counter_reports_its_source_and_label() {
+        assert_eq!(ESTIMATE_COUNTER.source(), TokenSource::Estimate);
+        assert!(ESTIMATE_COUNTER.source().is_estimate());
+        assert_eq!(ESTIMATE_COUNTER.label(), "character estimate");
+        assert_eq!(ESTIMATE_COUNTER.count("hello"), estimate_tokens("hello"));
+    }
+
+    #[test]
+    fn counting_a_message_adds_framing_overhead() {
+        let text = "hello world";
+        assert_eq!(
+            ESTIMATE_COUNTER.count_message(text),
+            ESTIMATE_COUNTER.count(text) + MESSAGE_OVERHEAD_TOKENS
+        );
+        assert_eq!(ESTIMATE_COUNTER.count_message(""), MESSAGE_OVERHEAD_TOKENS);
+    }
+
+    #[test]
+    fn token_source_round_trips_and_defaults_to_estimate() {
+        for source in [
+            TokenSource::Tiktoken,
+            TokenSource::Provider,
+            TokenSource::Estimate,
+        ] {
+            let json = serde_json::to_string(&source).unwrap();
+            assert_eq!(serde_json::from_str::<TokenSource>(&json).unwrap(), source);
+        }
+        assert_eq!(
+            serde_json::from_str::<TokenSource>("\"estimate\"").unwrap(),
+            TokenSource::Estimate
+        );
+        assert_eq!(TokenSource::default(), TokenSource::Estimate);
+        assert!(!TokenSource::Tiktoken.is_estimate());
+        assert_eq!(TokenSource::Tiktoken.to_string(), "tiktoken");
     }
 
     #[test]
