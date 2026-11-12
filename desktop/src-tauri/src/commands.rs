@@ -23,9 +23,9 @@ use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
-use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
+use cowbot_core::usage::TokenSource;
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use cowbot_llm::{token_counter_for_model, ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::{ChannelTurnOptions, ParticipantCapacity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -213,10 +213,11 @@ pub async fn post_message(
             .await
             .map_err(|error| error.to_string())?;
         let runtime = conversation_runtime(&state, &settings);
+        let counter = token_counter_for_model(&settings.model);
         let mut view = conversation_context_view(&state, &channel_id).await?;
 
         if view.participants.len() <= 1 {
-            let pending = estimate_tokens(content.trim());
+            let pending = counter.count_message(content.trim());
             if let Some(usable) = view.usable_tokens {
                 let projected = view.total_tokens.saturating_add(pending);
                 let threshold_reached = settings.auto_compact
@@ -1276,6 +1277,11 @@ pub struct ConversationContextView {
     pub total_tokens: u32,
     pub active_entries: u32,
     pub excluded_entries: u32,
+    /// Where the token counts came from: an exact model tokenizer or the
+    /// character estimator.
+    pub token_source: TokenSource,
+    /// Label of the counter, for example `o200k_base`.
+    pub token_counter: Option<String>,
     /// Estimated tokens the next turn's memory block would add.
     pub memory_tokens: u32,
     pub context_window: Option<u32>,
@@ -1367,11 +1373,15 @@ async fn conversation_context_view(
 }
 
 /// Tool-schema tokens each conversation participant pays in every request.
+///
+/// Counted with the conversation model's tokenizer, so the meter's tool
+/// segment matches the history and system counts beside it (ADR-0035).
 fn participant_tool_tokens(
     state: &AppState,
     context: &ConversationContext,
     agents: &[AgentProfile],
 ) -> HashMap<AgentId, u32> {
+    let counter = token_counter_for_model(&context.model);
     let participant_ids: Vec<AgentId> = if context.participants.is_empty() {
         vec![context.agent_id.clone()]
     } else {
@@ -1384,8 +1394,8 @@ fn participant_tool_tokens(
     let mut tool_tokens = HashMap::new();
     for agent_id in participant_ids {
         if let Some(agent) = agents.iter().find(|agent| agent.id == agent_id) {
-            let tokens = serde_json::to_value(state.tools.definitions_for(&agent.tools))
-                .map(|value| estimate_json_tokens(&value))
+            let tokens = serde_json::to_string(&state.tools.definitions_for(&agent.tools))
+                .map(|serialized| counter.count(&serialized))
                 .unwrap_or(0);
             tool_tokens.insert(agent_id, tokens);
         }
@@ -1445,6 +1455,8 @@ fn context_view_from_parts(
         total_tokens: first.total_tokens,
         active_entries: first.active_entries,
         excluded_entries: first.excluded_entries,
+        token_source: context.projection.token_source,
+        token_counter: context.projection.token_counter.clone(),
         memory_tokens: first.memory_tokens,
         context_window,
         max_output_tokens,
@@ -2782,6 +2794,33 @@ mod tests {
         );
         assert_eq!(view.tool_tokens, 250);
         assert_eq!(view.total_tokens, 1_250);
+    }
+
+    #[test]
+    fn context_view_reports_the_token_counter_source() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            None,
+            "gpt-4o",
+        );
+        let mut context = context_with_tokens(1_000);
+        context.projection.token_source = TokenSource::Tiktoken;
+        context.projection.token_counter = Some("o200k_base".to_string());
+
+        let view = context_view_from_parts(context, &settings, &HashMap::new(), Some(10_000), None);
+        assert_eq!(view.token_source, TokenSource::Tiktoken);
+        assert_eq!(view.token_counter.as_deref(), Some("o200k_base"));
+
+        // An old payload without a source field defaults to an estimate.
+        let estimated = context_view_from_parts(
+            context_with_tokens(1_000),
+            &settings,
+            &HashMap::new(),
+            None,
+            None,
+        );
+        assert_eq!(estimated.token_source, TokenSource::Estimate);
+        assert!(estimated.token_counter.is_none());
     }
 
     #[test]

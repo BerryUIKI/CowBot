@@ -77,6 +77,8 @@ export interface ConversationContext {
   total_tokens: number;
   active_entries: number;
   excluded_entries: number;
+  token_source: "tiktoken" | "provider" | "estimate";
+  token_counter: string | null;
   memory_tokens: number;
   context_window: number | null;
   max_output_tokens: number | null;
