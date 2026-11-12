@@ -10,7 +10,7 @@ use cowbot_core::conversation::{RouteSource, TurnId};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
-use cowbot_core::task::{Task, TaskId, TaskStatus};
+use cowbot_core::task::{Task, TaskId, TaskSource, TaskStatus};
 use cowbot_llm::LlmProvider;
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -430,6 +430,7 @@ impl ChannelAgentService {
         .with_title(message.content.lines().next().unwrap_or_default())
         .with_channel(channel.id.clone())
         .assign_to(agent.id.clone())
+        .from_source(TaskSource::ChannelTurn)
     }
 
     async fn post_outcome(&self, channel: &Channel, task_id: &TaskId) -> CowResult<Option<String>> {

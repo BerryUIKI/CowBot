@@ -18,7 +18,7 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
-use cowbot_core::task::{Task, TaskId};
+use cowbot_core::task::{Task, TaskId, TaskSource};
 use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord, UsageTotals};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
 use cowbot_store::Store;
@@ -437,7 +437,8 @@ impl ConversationService {
             "A concise reply addressed to the user in this conversation.",
         )
         .assign_to(agent.id.clone())
-        .in_channel(channel.id.clone());
+        .in_channel(channel.id.clone())
+        .from_source(TaskSource::ConversationTurn);
         let task_id = task.id.clone();
 
         let requester = match &message.sender {

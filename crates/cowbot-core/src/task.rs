@@ -44,6 +44,32 @@ impl TaskStatus {
     }
 }
 
+/// Where a task came from.
+///
+/// Conversation turns reuse the task pipeline but are not work items, so the
+/// desktop can list user-created tasks without the turns that produced them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSource {
+    /// A work item the user created.
+    #[default]
+    User,
+    /// A reply in a channel or an agent direct conversation.
+    ChannelTurn,
+    /// A reply in a user-created conversation session.
+    ConversationTurn,
+}
+
+impl TaskSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::ChannelTurn => "channel_turn",
+            Self::ConversationTurn => "conversation_turn",
+        }
+    }
+}
+
 /// Task abstraction inspired by CrewAI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -71,6 +97,10 @@ pub struct Task {
     /// channel turns leave it unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_group: Option<TaskId>,
+    /// Where this task came from: a user-created work item or a conversation
+    /// turn that reused the task pipeline.
+    #[serde(default)]
+    pub source: TaskSource,
     /// Current execution status
     pub status: TaskStatus,
     /// Whether the task was archived by the user
@@ -97,6 +127,7 @@ impl Task {
             channel_id: None,
             context_tasks: Vec::new(),
             run_group: None,
+            source: TaskSource::User,
             status: TaskStatus::Pending,
             archived: false,
             plan: None,
@@ -135,6 +166,12 @@ impl Task {
     /// Attach this task to the run started by `task_id`.
     pub fn in_run_group(mut self, task_id: TaskId) -> Self {
         self.run_group = Some(task_id);
+        self
+    }
+
+    /// Mark the task as a conversation turn instead of a user-created work item.
+    pub fn from_source(mut self, source: TaskSource) -> Self {
+        self.source = source;
         self
     }
 }
@@ -228,5 +265,32 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("run_group"));
+    }
+
+    #[test]
+    fn task_source_defaults_to_user_and_round_trips() {
+        let task = Task::new("Work", "Output");
+        assert_eq!(task.source, TaskSource::User);
+        assert_eq!(task.source.as_str(), "user");
+
+        let turn = Task::new("Reply", "Output").from_source(TaskSource::ChannelTurn);
+        assert_eq!(turn.source.as_str(), "channel_turn");
+        let value = serde_json::to_value(&turn).unwrap();
+        assert_eq!(value["source"], "channel_turn");
+
+        let legacy: Task = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "description": "Old task",
+            "expected_output": "Output",
+            "assigned_agent": null,
+            "context_tasks": [],
+            "status": "pending",
+        }))
+        .unwrap();
+        assert_eq!(legacy.source, TaskSource::User);
+        assert_eq!(
+            TaskSource::ConversationTurn.as_str(),
+            "conversation_turn"
+        );
     }
 }
