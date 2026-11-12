@@ -36,7 +36,7 @@ use crate::channels::{normalize_channel_name, ChannelService};
 use crate::compaction_locks::CompactionLocks;
 use crate::memory::{MemoryService, RecalledMemory};
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
-use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
@@ -508,18 +508,24 @@ impl ConversationService {
         scheduler
             .enqueue_conversation_turn(
                 &task,
+                ConversationTurnRequest {
+                    messages,
+                    channel_id: channel.id.clone(),
+                    agent_id: agent.id.clone(),
+                    snapshot_context,
+                    record_context: true,
+                },
                 requester,
                 AssignmentOrigin::User,
                 &run_options,
-                messages,
-                channel.id.clone(),
-                agent.id.clone(),
-                snapshot_context,
             )
             .await?;
 
         let outcome = scheduler.run_until_idle().await;
-        let reply = self.channels.post_task_outcome(channel, &task_id).await?;
+        // The turn runner posts a conversation reply with its text and its
+        // stopped marker, so this path only needs the text for memory
+        // extraction (ADR-0039).
+        let reply = self.store.task_output(&task_id).await?;
         outcome?;
 
         // A settled turn may contribute pending memory candidates. Extraction
@@ -897,13 +903,16 @@ impl ConversationService {
             scheduler
                 .enqueue_conversation_turn(
                     &task,
+                    ConversationTurnRequest {
+                        messages,
+                        channel_id: channel.id.clone(),
+                        agent_id: agent.id.clone(),
+                        snapshot_context,
+                        record_context: true,
+                    },
                     requester.clone(),
                     AssignmentOrigin::User,
                     &task_options,
-                    messages,
-                    channel.id.clone(),
-                    agent.id.clone(),
-                    snapshot_context,
                 )
                 .await?;
             tasks.push(task.id);
@@ -1036,25 +1045,19 @@ impl ConversationService {
                 .unwrap_or_else(|| format!("Agent {}", assignee.0)),
         };
 
+        // The turn runner already posted the reply, including a stopped one, so
+        // settling mirrors it into the other branches and reports the outcome
+        // instead of posting a second copy (ADR-0039).
         match &task.status {
             cowbot_core::task::TaskStatus::Completed { output } => {
                 let content = output.trim();
                 if content.is_empty() {
-                    self.channels
-                        .post_system_notice(
-                            &channel.id,
-                            &format!("{name} finished without a reply."),
-                        )
-                        .await?;
-                    return Ok(None);
+                    return Ok(Some(SettledGroupReply {
+                        agent_id: assignee,
+                        replied: false,
+                        content: None,
+                    }));
                 }
-                self.channels
-                    .post_message(
-                        &channel.id,
-                        Sender::Agent(assignee.clone()),
-                        content.to_string(),
-                    )
-                    .await?;
                 for participant in participants
                     .iter()
                     .filter(|participant| participant.id != assignee)
@@ -1074,16 +1077,11 @@ impl ConversationService {
                     content: Some(content.to_string()),
                 }))
             }
-            cowbot_core::task::TaskStatus::Failed { error } => {
-                self.channels
-                    .post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
-                    .await?;
-                Ok(Some(SettledGroupReply {
-                    agent_id: assignee,
-                    replied: false,
-                    content: None,
-                }))
-            }
+            cowbot_core::task::TaskStatus::Failed { .. } => Ok(Some(SettledGroupReply {
+                agent_id: assignee,
+                replied: false,
+                content: None,
+            })),
             _ => Ok(None),
         }
     }

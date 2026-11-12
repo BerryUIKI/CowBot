@@ -22,6 +22,7 @@ mod scheduler;
 mod session_decisions;
 mod task_service;
 mod templates;
+mod turns;
 mod worktrees;
 
 pub use agents::{AgentService, AgentUpdate};
@@ -49,8 +50,9 @@ pub use permissions_rules::PermissionService;
 pub use preview::{ConversationPreview, PreviewService, TaskRunPreview};
 pub use prompt_snapshots::PromptSnapshotService;
 pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
-pub use scheduler::{AssignmentScheduler, CrewRunOptions};
+pub use scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
 pub use templates::{builtin_templates, TemplateService};
+pub use turns::{stopped_text, TurnCompletion, TurnRunner, TurnSink, TurnSpec, STOPPED_MARKER};
 pub use worktrees::{slug_for, WorktreeService};
