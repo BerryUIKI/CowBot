@@ -288,9 +288,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(legacy.source, TaskSource::User);
-        assert_eq!(
-            TaskSource::ConversationTurn.as_str(),
-            "conversation_turn"
-        );
+        assert_eq!(TaskSource::ConversationTurn.as_str(), "conversation_turn");
     }
 }
