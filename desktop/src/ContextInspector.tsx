@@ -40,7 +40,7 @@ const tabLabels: { id: ContextTab; label: string }[] = [
   { id: "budget", label: "Budget" },
 ];
 
-const slotLabels: Record<PromptSlotName, string> = {
+export const slotLabels: Record<PromptSlotName, string> = {
   agent: "Agent profile",
   platform: "Platform context",
   roster: "Participant roster",
@@ -48,6 +48,7 @@ const slotLabels: Record<PromptSlotName, string> = {
   peer_convention: "Peer convention",
   conversation_convention: "Conversation convention",
   mode_instruction: "Plan mode instruction",
+  instruction: "Fixed instruction",
 };
 
 const roleLabels: Record<PromptMessage["role"], string> = {

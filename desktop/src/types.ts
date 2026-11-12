@@ -107,7 +107,8 @@ export type PromptSlotName =
   | "default_responder"
   | "peer_convention"
   | "conversation_convention"
-  | "mode_instruction";
+  | "mode_instruction"
+  | "instruction";
 
 export interface PromptSlot {
   name: PromptSlotName;
@@ -213,6 +214,84 @@ export interface ContextPreview {
   percent_used: number | null;
   state: ContextUsageState;
   over_budget: boolean;
+}
+
+/** Why an LLM call was made (ADR-0037). */
+export type LlmCallKind =
+  | "agent"
+  | "router"
+  | "summary"
+  | "compact"
+  | "memory_extract";
+
+export interface SnapshotToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+/** One message exactly as the provider received it. */
+export interface SnapshotMessage {
+  role: PromptRole;
+  content: string;
+  name?: string | null;
+  tool_calls: SnapshotToolCall[];
+  tool_call_id?: string | null;
+}
+
+/**
+ * A sealed, redacted record of one model request.
+ *
+ * Unlike a `PromptPlan`, which rebuilds the next request, this is the request
+ * that was actually sent and cannot be reconstructed.
+ */
+export interface LlmPromptSnapshot {
+  schema_version: number;
+  call_kind: LlmCallKind;
+  model: string;
+  messages: SnapshotMessage[];
+  tools: ToolDefinition[];
+  slots: PromptSlot[];
+  memory?: PromptMemory | null;
+  selected_memory_ids: string[];
+  projection?: ContextProjection | null;
+  token_count: number;
+  content_hash: string;
+  redacted: boolean;
+  truncated: boolean;
+  omitted_messages: number;
+  created_at: string;
+}
+
+/** What a stored snapshot is, without its payload. */
+export interface PromptSnapshotSummary {
+  llm_call_id: string;
+  run_id: string | null;
+  task_id: string | null;
+  channel_id: string | null;
+  agent_id: string | null;
+  call_kind: LlmCallKind;
+  model: string;
+  token_count: number;
+  byte_size: number;
+  truncated: boolean;
+  redacted: boolean;
+  created_at: string;
+}
+
+/** A stored snapshot together with the call it belongs to. */
+export interface PromptSnapshotDetail {
+  summary: PromptSnapshotSummary;
+  snapshot: LlmPromptSnapshot;
+  /** True when the stored payload no longer matches its content hash. */
+  hash_mismatch: boolean;
+}
+
+export interface PromptSnapshotSettings {
+  workspace_id: string;
+  enabled: boolean;
+  retention_days: number;
+  updated_at: string;
 }
 
 export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "note";

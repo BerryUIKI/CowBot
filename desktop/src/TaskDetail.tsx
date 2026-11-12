@@ -17,6 +17,7 @@ import { taskWorktreeDiff } from "./api";
 import { errorMessage } from "./errors";
 import { formatDateTime, formatTime } from "./format";
 import Modal from "./Modal";
+import { RunPromptSnapshotsToggle } from "./PromptSnapshotViewer";
 import RichText from "./RichText";
 
 export interface AssignmentWithEvents {
@@ -532,6 +533,7 @@ export default function TaskDetail({
                   request from that conversation's context meter.
                 </p>
               )}
+              <RunPromptSnapshotsToggle runId={run.id} />
               {calls.length === 0 ? (
                 <p className="muted">No tool calls.</p>
               ) : (
