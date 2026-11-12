@@ -34,12 +34,12 @@ pub trait LlmProvider: Send + Sync {
         cancel: &CancelSignal,
         on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
     ) -> CowResult<CompletionOutcome> {
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
         let response = tokio::select! {
             response = self.chat_complete(request) => response?,
             () = cancel.cancelled() => return Err(CowError::Cancelled),
         };
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
 
         let mut outcome = CompletionOutcome::default();
         if let Some(content) = &response.content {

@@ -2,6 +2,7 @@ pub mod agent;
 pub mod approval;
 pub mod assignment;
 pub mod audit;
+pub mod cancel;
 pub mod channel;
 pub mod command;
 pub mod conversation;
@@ -18,6 +19,7 @@ pub mod run;
 pub mod task;
 pub mod template;
 pub mod tool;
+pub mod turn;
 pub mod usage;
 pub mod worktree;
 
@@ -31,6 +33,7 @@ pub use assignment::{
     AssignmentStatus, ReplyMode, MAX_ASSIGNMENT_DEPTH,
 };
 pub use audit::{AuditEvent, AuditSource};
+pub use cancel::{CancelSignal, CancelWait};
 pub use channel::{Channel, ChannelId, ChannelMessage, Sender};
 pub use command::{
     command_catalogue, find_command, parse_command, CommandArg, CommandArgKind, CommandInvocation,
@@ -85,6 +88,7 @@ pub use template::{
     AgentTemplate, TaskTemplate, Template, TemplateDocument, TemplateKind, TEMPLATE_SCHEMA_VERSION,
 };
 pub use tool::{Tool, ToolAuthorization, ToolCall, ToolDefinition, ToolGate, ToolResult};
+pub use turn::{PendingApproval, TurnControl, TurnEvent, TurnOutcome, TurnTarget};
 pub use usage::{
     estimate_json_tokens, estimate_tokens, EstimateTokenCounter, LlmCallKind, LlmCallRecord,
     LlmCallUsage, LlmUsageRecorder, TokenCounter, TokenSource, TokenUsage, UsageTotals,

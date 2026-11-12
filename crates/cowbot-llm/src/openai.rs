@@ -365,7 +365,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         cancel: &CancelSignal,
         on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
     ) -> CowResult<CompletionOutcome> {
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
         let url = format!("{}/chat/completions", self.base_url);
         // Ask for usage in the final chunk; servers that do not know the field
         // ignore it.
@@ -415,8 +415,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
             let Some(chunk) = next else {
                 break;
             };
-            let bytes = chunk
-                .map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
+            let bytes =
+                chunk.map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
 
             for frame in decoder.push(&bytes) {
                 let data = frame.data.trim();

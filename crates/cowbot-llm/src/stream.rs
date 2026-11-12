@@ -6,65 +6,20 @@
 //! drops the in-flight HTTP response instead of waiting for the next chunk
 //! (ADR-0039).
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+pub use cowbot_core::cancel::CancelSignal;
 
 use cowbot_core::error::{CowError, CowResult};
-use tokio::sync::Notify;
 
-/// A clonable, one-way cancellation flag.
+/// Fail with [`CowError::Cancelled`](cowbot_core::error::CowError::Cancelled)
+/// when the signal is already tripped.
 ///
-/// Cancelling is idempotent and wakes every waiter, so a stopped turn aborts
-/// the upstream request and any wait around it.
-#[derive(Clone, Default)]
-pub struct CancelSignal {
-    state: Arc<CancelState>,
-}
-
-#[derive(Default)]
-struct CancelState {
-    cancelled: AtomicBool,
-    notify: Notify,
-}
-
-impl CancelSignal {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Stop the work this signal guards. Repeated calls are no-ops.
-    pub fn cancel(&self) {
-        if !self.state.cancelled.swap(true, Ordering::SeqCst) {
-            self.state.notify.notify_waiters();
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.state.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Resolve as soon as the signal is cancelled.
-    pub async fn cancelled(&self) {
-        loop {
-            let notified = self.state.notify.notified();
-            tokio::pin!(notified);
-            // Register before the check so a cancellation between the two can
-            // not be missed.
-            notified.as_mut().enable();
-            if self.is_cancelled() {
-                return;
-            }
-            notified.await;
-        }
-    }
-
-    /// Fail with [`CowError::Cancelled`] when the signal is already tripped.
-    pub fn ensure_live(&self) -> CowResult<()> {
-        if self.is_cancelled() {
-            Err(CowError::Cancelled)
-        } else {
-            Ok(())
-        }
+/// Providers call this before starting an upstream request; the streaming loop
+/// races [`CancelSignal::cancelled`] instead of polling.
+pub fn ensure_live(cancel: &CancelSignal) -> CowResult<()> {
+    if cancel.is_cancelled() {
+        Err(CowError::Cancelled)
+    } else {
+        Ok(())
     }
 }
 
@@ -95,10 +50,7 @@ impl SseDecoder {
         self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
 
-        loop {
-            let Some((end, separator)) = frame_boundary(&self.buffer) else {
-                break;
-            };
+        while let Some((end, separator)) = frame_boundary(&self.buffer) {
             let block = self.buffer[..end].to_vec();
             self.buffer.drain(..end + separator);
             let text = String::from_utf8_lossy(&block);
@@ -154,7 +106,6 @@ fn parse_block(block: &str) -> Option<SseFrame> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn frames_split_on_a_blank_line() {
@@ -198,31 +149,5 @@ mod tests {
         let mut decoder = SseDecoder::new();
         let frames = decoder.push(b"data: first\ndata: second\n\n");
         assert_eq!(frames[0].data, "first\nsecond");
-    }
-
-    #[tokio::test]
-    async fn cancel_wakes_waiters_and_is_idempotent() {
-        let signal = CancelSignal::new();
-        assert!(!signal.is_cancelled());
-        let waiter = signal.clone();
-        let task = tokio::spawn(async move {
-            waiter.cancelled().await;
-            true
-        });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        signal.cancel();
-        signal.cancel();
-        assert!(signal.is_cancelled());
-        assert!(task.await.unwrap());
-        assert!(signal.ensure_live().is_err());
-    }
-
-    #[tokio::test]
-    async fn cancel_after_waiting_still_resolves() {
-        let signal = CancelSignal::new();
-        signal.cancel();
-        tokio::time::timeout(Duration::from_secs(1), signal.cancelled())
-            .await
-            .expect("an already cancelled signal resolves immediately");
     }
 }

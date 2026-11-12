@@ -241,7 +241,7 @@ impl LlmProvider for AnthropicProvider {
         cancel: &CancelSignal,
         on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
     ) -> CowResult<CompletionOutcome> {
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
         let url = self.messages_url();
         let mut body = request_body(request);
         body["stream"] = Value::Bool(true);
@@ -290,8 +290,8 @@ impl LlmProvider for AnthropicProvider {
             let Some(chunk) = next else {
                 break;
             };
-            let bytes = chunk
-                .map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
+            let bytes =
+                chunk.map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
 
             for frame in decoder.push(&bytes) {
                 let data = frame.data.trim();
@@ -304,7 +304,12 @@ impl LlmProvider for AnthropicProvider {
                 let event_type = frame
                     .event
                     .clone()
-                    .or_else(|| event.get("type").and_then(Value::as_str).map(str::to_string))
+                    .or_else(|| {
+                        event
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
                     .unwrap_or_default();
 
                 match event_type.as_str() {
@@ -315,13 +320,14 @@ impl LlmProvider for AnthropicProvider {
                     }
                     "content_block_start" => {
                         block = StreamedBlock::default();
-                        block.kind = match event.pointer("/content_block/type").and_then(Value::as_str)
+                        block.kind =
+                            match event.pointer("/content_block/type").and_then(Value::as_str) {
+                                Some("tool_use") => Some(BlockKind::ToolUse),
+                                Some("thinking") => Some(BlockKind::Thinking),
+                                _ => Some(BlockKind::Text),
+                            };
+                        if let Some(id) = event.pointer("/content_block/id").and_then(Value::as_str)
                         {
-                            Some("tool_use") => Some(BlockKind::ToolUse),
-                            Some("thinking") => Some(BlockKind::Thinking),
-                            _ => Some(BlockKind::Text),
-                        };
-                        if let Some(id) = event.pointer("/content_block/id").and_then(Value::as_str) {
                             block.id = id.to_string();
                         }
                         if let Some(name) =
@@ -334,9 +340,8 @@ impl LlmProvider for AnthropicProvider {
                         let delta_type = event.pointer("/delta/type").and_then(Value::as_str);
                         match delta_type {
                             Some("input_json_delta") => {
-                                if let Some(partial) = event
-                                    .pointer("/delta/partial_json")
-                                    .and_then(Value::as_str)
+                                if let Some(partial) =
+                                    event.pointer("/delta/partial_json").and_then(Value::as_str)
                                 {
                                     block.arguments.push_str(partial);
                                 }
@@ -355,7 +360,8 @@ impl LlmProvider for AnthropicProvider {
                                 }
                             }
                             _ => {
-                                if let Some(text) = event.pointer("/delta/text").and_then(Value::as_str)
+                                if let Some(text) =
+                                    event.pointer("/delta/text").and_then(Value::as_str)
                                 {
                                     if !text.is_empty() {
                                         let kind = block.kind.unwrap_or(BlockKind::Text);
@@ -568,7 +574,6 @@ fn emit_text(
     outcome.apply(chunk.clone());
     on_chunk(chunk);
 }
-
 
 #[cfg(test)]
 mod tests {

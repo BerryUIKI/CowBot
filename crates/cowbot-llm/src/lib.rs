@@ -11,7 +11,7 @@ pub mod types;
 
 pub use anthropic::AnthropicProvider;
 pub use cowbot_core::usage::TokenUsage;
-pub use mock::MockLlmProvider;
+pub use mock::{MockLlmProvider, MockTurn};
 pub use openai::OpenAiCompatibleProvider;
 pub use prompt_snapshot::{seal_snapshot, snapshot_message, snapshot_request};
 pub use provider::LlmProvider;

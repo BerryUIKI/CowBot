@@ -1,8 +1,6 @@
 use crate::provider::LlmProvider;
 use crate::stream::CancelSignal;
-use crate::types::{
-    ChatCompletionRequest, ChatCompletionResponse, CompletionOutcome, StreamChunk,
-};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, CompletionOutcome, StreamChunk};
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::usage::{estimate_json_tokens, estimate_tokens, TokenUsage};
@@ -180,28 +178,32 @@ impl LlmProvider for MockLlmProvider {
         cancel: &CancelSignal,
         on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
     ) -> CowResult<CompletionOutcome> {
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
 
-        let scripted = self
-            .turns
-            .lock()
-            .ok()
-            .and_then(|mut turns| {
-                if turns.is_empty() {
-                    None
-                } else {
-                    Some(turns.remove(0))
-                }
-            })
-            .or_else(|| {
+        let scripted = self.turns.lock().ok().and_then(|mut turns| {
+            if turns.is_empty() {
+                None
+            } else {
+                Some(turns.remove(0))
+            }
+        });
+        // Only the echo fallback invents usage. A scripted turn keeps the
+        // chunks it was given, and a queued response reports its own usage,
+        // including none.
+        let mut inferred_usage = false;
+        let scripted = match scripted {
+            Some(turn) => Some(turn),
+            None => {
                 let mut queue = self.responses.lock().unwrap();
                 if queue.is_empty() {
+                    inferred_usage = true;
                     None
                 } else {
                     let response = queue.remove(0);
                     Some(turn_from_response(response))
                 }
-            });
+            }
+        };
 
         let Some(turn) = scripted else {
             // Echo: stream the answer word by word so the deltas are real.
@@ -213,7 +215,7 @@ impl LlmProvider for MockLlmProvider {
             let content = format!("Mock response to: {}", last_msg);
             let mut outcome = CompletionOutcome::default();
             for piece in words(&content) {
-                cancel.ensure_live()?;
+                crate::stream::ensure_live(cancel)?;
                 let chunk = StreamChunk::Text(piece);
                 outcome.apply(chunk.clone());
                 on_chunk(chunk);
@@ -246,7 +248,7 @@ impl LlmProvider for MockLlmProvider {
                 }
             }
             first = false;
-            cancel.ensure_live()?;
+            crate::stream::ensure_live(cancel)?;
             outcome.apply(chunk.clone());
             on_chunk(chunk);
         }
@@ -255,7 +257,7 @@ impl LlmProvider for MockLlmProvider {
             return Err(CowError::Llm(error));
         }
         outcome.finish_reason = turn.finish_reason;
-        if outcome.usage.is_none() {
+        if inferred_usage && outcome.usage.is_none() {
             let usage = StreamChunk::Usage {
                 usage: Some(TokenUsage {
                     uncached_input_tokens: estimate_input_tokens(request),

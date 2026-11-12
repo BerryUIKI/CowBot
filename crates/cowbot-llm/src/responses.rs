@@ -287,7 +287,7 @@ impl LlmProvider for ResponsesProvider {
         cancel: &CancelSignal,
         on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
     ) -> CowResult<CompletionOutcome> {
-        cancel.ensure_live()?;
+        crate::stream::ensure_live(cancel)?;
         let url = self.responses_url();
         let mut body = request_body(request);
         body["stream"] = Value::Bool(true);
@@ -337,8 +337,8 @@ impl LlmProvider for ResponsesProvider {
             let Some(chunk) = next else {
                 break;
             };
-            let bytes = chunk
-                .map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
+            let bytes =
+                chunk.map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
 
             for frame in decoder.push(&bytes) {
                 let data = frame.data.trim();
@@ -351,7 +351,12 @@ impl LlmProvider for ResponsesProvider {
                 let event_type = frame
                     .event
                     .clone()
-                    .or_else(|| event.get("type").and_then(Value::as_str).map(str::to_string))
+                    .or_else(|| {
+                        event
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
                     .unwrap_or_default();
 
                 match event_type.as_str() {
@@ -364,8 +369,7 @@ impl LlmProvider for ResponsesProvider {
                             }
                         }
                     }
-                    "response.reasoning_summary_text.delta"
-                    | "response.reasoning_text.delta" => {
+                    "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                         if let Some(text) = event.get("delta").and_then(Value::as_str) {
                             if !text.is_empty() {
                                 let piece = StreamChunk::Reasoning(text.to_string());
@@ -438,9 +442,7 @@ impl LlmProvider for ResponsesProvider {
                     }
                     "response.completed" => {
                         if let Some(response) = event.get("response") {
-                            if let Some(reason) =
-                                response.get("status").and_then(Value::as_str)
-                            {
+                            if let Some(reason) = response.get("status").and_then(Value::as_str) {
                                 outcome.finish_reason = Some(reason.to_string());
                             }
                             if let Some(usage) = response.get("usage") {
