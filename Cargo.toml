@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["CowBot Contributors"]
 license = "Apache-2.0"
@@ -28,6 +28,7 @@ futures = "0.3"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
+ts-rs = "12"
 serde_json = "1.0"
 
 # Error handling & logging
@@ -46,6 +47,9 @@ tempfile = "3.10"
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Tokenization
+tiktoken-rs = "0.12"
 
 # Persistence
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }

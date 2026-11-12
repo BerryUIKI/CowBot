@@ -20,9 +20,13 @@ use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
 use cowbot_core::memory::{MemoryEntry, MemorySettings, Note};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
+use cowbot_core::prompt_snapshot::{
+    PromptSnapshotDetail, PromptSnapshotSettings, PromptSnapshotSummary,
+};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::tool::ToolDefinition;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -30,8 +34,8 @@ mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
 pub use cowbot_service::{
-    AgentUpdate, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave,
-    RecalledMemory,
+    AgentUpdate, ConversationPreview, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate,
+    NewMemory, NoteSave, RecalledMemory, TaskRunPreview,
 };
 pub use local::LocalClient;
 
@@ -249,6 +253,57 @@ pub trait Client: Send + Sync {
     ) -> CowResult<ConversationSettings>;
     /// Token breakdown and cache summaries of a conversation context.
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
+    /// The exact request one participant's next turn would send.
+    ///
+    /// The preview never writes: no context entry, recall statistic, or LLM
+    /// call. `draft` is the composer's pending message; `platform_context` is
+    /// the caller's extra environment text; `plan_mode` adds the Plan-mode
+    /// instruction a turn in that mode carries; `tools` are the schemas the
+    /// caller would send.
+    async fn conversation_context_preview(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        draft: Option<&str>,
+        platform_context: Option<&str>,
+        plan_mode: bool,
+        tools: &[ToolDefinition],
+    ) -> CowResult<ConversationPreview>;
+    /// The request a task run started with, rebuilt from stored data.
+    async fn task_run_context_preview(
+        &self,
+        run_id: &RunId,
+        model: &str,
+        tools: &[ToolDefinition],
+    ) -> CowResult<Option<TaskRunPreview>>;
+    /// The redacted prompt snapshots recorded for a run, oldest first.
+    ///
+    /// Unlike a preview, a snapshot is the request that was actually sent and
+    /// cannot be rebuilt (ADR-0037).
+    async fn list_run_prompt_snapshots(
+        &self,
+        run_id: &RunId,
+    ) -> CowResult<Vec<PromptSnapshotSummary>>;
+    /// The newest prompt snapshots in the workspace, for the audit view.
+    async fn list_recent_prompt_snapshots(
+        &self,
+        limit: u32,
+    ) -> CowResult<Vec<PromptSnapshotSummary>>;
+    /// One stored prompt snapshot with the call links it belongs to.
+    async fn prompt_snapshot(&self, llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>>;
+    /// The workspace prompt-snapshot settings.
+    async fn prompt_snapshot_settings(&self) -> CowResult<PromptSnapshotSettings>;
+    /// Change whether snapshots are stored and how long they are kept.
+    ///
+    /// The new retention window applies immediately, so lowering it deletes
+    /// the snapshots that just fell outside it.
+    async fn update_prompt_snapshot_settings(
+        &self,
+        enabled: Option<bool>,
+        retention_days: Option<u32>,
+    ) -> CowResult<PromptSnapshotSettings>;
+    /// Delete expired snapshots now and report how many went.
+    async fn purge_prompt_snapshots(&self) -> CowResult<u64>;
     /// Exclude every active context entry; display messages are kept.
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
     /// Exclude one participant's active context entries.

@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentProfile};
 use crate::task::TaskId;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a task run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RunId(pub String);
@@ -26,6 +27,7 @@ impl std::fmt::Display for RunId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Status of a single agent run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +39,7 @@ pub enum RunStatus {
     Cancelled,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A single execution of a task by an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
@@ -46,6 +49,14 @@ pub struct Run {
     pub status: RunStatus,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// The agent profile as it was when the run started.
+    ///
+    /// Standard crew roles are transient profiles that are never written to
+    /// the agent table, so a run could otherwise not name its own agent. The
+    /// snapshot also lets the context inspector rebuild the run's request
+    /// after the profile changes (ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<AgentProfile>,
 }
 
 impl Run {
@@ -57,10 +68,18 @@ impl Run {
             status: RunStatus::Running,
             started_at: Utc::now(),
             finished_at: None,
+            agent_profile: None,
         }
+    }
+
+    /// Attach the profile that executed the run.
+    pub fn with_agent_profile(mut self, profile: AgentProfile) -> Self {
+        self.agent_profile = Some(profile);
+        self
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A persisted tool invocation associated with a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {

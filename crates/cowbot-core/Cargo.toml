@@ -12,3 +12,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+sha2 = "0.10"
+ts-rs = { workspace = true, optional = true, features = ["chrono-impl", "uuid-impl", "serde-json-impl"] }
+
+[features]
+bindings = ["dep:ts-rs"]

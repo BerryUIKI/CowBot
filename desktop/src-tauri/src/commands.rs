@@ -11,6 +11,9 @@ use cowbot_core::assignment::{
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::command::{
+    command_catalogue, parse_command as command_parse, CommandParse, CommandSpec,
+};
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
@@ -19,13 +22,17 @@ use cowbot_core::conversation::{
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
+use cowbot_core::prompt::{PromptKind, PromptPlan};
+use cowbot_core::prompt_snapshot::{
+    PromptSnapshotDetail, PromptSnapshotSettings, PromptSnapshotSummary,
+};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
-use cowbot_core::usage::{estimate_json_tokens, estimate_tokens};
+use cowbot_core::usage::TokenSource;
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff, WorktreeStatus};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, LlmProvider};
+use cowbot_llm::{token_counter_for_model, ChatCompletionRequest, ChatMessage, LlmProvider};
 use cowbot_service::{ChannelTurnOptions, ParticipantCapacity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -213,21 +220,29 @@ pub async fn post_message(
             .await
             .map_err(|error| error.to_string())?;
         let runtime = conversation_runtime(&state, &settings);
+        let counter = token_counter_for_model(&settings.model);
         let mut view = conversation_context_view(&state, &channel_id).await?;
 
         if view.participants.len() <= 1 {
-            let pending = estimate_tokens(content.trim());
+            let pending = counter.count_message(content.trim());
             if let Some(usable) = view.usable_tokens {
                 let projected = view.total_tokens.saturating_add(pending);
                 let threshold_reached = settings.auto_compact
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
-                    state
+                    let outcome = state
                         .client
                         .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
                         .await
                         .map_err(|error| error.to_string())?;
+                    if outcome.in_progress {
+                        return Err(
+                            "This conversation's context is already being compacted. Try again \
+                             shortly."
+                                .to_string(),
+                        );
+                    }
                     view = conversation_context_view(&state, &channel_id).await?;
                 }
                 if view.total_tokens.saturating_add(pending) >= usable {
@@ -1269,6 +1284,11 @@ pub struct ConversationContextView {
     pub total_tokens: u32,
     pub active_entries: u32,
     pub excluded_entries: u32,
+    /// Where the token counts came from: an exact model tokenizer or the
+    /// character estimator.
+    pub token_source: TokenSource,
+    /// Label of the counter, for example `o200k_base`.
+    pub token_counter: Option<String>,
     /// Estimated tokens the next turn's memory block would add.
     pub memory_tokens: u32,
     pub context_window: Option<u32>,
@@ -1329,6 +1349,27 @@ fn conversation_window(
         .unwrap_or((None, None))
 }
 
+/// Window metadata for a model the run recorded, from any configured provider.
+///
+/// A task run records its model with its LLM calls but not the provider that
+/// served it, so the active provider is preferred and the rest are searched.
+fn model_window(state: &AppState, model: &str) -> (Option<u32>, Option<u32>) {
+    let Ok(config) = load_config(state) else {
+        return (None, None);
+    };
+    config
+        .active_provider()
+        .and_then(|provider| provider.model_metadata.get(model))
+        .or_else(|| {
+            config
+                .providers
+                .iter()
+                .find_map(|provider| provider.model_metadata.get(model))
+        })
+        .map(|metadata| (metadata.context_window, metadata.max_output_tokens))
+        .unwrap_or((None, None))
+}
+
 async fn conversation_context_view(
     state: &AppState,
     channel_id: &ChannelId,
@@ -1360,11 +1401,15 @@ async fn conversation_context_view(
 }
 
 /// Tool-schema tokens each conversation participant pays in every request.
+///
+/// Counted with the conversation model's tokenizer, so the meter's tool
+/// segment matches the history and system counts beside it (ADR-0035).
 fn participant_tool_tokens(
     state: &AppState,
     context: &ConversationContext,
     agents: &[AgentProfile],
 ) -> HashMap<AgentId, u32> {
+    let counter = token_counter_for_model(&context.model);
     let participant_ids: Vec<AgentId> = if context.participants.is_empty() {
         vec![context.agent_id.clone()]
     } else {
@@ -1377,8 +1422,8 @@ fn participant_tool_tokens(
     let mut tool_tokens = HashMap::new();
     for agent_id in participant_ids {
         if let Some(agent) = agents.iter().find(|agent| agent.id == agent_id) {
-            let tokens = serde_json::to_value(state.tools.definitions_for(&agent.tools))
-                .map(|value| estimate_json_tokens(&value))
+            let tokens = serde_json::to_string(&state.tools.definitions_for(&agent.tools))
+                .map(|serialized| counter.count(&serialized))
                 .unwrap_or(0);
             tool_tokens.insert(agent_id, tokens);
         }
@@ -1438,6 +1483,8 @@ fn context_view_from_parts(
         total_tokens: first.total_tokens,
         active_entries: first.active_entries,
         excluded_entries: first.excluded_entries,
+        token_source: context.projection.token_source,
+        token_counter: context.projection.token_counter.clone(),
         memory_tokens: first.memory_tokens,
         context_window,
         max_output_tokens,
@@ -1489,6 +1536,257 @@ fn participant_view(
         cache_last_run,
         cache_conversation,
     }
+}
+
+/// A read-only preview of the request one turn or task run would send.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextPreviewView {
+    /// `conversation`, `group`, or `task_run`.
+    pub kind: PromptKind,
+    pub channel_id: Option<String>,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub agent_id: String,
+    pub agent_name: String,
+    /// Conversation name or task title.
+    pub title: String,
+    pub plan: PromptPlan,
+    /// Total the request would send, including the memory message.
+    pub request_tokens: u32,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub usable_tokens: Option<u32>,
+    pub percent_used: Option<f32>,
+    pub state: ContextUsageState,
+    /// True when the request would not fit the usable window.
+    pub over_budget: bool,
+}
+
+impl ContextPreviewView {
+    /// Attach window metadata and the over-budget state to a plan.
+    #[allow(clippy::too_many_arguments)]
+    fn from_plan(
+        kind: PromptKind,
+        channel_id: Option<String>,
+        run_id: Option<String>,
+        task_id: Option<String>,
+        agent_id: String,
+        agent_name: String,
+        title: String,
+        plan: PromptPlan,
+        context_window: Option<u32>,
+        max_output_tokens: Option<u32>,
+    ) -> Self {
+        let request_tokens = plan.request_tokens();
+        let usable_tokens = usable_window(context_window, max_output_tokens);
+        let (percent_used, state) = context_usage_state(request_tokens, usable_tokens);
+        Self {
+            kind,
+            channel_id,
+            run_id,
+            task_id,
+            agent_id,
+            agent_name,
+            title,
+            plan,
+            request_tokens,
+            context_window,
+            max_output_tokens,
+            usable_tokens,
+            percent_used,
+            state,
+            over_budget: usable_tokens.is_some_and(|usable| request_tokens >= usable),
+        }
+    }
+}
+
+/// Rebuild one conversation participant's next request without writing.
+#[tauri::command]
+pub async fn get_conversation_context_preview(
+    state: State<'_, AppState>,
+    channel_id: String,
+    agent_id: String,
+    draft: Option<String>,
+    plan_mode: Option<bool>,
+) -> Result<ContextPreviewView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let agent_id = AgentId::new(agent_id);
+    let settings = state
+        .client
+        .conversation_settings(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    let agent = agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .ok_or_else(|| format!("agent '{}' was not found", agent_id.0))?;
+    let tools = state.tools.definitions_for(&agent.tools);
+    let platform_context = project_platform_context(&state);
+    let preview = state
+        .client
+        .conversation_context_preview(
+            &channel_id,
+            &agent_id,
+            draft.as_deref(),
+            platform_context.as_deref(),
+            plan_mode.unwrap_or(false),
+            &tools,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let title = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|channel| channel.name)
+        .unwrap_or_default();
+    let (context_window, max_output_tokens) = conversation_window(&state, &settings);
+    Ok(ContextPreviewView::from_plan(
+        preview.plan.kind,
+        Some(preview.channel_id.0),
+        None,
+        None,
+        preview.agent_id.0,
+        preview.agent_name,
+        title,
+        preview.plan,
+        context_window,
+        max_output_tokens,
+    ))
+}
+
+/// Rebuild the first request one task run sent without writing.
+#[tauri::command]
+pub async fn get_task_run_context_preview(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<ContextPreviewView, String> {
+    let run_id = RunId::new(run_id);
+    let (_, fallback_model) = state.runtime_model();
+    let run = state
+        .client
+        .get_run(&run_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("run '{}' was not found", run_id.0))?;
+    let agents = state
+        .client
+        .list_agents()
+        .await
+        .map_err(|error| error.to_string())?;
+    // Standard crew roles are transient; the run's snapshot is the profile
+    // that actually executed it.
+    let profile = run
+        .agent_profile
+        .clone()
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|agent| agent.id == run.agent_id)
+                .cloned()
+        })
+        .ok_or_else(|| format!("agent '{}' was not found", run.agent_id.0))?;
+    let tools = state.tools.definitions_for(&profile.tools);
+    let preview = state
+        .client
+        .task_run_context_preview(&run_id, &fallback_model, &tools)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("run '{}' was not found", run_id.0))?;
+    let (context_window, max_output_tokens) = model_window(&state, &preview.plan.model);
+    Ok(ContextPreviewView::from_plan(
+        preview.plan.kind,
+        None,
+        Some(preview.run_id.0),
+        Some(preview.task_id.0),
+        preview.agent_id.0,
+        preview.agent_name,
+        preview.task_title,
+        preview.plan,
+        context_window,
+        max_output_tokens,
+    ))
+}
+
+/// The redacted prompt snapshots recorded for a run, oldest first.
+#[tauri::command]
+pub async fn list_run_prompt_snapshots(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<Vec<PromptSnapshotSummary>, String> {
+    state
+        .client
+        .list_run_prompt_snapshots(&RunId::new(run_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The newest prompt snapshots in the workspace, for the audit view.
+#[tauri::command]
+pub async fn list_recent_prompt_snapshots(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<PromptSnapshotSummary>, String> {
+    state
+        .client
+        .list_recent_prompt_snapshots(limit.unwrap_or(100))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One recorded prompt snapshot, with the call links it belongs to.
+#[tauri::command]
+pub async fn get_llm_prompt_snapshot(
+    state: State<'_, AppState>,
+    call_id: String,
+) -> Result<Option<PromptSnapshotDetail>, String> {
+    state
+        .client
+        .prompt_snapshot(&call_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The workspace prompt-snapshot settings.
+#[tauri::command]
+pub async fn get_prompt_snapshot_settings(
+    state: State<'_, AppState>,
+) -> Result<PromptSnapshotSettings, String> {
+    state
+        .client
+        .prompt_snapshot_settings()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Change whether snapshots are stored and how long they are kept.
+#[tauri::command]
+pub async fn update_prompt_snapshot_settings(
+    state: State<'_, AppState>,
+    enabled: Option<bool>,
+    retention_days: Option<u32>,
+) -> Result<PromptSnapshotSettings, String> {
+    state
+        .client
+        .update_prompt_snapshot_settings(enabled, retention_days)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Delete expired snapshots now and report how many went.
+#[tauri::command]
+pub async fn purge_prompt_snapshots(state: State<'_, AppState>) -> Result<u64, String> {
+    state
+        .client
+        .purge_prompt_snapshots()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2414,6 +2712,174 @@ fn summarize_reply(reply: &str) -> String {
     summary
 }
 
+/// One argument of a composer command, flattened for the frontend.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandArgInfo {
+    pub placeholder: String,
+    pub required: bool,
+    pub kind: String,
+    pub choices: Vec<String>,
+}
+
+/// A composer command, flattened for the frontend.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub usage: String,
+    pub summary: String,
+    pub target: String,
+    pub args: Vec<CommandArgInfo>,
+}
+
+fn command_info(spec: &CommandSpec) -> CommandInfo {
+    CommandInfo {
+        name: spec.name.to_string(),
+        aliases: spec.aliases.iter().map(|alias| alias.to_string()).collect(),
+        usage: spec.usage.to_string(),
+        summary: spec.summary.to_string(),
+        target: spec.target.as_str().to_string(),
+        args: spec
+            .args
+            .iter()
+            .map(|arg| CommandArgInfo {
+                placeholder: arg.placeholder.to_string(),
+                required: arg.required,
+                kind: arg.kind.as_str().to_string(),
+                choices: arg.kind.choices().iter().map(|c| c.to_string()).collect(),
+            })
+            .collect(),
+    }
+}
+
+/// One answer to a `/btw` side question.
+#[derive(Debug, Clone, Serialize)]
+pub struct SideAnswerView {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub content: String,
+    pub model: String,
+    pub call_id: String,
+}
+
+/// Answer a `/btw` side question without changing the conversation.
+///
+/// Nothing is posted, no context entry is appended, and no routing turn is
+/// recorded; the view returns the answer for an ephemeral panel. `agent_id`
+/// picks the responder and defaults to the chat's own agent or its default
+/// responder. The model comes from the conversation's settings, or from
+/// `model` for an agent chat and a group channel (ADR-0039).
+#[tauri::command]
+pub async fn ask_side_question(
+    state: State<'_, AppState>,
+    channel_id: String,
+    agent_id: Option<String>,
+    question: String,
+    model: Option<String>,
+    approval_level: Option<ApprovalLevel>,
+) -> Result<SideAnswerView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let channel = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
+
+    let (llm, default_model) = if channel.is_conversation() {
+        let settings = state
+            .client
+            .conversation_settings(&channel_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        conversation_runtime(&state, &settings)
+    } else {
+        state.runtime_model()
+    };
+    let model = model
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or(default_model);
+
+    let gate = state
+        .client
+        .side_question_gate(AssignmentId::new(format!("side-question-{}", channel_id.0)));
+    let responder = agent_id.as_deref().map(AgentId::new);
+    let answer = state
+        .client
+        .ask_side_question(
+            &channel_id,
+            responder.as_ref(),
+            &question,
+            &model,
+            llm,
+            state.tools.clone(),
+            Some(gate),
+            ChannelTurnOptions {
+                approval_level: approval_level.unwrap_or(ApprovalLevel::Ask),
+                max_concurrency: 4,
+                use_model_permissions: state.uses_remote_model(),
+                platform_context: project_platform_context(&state),
+                participant_capacity: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(SideAnswerView {
+        agent_id: answer.agent_id.0,
+        agent_name: answer.agent_name,
+        content: answer.content,
+        model: answer.model,
+        call_id: answer.call_id,
+    })
+}
+
+/// The composer's slash command catalogue, fetched once per frontend session.
+#[tauri::command]
+pub fn list_commands() -> Vec<CommandInfo> {
+    command_catalogue().iter().map(command_info).collect()
+}
+
+/// One composer command with its arguments filled in.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandInvocationView {
+    pub name: String,
+    pub args: Vec<String>,
+    pub raw_args: String,
+}
+
+/// The outcome of reading composer input as a slash command.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CommandParseView {
+    NotACommand,
+    Invocation(CommandInvocationView),
+    Unknown { name: String },
+    MissingArgument { name: String, usage: String },
+}
+
+/// Read composer input as a slash command.
+///
+/// Called once per Enter press while the draft starts with `/`, so typing
+/// never costs an IPC round trip.
+#[tauri::command]
+pub fn parse_command(input: String) -> CommandParseView {
+    match command_parse(&input) {
+        CommandParse::NotACommand => CommandParseView::NotACommand,
+        CommandParse::Invocation(invocation) => {
+            CommandParseView::Invocation(CommandInvocationView {
+                name: invocation.name,
+                args: invocation.args,
+                raw_args: invocation.raw_args,
+            })
+        }
+        CommandParse::Unknown { name } => CommandParseView::Unknown { name },
+        CommandParse::MissingArgument { name, usage } => {
+            CommandParseView::MissingArgument { name, usage }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2421,6 +2887,7 @@ mod tests {
         AssignmentMode, AssignmentOrigin, AssignmentRequester, ReplyMode,
     };
     use cowbot_core::conversation::{ContextProjection, ConversationParticipantContext};
+    use cowbot_core::memory::RecallPreview;
 
     fn draft(name: &str, base_url: &str, model: &str, api_key: Option<&str>) -> ProviderDraft {
         ProviderDraft {
@@ -2778,6 +3245,33 @@ mod tests {
     }
 
     #[test]
+    fn context_view_reports_the_token_counter_source() {
+        let settings = cowbot_core::conversation::ConversationSettings::new(
+            ChannelId::new("channel-1"),
+            None,
+            "gpt-4o",
+        );
+        let mut context = context_with_tokens(1_000);
+        context.projection.token_source = TokenSource::Tiktoken;
+        context.projection.token_counter = Some("o200k_base".to_string());
+
+        let view = context_view_from_parts(context, &settings, &HashMap::new(), Some(10_000), None);
+        assert_eq!(view.token_source, TokenSource::Tiktoken);
+        assert_eq!(view.token_counter.as_deref(), Some("o200k_base"));
+
+        // An old payload without a source field defaults to an estimate.
+        let estimated = context_view_from_parts(
+            context_with_tokens(1_000),
+            &settings,
+            &HashMap::new(),
+            None,
+            None,
+        );
+        assert_eq!(estimated.token_source, TokenSource::Estimate);
+        assert!(estimated.token_counter.is_none());
+    }
+
+    #[test]
     fn context_view_builds_one_entry_per_participant() {
         let settings = cowbot_core::conversation::ConversationSettings::group(
             ChannelId::new("channel-1"),
@@ -2894,5 +3388,135 @@ mod tests {
         assert_eq!(overview_detail(&assignment), Some("boom".to_string()));
         assignment.last_error = Some("stalled".to_string());
         assert_eq!(overview_detail(&assignment), Some("stalled".to_string()));
+    }
+
+    fn preview_plan(tokens: u32) -> PromptPlan {
+        PromptPlan {
+            kind: PromptKind::Conversation,
+            model: "gpt-4o".to_string(),
+            provider_id: Some("provider-1".to_string()),
+            slots: Vec::new(),
+            messages: Vec::new(),
+            memory: None,
+            recall: RecallPreview {
+                enabled: true,
+                query: String::new(),
+                block: None,
+                estimated_tokens: 0,
+                budget_tokens: 100,
+                notes_budget_tokens: 100,
+                notes_tokens: 0,
+                candidates: Vec::new(),
+            },
+            tools: Vec::new(),
+            projection: ContextProjection {
+                system_tokens: tokens,
+                ..ContextProjection::default()
+            },
+            auto_compact: true,
+            compact_threshold: 80,
+        }
+    }
+
+    fn preview_view(tokens: u32, window: Option<u32>, output: Option<u32>) -> ContextPreviewView {
+        ContextPreviewView::from_plan(
+            PromptKind::Conversation,
+            Some("channel-1".to_string()),
+            None,
+            None,
+            "agent-1".to_string(),
+            "Planner".to_string(),
+            "Design review".to_string(),
+            preview_plan(tokens),
+            window,
+            output,
+        )
+    }
+
+    #[test]
+    fn context_preview_view_reports_the_over_budget_state() {
+        let over = preview_view(8_000, Some(10_000), Some(1_000));
+        assert_eq!(over.usable_tokens, Some(7_976));
+        assert_eq!(over.request_tokens, 8_000);
+        assert!(over.over_budget);
+        assert_eq!(over.state, ContextUsageState::Full);
+        assert_eq!(over.title, "Design review");
+
+        let inside = preview_view(1_000, Some(10_000), Some(1_000));
+        assert!(!inside.over_budget);
+        assert_eq!(inside.state, ContextUsageState::Neutral);
+
+        let unknown = preview_view(8_000, None, None);
+        assert_eq!(unknown.percent_used, None);
+        assert_eq!(unknown.state, ContextUsageState::Unknown);
+        assert!(!unknown.over_budget);
+    }
+
+    #[test]
+    fn list_commands_serializes_every_catalogue_entry() {
+        let commands = list_commands();
+        assert_eq!(commands.len(), command_catalogue().len());
+
+        let json = serde_json::to_value(&commands).expect("command catalogue serializes");
+        let approval = json
+            .as_array()
+            .expect("catalogue is a list")
+            .iter()
+            .find(|command| command["name"] == "approval")
+            .expect("approval is catalogued");
+        assert_eq!(approval["target"], "chat");
+        assert_eq!(approval["args"][0]["kind"], "choice");
+        assert_eq!(
+            approval["args"][0]["choices"],
+            serde_json::json!(cowbot_core::command::APPROVAL_CHOICES)
+        );
+
+        let compact = json
+            .as_array()
+            .expect("catalogue is a list")
+            .iter()
+            .find(|command| command["name"] == "compact")
+            .expect("compact is catalogued");
+        assert_eq!(compact["target"], "conversation");
+        assert_eq!(compact["args"][0]["kind"], "participant");
+        assert_eq!(compact["args"][0]["choices"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn parse_command_crosses_ipc_in_a_flat_shape() {
+        assert_eq!(
+            serde_json::to_value(parse_command("hello".to_string())).expect("serializes"),
+            serde_json::json!({ "kind": "not_a_command" })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/pin".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "invocation",
+                "name": "pin",
+                "args": [],
+                "raw_args": "",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/task write it".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "invocation",
+                "name": "task",
+                "args": ["write", "it"],
+                "raw_args": "write it",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/nope".to_string())).expect("serializes"),
+            serde_json::json!({ "kind": "unknown", "name": "nope" })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/rename".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "missing_argument",
+                "name": "rename",
+                "usage": "/rename <name>",
+            })
+        );
     }
 }

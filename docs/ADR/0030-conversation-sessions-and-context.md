@@ -81,8 +81,10 @@ context as an append-only branch keyed by `(channel_id, agent_id, seq)`:
   tokens, and a timestamp;
 - sequence numbers are allocated inside the branch by SQLite, so concurrent
   writers cannot duplicate a position;
-- display messages are never deleted by context operations, and context entries
-  are never rewritten during normal use.
+- display messages are never deleted by context operations, and entries are
+  never rewritten in content during normal use. Compaction inserts a summary at
+  the branch cutoff and renumbers the kept tail to make room (ADR-0034);
+  sequence values are an ordering key, not identity.
 
 A user turn appends the user entry before assembly, then builds the request as:
 the agent system prompt (including the workspace platform context), followed by

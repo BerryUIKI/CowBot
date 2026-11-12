@@ -234,6 +234,14 @@ pub fn run() {
             commands::list_conversation_participants,
             commands::list_conversation_turns,
             commands::get_conversation_context,
+            commands::get_conversation_context_preview,
+            commands::get_task_run_context_preview,
+            commands::list_run_prompt_snapshots,
+            commands::list_recent_prompt_snapshots,
+            commands::get_llm_prompt_snapshot,
+            commands::get_prompt_snapshot_settings,
+            commands::update_prompt_snapshot_settings,
+            commands::purge_prompt_snapshots,
             commands::update_conversation_settings,
             commands::compact_conversation,
             commands::clear_conversation_context,
@@ -303,6 +311,9 @@ pub fn run() {
             commands::list_project_branches,
             commands::export_workspace,
             commands::import_workspace,
+            commands::list_commands,
+            commands::parse_command,
+            commands::ask_side_question,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CowBot");

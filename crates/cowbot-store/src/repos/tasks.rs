@@ -5,7 +5,7 @@ use cowbot_core::channel::ChannelId;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
-use cowbot_core::task::{Task, TaskId, TaskStatus};
+use cowbot_core::task::{Task, TaskId, TaskSource, TaskStatus};
 use serde_json::Value;
 
 use crate::error::{db, parse_datetime, parse_json, parse_optional_datetime};
@@ -21,6 +21,7 @@ struct TaskRow {
     assigned_agent: Option<String>,
     context_tasks: String,
     run_group: Option<String>,
+    source: String,
     status: String,
     archived_at: Option<String>,
     plan: Option<String>,
@@ -38,6 +39,7 @@ impl TaskRow {
             channel_id: self.channel_id.map(ChannelId::new),
             context_tasks: parse_json(&self.context_tasks, "tasks.context_tasks")?,
             run_group: self.run_group.map(TaskId),
+            source: task_source_from_str(&self.source)?,
             status: parse_json(&self.status, "tasks.status")?,
             archived: self.archived_at.is_some(),
             plan: self.plan,
@@ -54,6 +56,7 @@ struct RunRow {
     status: String,
     started_at: String,
     finished_at: Option<String>,
+    agent_profile: Option<String>,
 }
 
 impl RunRow {
@@ -65,6 +68,11 @@ impl RunRow {
             status: run_status_from_str(&self.status)?,
             started_at: parse_datetime(&self.started_at)?,
             finished_at: parse_optional_datetime(self.finished_at.as_deref())?,
+            agent_profile: self
+                .agent_profile
+                .as_deref()
+                .map(|value| parse_json(value, "runs.agent_profile"))
+                .transpose()?,
         })
     }
 }
@@ -144,6 +152,15 @@ fn run_status_from_str(value: &str) -> CowResult<RunStatus> {
     }
 }
 
+fn task_source_from_str(value: &str) -> CowResult<TaskSource> {
+    match value {
+        "user" => Ok(TaskSource::User),
+        "channel_turn" => Ok(TaskSource::ChannelTurn),
+        "conversation_turn" => Ok(TaskSource::ConversationTurn),
+        other => Err(CowError::Storage(format!("unknown task source '{other}'"))),
+    }
+}
+
 fn approval_status_to_str(status: ApprovalStatus) -> &'static str {
     match status {
         ApprovalStatus::Pending => "pending",
@@ -176,9 +193,9 @@ impl Store {
         sqlx::query(
             "INSERT INTO tasks
                 (id, workspace_id, channel_id, title, description, expected_output,
-                 assigned_agent, context_tasks, run_group, status, archived_at, plan, plan_approved,
-                 created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 assigned_agent, context_tasks, run_group, source, status, archived_at, plan,
+                 plan_approved, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id.0)
         .bind(&workspace_id.0)
@@ -193,6 +210,7 @@ impl Store {
         .bind(task.assigned_agent.as_ref().map(|agent| agent.0.clone()))
         .bind(serde_json::to_string(&task.context_tasks)?)
         .bind(task.run_group.as_ref().map(|task_id| task_id.0.clone()))
+        .bind(task.source.as_str())
         .bind(serde_json::to_string(&task.status)?)
         .bind(task.archived.then(|| now.clone()))
         .bind(&task.plan)
@@ -208,7 +226,7 @@ impl Store {
     pub async fn get_task(&self, id: &TaskId) -> CowResult<Option<Task>> {
         let row = sqlx::query_as::<_, TaskRow>(
             "SELECT id, channel_id, title, description, expected_output, assigned_agent,
-                    context_tasks, run_group, status, archived_at, plan, plan_approved
+                    context_tasks, run_group, source, status, archived_at, plan, plan_approved
              FROM tasks WHERE id = ?",
         )
         .bind(&id.0)
@@ -232,7 +250,7 @@ impl Store {
     pub async fn list_tasks(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
             "SELECT id, channel_id, title, description, expected_output, assigned_agent,
-                    context_tasks, run_group, status, archived_at, plan, plan_approved
+                    context_tasks, run_group, source, status, archived_at, plan, plan_approved
              FROM tasks WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(&workspace_id.0)
@@ -246,7 +264,7 @@ impl Store {
     pub async fn list_tasks_by_run_group(&self, run_group: &TaskId) -> CowResult<Vec<Task>> {
         let rows = sqlx::query_as::<_, TaskRow>(
             "SELECT id, channel_id, title, description, expected_output, assigned_agent,
-                    context_tasks, run_group, status, archived_at, plan, plan_approved
+                    context_tasks, run_group, source, status, archived_at, plan, plan_approved
              FROM tasks WHERE run_group = ? ORDER BY created_at",
         )
         .bind(&run_group.0)
@@ -292,9 +310,15 @@ impl Store {
     }
 
     pub async fn create_run(&self, run: &Run) -> CowResult<()> {
+        let agent_profile = run
+            .agent_profile
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         sqlx::query(
-            "INSERT INTO runs (id, task_id, agent_id, status, started_at, finished_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs
+                (id, task_id, agent_id, status, started_at, finished_at, agent_profile)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id.0)
         .bind(&run.task_id.0)
@@ -302,6 +326,7 @@ impl Store {
         .bind(run_status_to_str(run.status))
         .bind(run.started_at.to_rfc3339())
         .bind(run.finished_at.map(|value| value.to_rfc3339()))
+        .bind(agent_profile)
         .execute(self.pool())
         .await
         .map_err(db)?;
@@ -326,7 +351,7 @@ impl Store {
 
     pub async fn get_run(&self, id: &RunId) -> CowResult<Option<Run>> {
         let row = sqlx::query_as::<_, RunRow>(
-            "SELECT id, task_id, agent_id, status, started_at, finished_at
+            "SELECT id, task_id, agent_id, status, started_at, finished_at, agent_profile
              FROM runs WHERE id = ?",
         )
         .bind(&id.0)
@@ -338,7 +363,7 @@ impl Store {
 
     pub async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>> {
         let rows = sqlx::query_as::<_, RunRow>(
-            "SELECT id, task_id, agent_id, status, started_at, finished_at
+            "SELECT id, task_id, agent_id, status, started_at, finished_at, agent_profile
              FROM runs WHERE task_id = ? ORDER BY started_at",
         )
         .bind(&task_id.0)

@@ -213,6 +213,14 @@ async fn a_waiting_parent_resumes_with_child_output() {
     // re-entry through the scheduler produced a run row.
     let runs = store.list_runs(&root_task.id).await.unwrap();
     assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0]
+            .agent_profile
+            .as_ref()
+            .map(|profile| profile.name.as_str()),
+        Some("Cow-Planner"),
+        "the run snapshots the transient crew profile that executed it"
+    );
 
     let stored_child = service.get(&child.id).await.unwrap().unwrap();
     assert_eq!(stored_child.status, AssignmentStatus::Completed);

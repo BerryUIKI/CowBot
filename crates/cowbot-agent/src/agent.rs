@@ -2,7 +2,7 @@ use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
-use cowbot_core::task::Task;
+use cowbot_core::task::{task_execution_prompt, Task};
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolCallRecorder, ToolGate};
 use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder};
 use cowbot_llm::{ChatCompletionRequest, ChatMessage, ChatRole, LlmProvider};
@@ -124,17 +124,7 @@ impl AgentInstance {
         }
 
         // Inject prerequisite context if any exists
-        let mut prompt = format!(
-            "Task Description:\n{}\n\nExpected Output Format:\n{}",
-            task.description, task.expected_output
-        );
-
-        if !context_outputs.is_empty() {
-            prompt.push_str("\n\nPrerequisite Context from Prior Tasks:\n");
-            for (idx, ctx) in context_outputs.iter().enumerate() {
-                prompt.push_str(&format!("{}. {}\n", idx + 1, ctx));
-            }
-        }
+        let prompt = task_execution_prompt(task, context_outputs);
 
         messages.push(ChatMessage::user(prompt));
         self.run_loop(task, messages, bus).await
@@ -183,6 +173,10 @@ impl AgentInstance {
         );
 
         let tool_definitions = self.tools.definitions_for(&self.profile.tools);
+        let capture_prompts = self
+            .usage_recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.records_prompts());
 
         let mut iterations = 0;
         let max_iters = self.profile.max_iterations;
@@ -210,6 +204,12 @@ impl AgentInstance {
                     call_kind: LlmCallKind::Agent,
                     usage: response.usage.clone(),
                     raw_usage: response.raw_usage.clone(),
+                    // Sealing belongs to the recorder: only it knows the
+                    // workspace settings and the prompt slots the request
+                    // was assembled from.
+                    snapshot: capture_prompts.then(|| {
+                        cowbot_llm::snapshot_request(&self.model, LlmCallKind::Agent, &req)
+                    }),
                 };
                 if let Err(error) = recorder.record_llm_call(&call).await {
                     warn!(

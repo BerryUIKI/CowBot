@@ -12,7 +12,11 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  CommandInfo,
+  CommandParseResult,
+  SideAnswer,
   CompactionOutcome,
+  ContextPreview,
   ConversationContext,
   ConversationParticipant,
   ConversationSummary,
@@ -33,6 +37,9 @@ import type {
   PermissionRule,
   Project,
   ProjectBranches,
+  PromptSnapshotDetail,
+  PromptSnapshotSettings,
+  PromptSnapshotSummary,
   ProviderProtocol,
   RecalledMemory,
   RuleDecision,
@@ -139,6 +146,66 @@ export function listConversationTurns(
 
 export function getConversationContext(channelId: string): Promise<ConversationContext> {
   return invoke<ConversationContext>("get_conversation_context", { channelId });
+}
+
+/** Rebuild what one participant's next turn would send. */
+export function getConversationContextPreview(
+  channelId: string,
+  agentId: string,
+  draft?: string,
+  planMode = false,
+): Promise<ContextPreview> {
+  return invoke<ContextPreview>("get_conversation_context_preview", {
+    channelId,
+    agentId,
+    draft: draft ?? null,
+    planMode,
+  });
+}
+
+/** Rebuild the first request one task run sent. */
+export function getTaskRunContextPreview(runId: string): Promise<ContextPreview> {
+  return invoke<ContextPreview>("get_task_run_context_preview", { runId });
+}
+
+/** The redacted prompt snapshots recorded for a run, oldest first. */
+export function listRunPromptSnapshots(
+  runId: string,
+): Promise<PromptSnapshotSummary[]> {
+  return invoke<PromptSnapshotSummary[]>("list_run_prompt_snapshots", { runId });
+}
+
+/** The newest prompt snapshots in the workspace, for the audit view. */
+export function listRecentPromptSnapshots(
+  limit = 100,
+): Promise<PromptSnapshotSummary[]> {
+  return invoke<PromptSnapshotSummary[]>("list_recent_prompt_snapshots", { limit });
+}
+
+/** One recorded prompt snapshot with the call links it belongs to. */
+export function getLlmPromptSnapshot(
+  callId: string,
+): Promise<PromptSnapshotDetail | null> {
+  return invoke<PromptSnapshotDetail | null>("get_llm_prompt_snapshot", { callId });
+}
+
+export function getPromptSnapshotSettings(): Promise<PromptSnapshotSettings> {
+  return invoke<PromptSnapshotSettings>("get_prompt_snapshot_settings");
+}
+
+export function updatePromptSnapshotSettings(
+  enabled: boolean | null,
+  retentionDays: number | null,
+): Promise<PromptSnapshotSettings> {
+  return invoke<PromptSnapshotSettings>("update_prompt_snapshot_settings", {
+    enabled,
+    retentionDays,
+  });
+}
+
+/** Delete expired snapshots now and report how many went. */
+export function purgePromptSnapshots(): Promise<number> {
+  return invoke<number>("purge_prompt_snapshots");
 }
 
 export function updateConversationSettings(
@@ -564,6 +631,32 @@ export function createWorkspace(name: string): Promise<void> {
 
 export function listProjects(): Promise<Project[]> {
   return invoke<Project[]>("list_projects");
+}
+
+export function listCommands(): Promise<CommandInfo[]> {
+  return invoke<CommandInfo[]>("list_commands");
+}
+
+export function parseCommand(input: string): Promise<CommandParseResult> {
+  return invoke<CommandParseResult>("parse_command", { input });
+}
+
+export function askSideQuestion(
+  channelId: string,
+  question: string,
+  options: {
+    agentId?: string;
+    model?: string;
+    approvalLevel?: ApprovalLevel;
+  } = {},
+): Promise<SideAnswer> {
+  return invoke<SideAnswer>("ask_side_question", {
+    channelId,
+    question,
+    agentId: options.agentId,
+    model: options.model,
+    approvalLevel: options.approvalLevel,
+  });
 }
 
 export function addProject(path: string): Promise<Project[]> {

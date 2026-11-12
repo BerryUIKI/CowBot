@@ -22,16 +22,22 @@ use cowbot_core::conversation::{
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
+use cowbot_core::prompt_snapshot::{
+    PromptSnapshotDetail, PromptSnapshotSettings, PromptSnapshotSummary,
+};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::tool::{ToolDefinition, ToolGate};
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
-    PermissionService, SessionDecisions, TaskService, TemplateService, WorktreeService,
+    CompactionLocks, ConversationPreview, ConversationService, CrewRunOptions, CrewRunner,
+    LocalContext, MemoryService, PermissionService, PreviewService, PromptSnapshotService,
+    ScopedApprovalGate, SessionDecisions, SideAnswer, TaskRunPreview, TaskService, TemplateService,
+    WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -59,6 +65,8 @@ pub struct LocalClient {
     agents: AgentService,
     permissions: PermissionService,
     memory: MemoryService,
+    preview: PreviewService,
+    prompt_snapshots: PromptSnapshotService,
     session_decisions: Arc<SessionDecisions>,
     worktrees: WorktreeService,
 }
@@ -92,17 +100,28 @@ impl LocalClient {
         approvals.reconcile_on_startup().await?;
 
         let channels = ChannelService::new(store.clone(), bus.clone());
+        let compaction_locks = Arc::new(CompactionLocks::new());
         let channel_agents =
             ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone())
-                .with_session_decisions(Some(session_decisions.clone()));
+                .with_session_decisions(Some(session_decisions.clone()))
+                .with_compaction_locks(compaction_locks.clone());
         let conversations =
             ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
-                .with_session_decisions(Some(session_decisions.clone()));
+                .with_session_decisions(Some(session_decisions.clone()))
+                .with_compaction_locks(compaction_locks);
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
         let memory = MemoryService::new(store.clone(), context.workspace.id.clone());
+        let preview = PreviewService::new(store.clone(), context.workspace.id.clone());
+        let prompt_snapshots =
+            PromptSnapshotService::new(store.clone(), context.workspace.id.clone());
+        // Expired evidence is deleted on open; a failure must not block the
+        // workspace from loading.
+        if let Err(error) = prompt_snapshots.sweep().await {
+            warn!(error = %error, "Failed to sweep expired prompt snapshots");
+        }
         let worktrees = WorktreeService::new(store.clone(), bus.clone());
         worktrees.reconcile().await?;
         let session = ClientSession {
@@ -128,6 +147,8 @@ impl LocalClient {
             agents,
             permissions,
             memory,
+            preview,
+            prompt_snapshots,
             session_decisions,
             worktrees,
         })
@@ -333,6 +354,43 @@ impl LocalClient {
         self.channel_agents
             .reply(channel_id, message, llm, tools, model, &options)
             .await
+    }
+
+    /// Answer a `/btw` side question without touching the conversation.
+    ///
+    /// Nothing is posted, no context entry is appended, and no routing turn is
+    /// recorded; the answer returns to the caller, which shows it in an
+    /// ephemeral panel. Local-only for the same reason as
+    /// [`Self::reply_to_mentions`]: the LLM handle lives in the desktop runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ask_side_question(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: Option<&AgentId>,
+        question: &str,
+        model: &str,
+        llm: Arc<dyn LlmProvider>,
+        tools: ToolRegistry,
+        gate: Option<Arc<dyn ToolGate>>,
+        options: ChannelTurnOptions,
+    ) -> CowResult<SideAnswer> {
+        self.channel_agents
+            .ask_side_question(
+                channel_id, agent_id, question, model, llm, tools, gate, &options,
+            )
+            .await
+    }
+
+    /// A tool gate for a `/btw` side question.
+    ///
+    /// The gate is scoped to `assignment_id`, which the desktop derives from the
+    /// channel so an approval card names the chat it came from. The question is
+    /// not an assignment, so no assignment row is created.
+    pub fn side_question_gate(&self, assignment_id: AssignmentId) -> Arc<dyn ToolGate> {
+        Arc::new(ScopedApprovalGate::new(
+            self.approvals.clone(),
+            assignment_id,
+        ))
     }
 
     /// Compact a conversation context with the caller's fixed model client.
@@ -658,6 +716,72 @@ impl Client for LocalClient {
 
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
         self.conversations.context(channel_id).await
+    }
+
+    async fn conversation_context_preview(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        draft: Option<&str>,
+        platform_context: Option<&str>,
+        plan_mode: bool,
+        tools: &[ToolDefinition],
+    ) -> CowResult<ConversationPreview> {
+        self.preview
+            .conversation(
+                channel_id,
+                agent_id,
+                draft,
+                platform_context,
+                plan_mode,
+                tools,
+            )
+            .await
+    }
+
+    async fn task_run_context_preview(
+        &self,
+        run_id: &RunId,
+        model: &str,
+        tools: &[ToolDefinition],
+    ) -> CowResult<Option<TaskRunPreview>> {
+        self.preview.task_run(run_id, model, tools).await
+    }
+
+    async fn list_run_prompt_snapshots(
+        &self,
+        run_id: &RunId,
+    ) -> CowResult<Vec<PromptSnapshotSummary>> {
+        self.prompt_snapshots.list_for_run(run_id).await
+    }
+
+    async fn list_recent_prompt_snapshots(
+        &self,
+        limit: u32,
+    ) -> CowResult<Vec<PromptSnapshotSummary>> {
+        self.prompt_snapshots.list_recent(limit).await
+    }
+
+    async fn prompt_snapshot(&self, llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
+        self.prompt_snapshots.detail(llm_call_id).await
+    }
+
+    async fn prompt_snapshot_settings(&self) -> CowResult<PromptSnapshotSettings> {
+        self.prompt_snapshots.settings().await
+    }
+
+    async fn update_prompt_snapshot_settings(
+        &self,
+        enabled: Option<bool>,
+        retention_days: Option<u32>,
+    ) -> CowResult<PromptSnapshotSettings> {
+        self.prompt_snapshots
+            .update_settings(enabled, retention_days)
+            .await
+    }
+
+    async fn purge_prompt_snapshots(&self) -> CowResult<u64> {
+        self.prompt_snapshots.sweep().await
     }
 
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {

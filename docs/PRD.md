@@ -146,6 +146,7 @@ CowBot follows a "single core, two forms" model:
 | Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; workspace allow / ask / deny rules per tool and command pattern; session decisions; Plan artifacts with approve-to-continue; a Bypass Critical tri-state; source-attributed audit |
 | Model configuration | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints (cloud APIs and local models), protocol selection, connection test |
 | Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, approval records, conversation context, notes, memory entries and settings, per-call token usage, permission rules, and task worktrees |
+| Audit | Source-attributed approval audit plus sealed, redacted prompt snapshots of every LLM call, with a per-workspace capture switch and retention window (ADR-0037) |
 | CLI | `cowbot` retained for initialization, diagnostics, headless runs, and debugging |
 
 ### 5.2 P1 (Enhancements)
@@ -213,6 +214,7 @@ CowBot follows a "single core, two forms" model:
 9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
 10. Group conversations with several agent participants, mention-scoped routing, opt-in automatic routing, and a default responder are implemented as M3 (ADR-0032). Single-agent conversations remain the default; group channels keep their mention-only behavior. See the [M3 plan](plans/M3-group-conversations-and-routing.md).
 11. Agent memory and shared notes are implemented as M4 (ADR-0033): inspectable, workspace-scoped Markdown notes and memory entries with deterministic FTS5 recall, explicit capture, an approval-gated `remember` tool, opt-in reviewed extraction, and package round-trips with secret redaction. Embeddings, project knowledge bases, and cross-workspace memory remain out of scope. See the [M4 plan](plans/M4-agent-memory-and-shared-notes.md).
+12. Prompt snapshots are stored redacted, workspace-retained, and never packaged (ADR-0037). They record the request each LLM call actually sent so a later review is not reconstructing it from changed settings; retention is the privacy control, and snapshots stay device-local.
 
 ### 7.3 Open Questions
 

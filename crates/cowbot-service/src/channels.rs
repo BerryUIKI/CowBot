@@ -139,6 +139,20 @@ impl ChannelService {
         }
 
         self.store.delete_channel(channel_id).await?;
+        // Prompt snapshots are evidence about calls made in this channel, so
+        // they do not outlive it. Usage rows stay: they are not channel-scoped
+        // by a foreign key, and deleting a channel is not a usage reset.
+        if let Err(error) = self
+            .store
+            .delete_prompt_snapshots_for_channel(channel_id)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                channel_id = %channel_id.0,
+                "Failed to delete the prompt snapshots of a deleted channel"
+            );
+        }
         self.bus.publish(Event::new(EventPayload::ChannelDeleted {
             channel_id: channel_id.clone(),
         }));

@@ -59,12 +59,18 @@ serialize.
 - `context_entries.jsonl`: one append-only context entry per line, with its
   branch sequence, role, kind, content, optional tool calls, optional
   `author_agent_id` for mirrored peer replies, exclusion flag, estimated tokens,
-  and timestamp.
+  and timestamp. Token counts are the model-independent estimates written with
+  each entry; the live context meter recomputes for the conversation's model
+  and labels exact versus estimated counts (ADR-0035). Import shifts a branch
+  whose minimum sequence is zero or negative so it starts at 1, preserving
+  within-branch order (ADR-0034).
 - `context_events.jsonl`: one compaction or clear event per line with token
   counts before and after.
 - `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
   attribution).
-- `runs.jsonl`: one run per line.
+- `runs.jsonl`: one run per line, with the agent profile snapshot taken when
+  the run started. Packages written before the snapshot omit it; import keeps
+  the run and the preview falls back to the stored agent.
 - `audit.jsonl`: one audit event per line, newest first; optional `source`
   records whether a decision came from a rule, model, session, human, policy,
   or the system (ADR-0003).
@@ -97,6 +103,11 @@ machine and are not exported. Packages carry the participant roster, the default
 responder, and authored peer entries, so an imported conversation keeps its
 routing behavior and history; route chips may be absent until the imported
 workspace produces new turns (ADR-0032).
+
+LLM prompt snapshots (`llm_prompt_snapshots`) are device-local audit evidence
+and are never written into a package, not even as a redacted digest. They expire
+on their own retention clock instead (ADR-0037). A package that carries such a
+file is rejected as an unexpected path, like any other path outside this layout.
 
 ## Import semantics (v1)
 

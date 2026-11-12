@@ -3,6 +3,7 @@ use crate::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a task.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub String);
@@ -23,6 +24,7 @@ impl std::fmt::Display for TaskId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Status of a task in the platform.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +46,34 @@ impl TaskStatus {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
+/// Where a task came from.
+///
+/// Conversation turns reuse the task pipeline but are not work items, so the
+/// desktop can list user-created tasks without the turns that produced them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSource {
+    /// A work item the user created.
+    #[default]
+    User,
+    /// A reply in a channel or an agent direct conversation.
+    ChannelTurn,
+    /// A reply in a user-created conversation session.
+    ConversationTurn,
+}
+
+impl TaskSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::ChannelTurn => "channel_turn",
+            Self::ConversationTurn => "conversation_turn",
+        }
+    }
+}
+
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Task abstraction inspired by CrewAI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -71,6 +101,10 @@ pub struct Task {
     /// channel turns leave it unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_group: Option<TaskId>,
+    /// Where this task came from: a user-created work item or a conversation
+    /// turn that reused the task pipeline.
+    #[serde(default)]
+    pub source: TaskSource,
     /// Current execution status
     pub status: TaskStatus,
     /// Whether the task was archived by the user
@@ -97,6 +131,7 @@ impl Task {
             channel_id: None,
             context_tasks: Vec::new(),
             run_group: None,
+            source: TaskSource::User,
             status: TaskStatus::Pending,
             archived: false,
             plan: None,
@@ -137,6 +172,12 @@ impl Task {
         self.run_group = Some(task_id);
         self
     }
+
+    /// Mark the task as a conversation turn instead of a user-created work item.
+    pub fn from_source(mut self, source: TaskSource) -> Self {
+        self.source = source;
+        self
+    }
 }
 
 fn title_from_description(description: &str) -> String {
@@ -146,6 +187,24 @@ fn title_from_description(description: &str) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or("");
     truncate_title(line)
+}
+
+/// The user message an agent receives for one task execution.
+///
+/// The agent runtime and the context preview both use this function, so what an
+/// inspector shows stays identical to what the model was sent.
+pub fn task_execution_prompt(task: &Task, context_outputs: &[String]) -> String {
+    let mut prompt = format!(
+        "Task Description:\n{}\n\nExpected Output Format:\n{}",
+        task.description, task.expected_output
+    );
+    if !context_outputs.is_empty() {
+        prompt.push_str("\n\nPrerequisite Context from Prior Tasks:\n");
+        for (index, output) in context_outputs.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", index + 1, output));
+        }
+    }
+    prompt
 }
 
 fn truncate_title(title: &str) -> String {
@@ -170,6 +229,20 @@ mod tests {
     fn task_titles_use_the_first_non_empty_line() {
         let task = Task::new("\n  First line  \nSecond line", "Output");
         assert_eq!(task.title, "First line");
+    }
+
+    #[test]
+    fn task_execution_prompt_appends_prerequisite_outputs() {
+        let task = Task::new("Build the thing", "A diff");
+        assert_eq!(
+            task_execution_prompt(&task, &[]),
+            "Task Description:\nBuild the thing\n\nExpected Output Format:\nA diff"
+        );
+        assert_eq!(
+            task_execution_prompt(&task, &["first result".to_string(), "second".to_string()]),
+            "Task Description:\nBuild the thing\n\nExpected Output Format:\nA diff\n\n\
+             Prerequisite Context from Prior Tasks:\n1. first result\n2. second\n"
+        );
     }
 
     #[test]
@@ -228,5 +301,29 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("run_group"));
+    }
+
+    #[test]
+    fn task_source_defaults_to_user_and_round_trips() {
+        let task = Task::new("Work", "Output");
+        assert_eq!(task.source, TaskSource::User);
+        assert_eq!(task.source.as_str(), "user");
+
+        let turn = Task::new("Reply", "Output").from_source(TaskSource::ChannelTurn);
+        assert_eq!(turn.source.as_str(), "channel_turn");
+        let value = serde_json::to_value(&turn).unwrap();
+        assert_eq!(value["source"], "channel_turn");
+
+        let legacy: Task = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "description": "Old task",
+            "expected_output": "Output",
+            "assigned_agent": null,
+            "context_tasks": [],
+            "status": "pending",
+        }))
+        .unwrap();
+        assert_eq!(legacy.source, TaskSource::User);
+        assert_eq!(TaskSource::ConversationTurn.as_str(), "conversation_turn");
     }
 }

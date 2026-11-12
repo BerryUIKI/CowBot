@@ -8,19 +8,24 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split, context_usage_state, project_context, CacheUsageSummary, CompactionOutcome,
-    ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
-    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS,
-    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    compaction_split_by, context_entry_tokens, context_usage_state, project_context,
+    CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
+    ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
+    ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
+    ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
+    MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
-use cowbot_core::task::{Task, TaskId};
-use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord, UsageTotals};
-use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
+use cowbot_core::prompt::{PromptMemory, PromptSlot, PromptSlotName};
+use cowbot_core::task::{Task, TaskId, TaskSource};
+use cowbot_core::usage::{LlmCallKind, LlmCallRecord, TokenCounter, UsageTotals};
+use cowbot_llm::{
+    token_counter_for_model, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole,
+    LlmProvider,
+};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
@@ -28,7 +33,9 @@ use crate::channel_agents::{
     ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
 };
 use crate::channels::{normalize_channel_name, ChannelService};
-use crate::memory::MemoryService;
+use crate::compaction_locks::CompactionLocks;
+use crate::memory::{MemoryService, RecalledMemory};
+use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
@@ -37,6 +44,11 @@ const MAX_TITLE_CHARS: usize = 68;
 
 /// Time one router completion may take before the turn falls back.
 const ROUTER_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Time one compaction summary request may take. The per-branch lock is held
+/// for this long at most, so a hung provider cannot block the branch until
+/// the process restarts.
+const COMPACTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Display messages shown to the router.
 const ROUTER_HISTORY_LIMIT: usize = 10;
@@ -77,6 +89,7 @@ pub struct ConversationService {
     channels: ChannelService,
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
+    compaction_locks: Arc<CompactionLocks>,
 }
 
 impl ConversationService {
@@ -88,7 +101,16 @@ impl ConversationService {
             bus,
             workspace_id,
             session_decisions: None,
+            compaction_locks: Arc::new(CompactionLocks::new()),
         }
+    }
+
+    /// Share the process-wide compaction registry with another service
+    /// instance. The desktop and the channel agent service both handle
+    /// conversation turns, so they must contend on the same per-branch locks.
+    pub fn with_compaction_locks(mut self, locks: Arc<CompactionLocks>) -> Self {
+        self.compaction_locks = locks;
+        self
     }
 
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
@@ -279,6 +301,7 @@ impl ConversationService {
         }
         let settings = self.settings(channel_id).await?;
         let agents = self.store.list_agents(&self.workspace_id).await?;
+        let counter = token_counter_for_model(&settings.model);
         let default_name = resolve_default_responder(&settings, &participants)
             .0
             .map(|agent| agent.name.clone());
@@ -293,17 +316,23 @@ impl ConversationService {
                 .list_context_entries(channel_id, &agent.id)
                 .await?;
             let system_tokens = if group {
-                estimate_tokens(&group_system_prompt(
-                    agent,
-                    &participants,
-                    default_name.as_deref(),
-                    None,
-                    &agents,
-                ))
+                counter.count_message(
+                    &group_system_prompt(
+                        counter.as_ref(),
+                        agent,
+                        &participants,
+                        default_name.as_deref(),
+                        None,
+                        &agents,
+                    )
+                    .text,
+                )
             } else {
-                estimate_tokens(&conversation_system_prompt(agent, &agents))
+                counter.count_message(
+                    &conversation_system_prompt(counter.as_ref(), agent, &agents).text,
+                )
             };
-            let projection = project_context(system_tokens, 0, &entries);
+            let projection = project_context(counter.as_ref(), system_tokens, 0, &entries);
             // What this participant's next turn would inject, without touching
             // recall statistics. An empty query leaves notes and pinned entries.
             let memory_tokens = self
@@ -410,6 +439,7 @@ impl ConversationService {
             return Ok(ChannelTurnReport::default());
         };
         let agents = self.store.list_agents(&self.workspace_id).await?;
+        let counter = token_counter_for_model(&settings.model);
 
         // The user message enters the branch before assembly, so the model
         // request is exactly the active branch plus a fresh system prompt.
@@ -428,16 +458,26 @@ impl ConversationService {
             .await?;
         let memory = self
             .memory
-            .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+            .recall_for_prompt_memory(Some(&channel.id), &agent.id, message.content.trim())
             .await;
-        let messages = assemble_conversation_messages(&agent, &agents, &entries, memory.as_deref());
+        let assembled = assemble_conversation_messages(
+            counter.as_ref(),
+            &agent,
+            &agents,
+            &entries,
+            memory.as_ref().map(|memory| memory.block.as_str()),
+        );
+        let snapshot_context =
+            snapshot_context_for(&assembled.slots, memory.as_ref(), counter.as_ref());
+        let messages = assembled.messages;
 
         let task = Task::new(
             message.content.trim(),
             "A concise reply addressed to the user in this conversation.",
         )
         .assign_to(agent.id.clone())
-        .in_channel(channel.id.clone());
+        .in_channel(channel.id.clone())
+        .from_source(TaskSource::ConversationTurn);
         let task_id = task.id.clone();
 
         let requester = match &message.sender {
@@ -474,6 +514,7 @@ impl ConversationService {
                 messages,
                 channel.id.clone(),
                 agent.id.clone(),
+                snapshot_context,
             )
             .await?;
 
@@ -519,6 +560,7 @@ impl ConversationService {
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
         let participants = self.load_participants(channel).await?;
+        let counter = token_counter_for_model(&settings.model);
         if participants.is_empty() {
             self.channels
                 .post_system_notice(
@@ -662,6 +704,7 @@ impl ConversationService {
                 .filter(|window| *window > 0);
             if let Some(window) = window {
                 let tool_tokens = capacity.map(|capacity| capacity.tool_tokens).unwrap_or(0);
+                let mut compaction_notice = None;
                 if settings.auto_compact
                     && self
                         .branch_crosses_threshold(
@@ -671,42 +714,77 @@ impl ConversationService {
                             default_name.as_deref(),
                             options.platform_context.as_deref(),
                             &agents,
+                            counter.as_ref(),
                             tool_tokens,
                             window,
                             settings.compact_threshold,
                         )
                         .await?
                 {
-                    let outcome = self
+                    match self
                         .compact_branch(channel, agent, llm.clone(), &settings.model, false)
-                        .await?;
-                    if outcome.compacted {
-                        auto_compacted.push(agent.name.clone());
+                        .await
+                    {
+                        Ok(outcome) => {
+                            if outcome.compacted {
+                                auto_compacted.push(agent.name.clone());
+                            } else if outcome.in_progress {
+                                compaction_notice = Some(
+                                    "its context is being compacted; try again shortly".to_string(),
+                                );
+                            } else if outcome
+                                .reason
+                                .as_deref()
+                                .is_some_and(|reason| reason.contains("invalid sequence numbers"))
+                            {
+                                compaction_notice = Some(
+                                    "its context branch cannot be compacted; start a new \
+                                     conversation or re-import the workspace"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            // Automatic compaction is an optimization. A
+                            // provider or store failure must not abort the
+                            // user's turn; the capacity check below decides.
+                            tracing::warn!(
+                                error = %error,
+                                agent = %agent.name,
+                                "Automatic compaction failed; answering without it"
+                            );
+                        }
                     }
                 }
                 let entries = self
                     .store
                     .list_context_entries(&channel.id, &agent.id)
                     .await?;
-                let system_tokens = estimate_tokens(&group_system_prompt(
-                    agent,
-                    &participants,
-                    default_name.as_deref(),
-                    options.platform_context.as_deref(),
-                    &agents,
-                ));
-                let projection = project_context(system_tokens, tool_tokens, &entries);
+                let system_tokens = counter.count_message(
+                    &group_system_prompt(
+                        counter.as_ref(),
+                        agent,
+                        &participants,
+                        default_name.as_deref(),
+                        options.platform_context.as_deref(),
+                        &agents,
+                    )
+                    .text,
+                );
+                let projection =
+                    project_context(counter.as_ref(), system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
                     skipped.push(agent.id.clone());
+                    let notice = match compaction_notice {
+                        Some(detail) => format!("{} was skipped because {}.", agent.name, detail),
+                        None => format!(
+                            "{} was skipped because its context is full. Clear or compact \
+                             its context to include it again.",
+                            agent.name
+                        ),
+                    };
                     self.channels
-                        .post_system_notice(
-                            &channel.id,
-                            &format!(
-                                "{} was skipped because its context is full. Clear or compact \
-                                 its context to include it again.",
-                                agent.name
-                            ),
-                        )
+                        .post_system_notice(&channel.id, &notice)
                         .await?;
                     continue;
                 }
@@ -790,23 +868,28 @@ impl ConversationService {
                 .await?;
             let memory = self
                 .memory
-                .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+                .recall_for_prompt_memory(Some(&channel.id), &agent.id, message.content.trim())
                 .await;
-            let messages = assemble_group_messages(
+            let assembled = assemble_group_messages(
+                counter.as_ref(),
                 agent,
                 &participants,
                 default_name.as_deref(),
                 platform,
                 &agents,
                 &entries,
-                memory.as_deref(),
+                memory.as_ref().map(|memory| memory.block.as_str()),
             );
+            let snapshot_context =
+                snapshot_context_for(&assembled.slots, memory.as_ref(), counter.as_ref());
+            let messages = assembled.messages;
             let task = Task::new(
                 message.content.trim(),
                 "A concise reply addressed to the user in this group conversation.",
             )
             .in_channel(channel.id.clone())
-            .assign_to(agent.id.clone());
+            .assign_to(agent.id.clone())
+            .from_source(TaskSource::ConversationTurn);
             let mut task_options = run_options.clone();
             if options.approval_level == ApprovalLevel::PlanOnly {
                 task_options.capture_plan_task = Some(task.id.clone());
@@ -820,6 +903,7 @@ impl ConversationService {
                     messages,
                     channel.id.clone(),
                     agent.id.clone(),
+                    snapshot_context,
                 )
                 .await?;
             tasks.push(task.id);
@@ -1056,6 +1140,7 @@ impl ConversationService {
         default_name: Option<&str>,
         platform_context: Option<&str>,
         agents: &[AgentProfile],
+        counter: &dyn TokenCounter,
         tool_tokens: u32,
         window: u32,
         compact_threshold: u32,
@@ -1064,14 +1149,18 @@ impl ConversationService {
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
-        let system_tokens = estimate_tokens(&group_system_prompt(
-            agent,
-            participants,
-            default_name,
-            platform_context,
-            agents,
-        ));
-        let projection = project_context(system_tokens, tool_tokens, &entries);
+        let system_tokens = counter.count_message(
+            &group_system_prompt(
+                counter,
+                agent,
+                participants,
+                default_name,
+                platform_context,
+                agents,
+            )
+            .text,
+        );
+        let projection = project_context(counter, system_tokens, tool_tokens, &entries);
         let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
         Ok(percent
             .map(|percent| percent >= compact_threshold as f32)
@@ -1102,8 +1191,9 @@ impl ConversationService {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let counter = token_counter_for_model(model);
         let history = self
-            .render_router_history(channel, message, participants)
+            .render_router_history(channel, message, participants, counter.as_ref())
             .await?;
         let request = ChatCompletionRequest {
             model: model.to_string(),
@@ -1131,7 +1221,7 @@ impl ConversationService {
             }
         };
 
-        self.record_router_usage(channel, model, &call_id, &response)
+        self.record_router_usage(channel, model, &call_id, &request, &response)
             .await;
 
         let Some(content) = response
@@ -1181,6 +1271,7 @@ impl ConversationService {
         channel: &Channel,
         model: &str,
         call_id: &str,
+        request: &ChatCompletionRequest,
         response: &ChatCompletionResponse,
     ) {
         let mut record = LlmCallRecord::new(LlmCallKind::Router, model.to_string());
@@ -1191,6 +1282,13 @@ impl ConversationService {
         if let Err(error) = self.store.record_llm_call(&record).await {
             tracing::warn!(error = %error, "Failed to record router usage");
         }
+        self.record_prompt_snapshot(
+            &record.id,
+            request,
+            LlmCallKind::Router,
+            instruction_context(request),
+        )
+        .await;
     }
 
     async fn render_router_history(
@@ -1198,6 +1296,7 @@ impl ConversationService {
         channel: &Channel,
         message: &ChannelMessage,
         participants: &[AgentProfile],
+        counter: &dyn TokenCounter,
     ) -> CowResult<String> {
         let messages = self.store.list_messages(&channel.id, 50).await?;
         let mut lines = Vec::new();
@@ -1219,7 +1318,7 @@ impl ConversationService {
                 "{author}: {}",
                 truncate_chars(entry.content.trim(), ROUTER_MESSAGE_CHARS)
             );
-            let cost = estimate_tokens(&line);
+            let cost = counter.count(&line);
             if tokens.saturating_add(cost) > ROUTER_INPUT_TOKENS && !lines.is_empty() {
                 break;
             }
@@ -1288,10 +1387,23 @@ impl ConversationService {
         model: &str,
         announce: bool,
     ) -> CowResult<CompactionOutcome> {
+        // Claim the branch before reading it. The lock covers the model call
+        // and the guarded write, so a second request cannot summarize the
+        // same prefix and then discover the branch moved.
+        let key = (channel.id.clone(), agent.id.clone());
+        let Some(_guard) = self.compaction_locks.try_acquire(key) else {
+            return Ok(CompactionOutcome {
+                in_progress: true,
+                reason: Some("A compaction is already running for this branch.".to_string()),
+                ..CompactionOutcome::default()
+            });
+        };
+
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
             .await?;
+        let counter = token_counter_for_model(model);
         let active = entries
             .iter()
             .filter(|entry| !entry.excluded)
@@ -1301,19 +1413,42 @@ impl ConversationService {
             .iter()
             .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
 
-        let split = compaction_split(&active);
+        // The store's renumber uses negative sequences as a staging range.
+        // Reject a branch with non-positive rows before paying for a summary;
+        // the store still guards the write for a cross-process import or edit.
+        if entries.iter().any(|entry| entry.seq <= 0) {
+            return Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before,
+                tokens_after: tokens_before,
+                reason: Some(
+                    "This context branch has invalid sequence numbers; start a new \
+                     conversation or re-import the workspace."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            });
+        }
+
+        let split = compaction_split_by(&active, |entry| {
+            context_entry_tokens(counter.as_ref(), entry)
+        });
         if split == 0 {
             return Ok(CompactionOutcome {
                 compacted: false,
                 summarized_entries: 0,
                 tokens_before,
                 tokens_after: tokens_before,
-                summary: None,
+                reason: Some("There are no older entries to summarize.".to_string()),
+                ..CompactionOutcome::default()
             });
         }
 
         let summarized = &active[..split];
-        let kept = &active[split..];
+        // `compaction_split_by` guarantees at least one kept entry, so this is
+        // the sequence the summary will occupy after the tail shifts.
+        let cutoff_seq = active[split].seq;
         let transcript = summary_transcript(summarized);
         let request = ChatCompletionRequest {
             model: model.to_string(),
@@ -1330,8 +1465,22 @@ impl ConversationService {
             tools: Vec::new(),
             temperature: Some(0.2),
         };
-        let response = llm.chat_complete(&request).await?;
-        self.record_compaction_usage(channel, agent, model, &response)
+        let response = match tokio::time::timeout(COMPACTION_TIMEOUT, llm.chat_complete(&request))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Ok(CompactionOutcome {
+                    compacted: false,
+                    summarized_entries: 0,
+                    tokens_before,
+                    tokens_after: tokens_before,
+                    reason: Some("The summary request timed out; nothing was written.".to_string()),
+                    ..CompactionOutcome::default()
+                });
+            }
+        };
+        self.record_compaction_usage(channel, agent, model, &request, &response)
             .await;
 
         let summary_text = response
@@ -1349,49 +1498,78 @@ impl ConversationService {
             agent.id.clone(),
             format!("Summary of the earlier conversation:\n\n{summary_text}"),
         );
-        let kept_tokens = kept
-            .iter()
-            .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
-        let tokens_after = kept_tokens.saturating_add(summary.tokens);
 
         let mut event = ContextEvent::new(
             channel.id.clone(),
             agent.id.clone(),
             ContextEventKind::Compact,
             tokens_before,
-            tokens_after,
+            0,
         );
         event.detail = Some(format!("summarized {} entries", summarized.len()));
         let excluded_ids = summarized
             .iter()
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
-        self.store
-            .compact_context(&summary, &excluded_ids, &event)
+        let write = self
+            .store
+            .compact_context(&summary, &excluded_ids, cutoff_seq, &mut event)
             .await?;
 
-        if announce {
-            self.channels
-                .post_system_notice(
-                    &channel.id,
-                    &format!(
-                        "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
-                         Earlier messages stay visible but are no longer sent to the model.",
-                        summarized.len(),
-                        tokens_before,
-                        tokens_after
-                    ),
-                )
-                .await?;
-        }
+        match write {
+            CompactionWrite::Applied {
+                tokens_before,
+                tokens_after,
+                ..
+            } => {
+                if announce {
+                    self.channels
+                        .post_system_notice(
+                            &channel.id,
+                            &format!(
+                                "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
+                                 Earlier messages stay visible but are no longer sent to the model.",
+                                summarized.len(),
+                                tokens_before,
+                                tokens_after
+                            ),
+                        )
+                        .await?;
+                }
 
-        Ok(CompactionOutcome {
-            compacted: true,
-            summarized_entries: summarized.len() as u32,
-            tokens_before,
-            tokens_after,
-            summary: Some(summary_text),
-        })
+                Ok(CompactionOutcome {
+                    compacted: true,
+                    summarized_entries: summarized.len() as u32,
+                    tokens_before,
+                    tokens_after,
+                    summary: Some(summary_text),
+                    in_progress: false,
+                    reason: None,
+                })
+            }
+            CompactionWrite::Stale => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "The context changed while it was being summarized; nothing was written."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            }),
+            CompactionWrite::Empty => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "The context was cleared while it was being summarized; nothing was written."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            }),
+        }
     }
 
     /// Exclude every active entry from future model requests.
@@ -1468,25 +1646,13 @@ impl ConversationService {
                     agent_id.0, channel.name
                 ))
             })?;
-        let entries = self
+        let (cleared, tokens_before) = self
             .store
-            .list_context_entries(&channel.id, &agent.id)
+            .exclude_active_context_entries(&channel.id, &agent.id)
             .await?;
-        let active = entries
-            .iter()
-            .filter(|entry| !entry.excluded)
-            .collect::<Vec<_>>();
-        let tokens_before = active
-            .iter()
-            .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
-        let ids = active
-            .iter()
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
-        if ids.is_empty() {
+        if cleared == 0 {
             return Ok(0);
         }
-        self.store.exclude_context_entries(&ids).await?;
         let event = ContextEvent::new(
             channel.id.clone(),
             agent.id.clone(),
@@ -1505,7 +1671,7 @@ impl ConversationService {
                 ),
             )
             .await?;
-        Ok(ids.len() as u64)
+        Ok(cleared)
     }
 
     async fn conversation_channel(&self, channel_id: &ChannelId) -> CowResult<Channel> {
@@ -1560,6 +1726,7 @@ impl ConversationService {
         channel: &Channel,
         agent: &AgentProfile,
         model: &str,
+        request: &ChatCompletionRequest,
         response: &cowbot_llm::ChatCompletionResponse,
     ) {
         let mut record = LlmCallRecord::new(LlmCallKind::Compact, model.to_string());
@@ -1569,6 +1736,32 @@ impl ConversationService {
         record.raw_usage = response.raw_usage.clone();
         if let Err(error) = self.store.record_llm_call(&record).await {
             tracing::warn!(error = %error, "Failed to record compaction usage");
+        }
+        self.record_prompt_snapshot(
+            &record.id,
+            request,
+            LlmCallKind::Compact,
+            instruction_context(request),
+        )
+        .await;
+    }
+
+    /// Store the sealed request behind one call, logging and continuing on
+    /// failure. Usage is already persisted by the caller.
+    async fn record_prompt_snapshot(
+        &self,
+        llm_call_id: &str,
+        request: &ChatCompletionRequest,
+        call_kind: LlmCallKind,
+        context: SnapshotContext,
+    ) {
+        let snapshots = PromptSnapshotService::new(self.store.clone(), self.workspace_id.clone());
+        let snapshot = seal_with_context(
+            cowbot_llm::snapshot_request(&request.model, call_kind, request),
+            &context,
+        );
+        if let Err(error) = snapshots.record(llm_call_id, &snapshot).await {
+            tracing::warn!(error = %error, "Failed to record a prompt snapshot");
         }
     }
 
@@ -1707,7 +1900,7 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 /// participant named `main` (the built-in Main Assistant), then to the first
 /// participant in order. The boolean reports that fallback happened so the
 /// turn can explain it. An unset responder stays silent.
-fn resolve_default_responder<'a>(
+pub(crate) fn resolve_default_responder<'a>(
     settings: &ConversationSettings,
     participants: &'a [AgentProfile],
 ) -> (Option<&'a AgentProfile>, bool) {
@@ -1724,18 +1917,81 @@ fn resolve_default_responder<'a>(
     (fallback, fallback.is_some())
 }
 
+/// A rendered system prompt and the named slots it was built from.
+///
+/// Slot token counts are prefix differences over [`Self::text`], so they sum to
+/// the token count of the prompt. Sending it costs message framing on top
+/// (ADR-0035, ADR-0036).
+#[derive(Debug, Clone)]
+pub(crate) struct SystemPromptDraft {
+    pub text: String,
+    pub slots: Vec<PromptSlot>,
+}
+
+/// Builds a system prompt slot by slot, pricing each slot as the difference
+/// between the counted prefix and the previous one.
+struct SlotWriter<'a> {
+    counter: &'a dyn TokenCounter,
+    text: String,
+    slots: Vec<PromptSlot>,
+    counted: u32,
+}
+
+impl<'a> SlotWriter<'a> {
+    fn new(counter: &'a dyn TokenCounter) -> Self {
+        Self {
+            counter,
+            text: String::new(),
+            slots: Vec::new(),
+            counted: 0,
+        }
+    }
+
+    fn push(&mut self, name: PromptSlotName, separator: &str, content: String) {
+        self.text.push_str(separator);
+        self.text.push_str(&content);
+        let total = self.counter.count(&self.text);
+        let tokens = total.saturating_sub(self.counted);
+        self.counted = total;
+        self.slots.push(PromptSlot {
+            name,
+            content,
+            tokens,
+        });
+    }
+
+    fn finish(self) -> SystemPromptDraft {
+        SystemPromptDraft {
+            text: self.text,
+            slots: self.slots,
+        }
+    }
+}
+
+/// The private-conversation instruction of a single-agent conversation.
+const CONVERSATION_CONVENTION: &str = "You are in a private, continuous conversation with the \
+user. The messages that follow are the retained conversation context. Reply to the latest user \
+message, use tools when they help, and do not restate the context.";
+
+/// How peer replies appear to a group participant.
+const PEER_CONVENTION: &str = "Replies from other participants appear as user messages prefixed \
+with the speaker's name in brackets, for example [Planner] ... . They are teammate history: not \
+the user's words and not your own reply. Answer the latest user message as yourself and do not \
+speak for other participants.";
+
 /// System prompt for one participant of a group conversation.
 ///
 /// It is stable across turns: agent prompt, platform context, participant
 /// roster, default responder, and the peer-reply convention. The active branch
 /// follows as ordinary chat messages.
 pub(crate) fn group_system_prompt(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     participants: &[AgentProfile],
     default_responder: Option<&str>,
     platform_context: Option<&str>,
     agents: &[AgentProfile],
-) -> String {
+) -> SystemPromptDraft {
     let roster = participants
         .iter()
         .map(|participant| format!("- {}", participant.name))
@@ -1746,22 +2002,33 @@ pub(crate) fn group_system_prompt(
         None => "Messages that address nobody stay unanswered.".to_string(),
     };
 
-    format!(
-        "{agent}\n\n{platform}\n\n\
-         You are one participant in a group conversation. Participants, in order:\n{roster}\n\n\
-         {default_line} Replies from other participants appear as user messages prefixed \
-         with the speaker's name in brackets, for example [Planner] ... . They are teammate \
-         history: not the user's words and not your own reply. Answer the latest user \
-         message as yourself and do not speak for other participants.",
-        agent = agent.build_system_prompt(),
-        platform = ChannelAgentService::platform_context(agents, platform_context),
-        roster = roster,
-        default_line = default_line,
-    )
+    let mut writer = SlotWriter::new(counter);
+    writer.push(PromptSlotName::Agent, "", agent.build_system_prompt());
+    writer.push(
+        PromptSlotName::Platform,
+        "\n\n",
+        ChannelAgentService::platform_context(agents, platform_context),
+    );
+    writer.push(
+        PromptSlotName::Roster,
+        "\n\n",
+        format!(
+            "You are one participant in a group conversation. Participants, in order:\n{roster}"
+        ),
+    );
+    writer.push(PromptSlotName::DefaultResponder, "\n\n", default_line);
+    writer.push(
+        PromptSlotName::PeerConvention,
+        " ",
+        PEER_CONVENTION.to_string(),
+    );
+    writer.finish()
 }
 
 /// Assemble a group participant's request from its active branch.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble_group_messages(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     participants: &[AgentProfile],
     default_responder: Option<&str>,
@@ -1769,14 +2036,16 @@ pub(crate) fn assemble_group_messages(
     agents: &[AgentProfile],
     entries: &[ContextEntry],
     memory: Option<&str>,
-) -> Vec<ChatMessage> {
-    let mut messages = vec![ChatMessage::system(group_system_prompt(
+) -> AssembledRequest {
+    let prompt = group_system_prompt(
+        counter,
         agent,
         participants,
         default_responder,
         platform_context,
         agents,
-    ))];
+    );
+    let mut messages = vec![ChatMessage::system(prompt.text)];
     if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
         messages.push(ChatMessage::system(memory));
     }
@@ -1786,7 +2055,10 @@ pub(crate) fn assemble_group_messages(
             .filter(|entry| !entry.excluded)
             .map(entry_to_message),
     );
-    messages
+    AssembledRequest {
+        messages,
+        slots: prompt.slots,
+    }
 }
 
 /// Outcomes of one group drain, in settle order.
@@ -1805,30 +2077,49 @@ struct SettledGroupReply {
     content: Option<String>,
 }
 
-/// System prompt for a conversation turn.
-pub(crate) fn conversation_system_prompt(agent: &AgentProfile, agents: &[AgentProfile]) -> String {
-    format!(
-        "{}\n\n{}\n\n\
-         You are in a private, continuous conversation with the user. The messages that \
-         follow are the retained conversation context. Reply to the latest user message, \
-         use tools when they help, and do not restate the context.",
-        agent.build_system_prompt(),
-        ChannelAgentService::platform_context(agents, None)
-    )
+/// System prompt for a single-agent conversation turn.
+pub(crate) fn conversation_system_prompt(
+    counter: &dyn TokenCounter,
+    agent: &AgentProfile,
+    agents: &[AgentProfile],
+) -> SystemPromptDraft {
+    let mut writer = SlotWriter::new(counter);
+    writer.push(PromptSlotName::Agent, "", agent.build_system_prompt());
+    writer.push(
+        PromptSlotName::Platform,
+        "\n\n",
+        ChannelAgentService::platform_context(agents, None),
+    );
+    writer.push(
+        PromptSlotName::ConversationConvention,
+        "\n\n",
+        CONVERSATION_CONVENTION.to_string(),
+    );
+    writer.finish()
+}
+
+/// A rendered model request and the named system-prompt slots behind it.
+///
+/// The slots travel with the request so a prompt snapshot can record what the
+/// system prompt was assembled from, not only its finished text (ADR-0037).
+#[derive(Debug, Clone)]
+pub(crate) struct AssembledRequest {
+    pub messages: Vec<ChatMessage>,
+    pub slots: Vec<PromptSlot>,
 }
 
 /// Assemble the model request from the conversation's active branch.
 ///
 /// The order is deterministic: system prompt first, then entries by sequence.
 pub(crate) fn assemble_conversation_messages(
+    counter: &dyn TokenCounter,
     agent: &AgentProfile,
     agents: &[AgentProfile],
     entries: &[ContextEntry],
     memory: Option<&str>,
-) -> Vec<ChatMessage> {
-    let mut messages = vec![ChatMessage::system(conversation_system_prompt(
-        agent, agents,
-    ))];
+) -> AssembledRequest {
+    let prompt = conversation_system_prompt(counter, agent, agents);
+    let mut messages = vec![ChatMessage::system(prompt.text)];
     if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
         messages.push(ChatMessage::system(memory));
     }
@@ -1838,7 +2129,50 @@ pub(crate) fn assemble_conversation_messages(
             .filter(|entry| !entry.excluded)
             .map(entry_to_message),
     );
-    messages
+    AssembledRequest {
+        messages,
+        slots: prompt.slots,
+    }
+}
+
+/// What a prompt snapshot records beside the finished request.
+///
+/// The slot names, their contents, and the memory entry ids are lost once the
+/// messages are assembled, so the turn captures them here (ADR-0037).
+fn snapshot_context_for(
+    slots: &[PromptSlot],
+    recalled: Option<&RecalledMemory>,
+    counter: &dyn TokenCounter,
+) -> SnapshotContext {
+    let memory = recalled.map(|recalled| PromptMemory {
+        block: recalled.block.clone(),
+        tokens: counter.count_message(&recalled.block),
+    });
+    let selected = recalled
+        .map(|recalled| recalled.entry_ids.clone())
+        .unwrap_or_default();
+    SnapshotContext::default()
+        .with_slots(slots.to_vec())
+        .with_memory(memory, selected)
+}
+
+/// The fixed system prompt of a router, compaction, or extraction call as one
+/// named slot, so the snapshot explains a prompt that was not assembled from
+/// agent and platform slots.
+fn instruction_context(request: &ChatCompletionRequest) -> SnapshotContext {
+    let Some(system) = request
+        .messages
+        .first()
+        .filter(|message| message.role == ChatRole::System)
+    else {
+        return SnapshotContext::default();
+    };
+    let counter = token_counter_for_model(&request.model);
+    SnapshotContext::default().with_slots(vec![PromptSlot {
+        name: PromptSlotName::Instruction,
+        content: system.content.clone(),
+        tokens: counter.count(&system.content),
+    }])
 }
 
 fn entry_to_message(entry: &ContextEntry) -> ChatMessage {
@@ -1917,6 +2251,7 @@ fn render_entry(entry: &ContextEntry) -> String {
 mod tests {
     use super::*;
     use cowbot_core::conversation::ContextToolCall;
+    use cowbot_core::usage::ESTIMATE_COUNTER;
     use cowbot_llm::ChatRole;
 
     fn entry(role: ContextRole, content: &str) -> ContextEntry {
@@ -1931,6 +2266,55 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_slots_render_the_original_text() {
+        let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+        let coder = AgentProfile::new("Coder", "Engineer", "Ship", "Careful");
+        let participants = vec![planner.clone(), coder.clone()];
+
+        let group = group_system_prompt(
+            &ESTIMATE_COUNTER,
+            &planner,
+            &participants,
+            Some("Coder"),
+            None,
+            &participants,
+        );
+        assert_eq!(
+            group.text,
+            format!(
+                "{}\n\n{}\n\nYou are one participant in a group conversation. Participants, in \
+                 order:\n- Planner\n- Coder\n\nMessages that address nobody are answered by Coder. \
+                 Replies from other participants appear as user messages prefixed with the \
+                 speaker's name in brackets, for example [Planner] ... . They are teammate \
+                 history: not the user's words and not your own reply. Answer the latest user \
+                 message as yourself and do not speak for other participants.",
+                planner.build_system_prompt(),
+                ChannelAgentService::platform_context(&participants, None),
+            )
+        );
+        assert_eq!(
+            group.slots.iter().map(|slot| slot.tokens).sum::<u32>(),
+            ESTIMATE_COUNTER.count(&group.text)
+        );
+
+        let single = conversation_system_prompt(&ESTIMATE_COUNTER, &planner, &participants);
+        assert_eq!(
+            single.text,
+            format!(
+                "{}\n\n{}\n\nYou are in a private, continuous conversation with the user. The \
+                 messages that follow are the retained conversation context. Reply to the latest \
+                 user message, use tools when they help, and do not restate the context.",
+                planner.build_system_prompt(),
+                ChannelAgentService::platform_context(&participants, None),
+            )
+        );
+        assert_eq!(
+            single.slots.iter().map(|slot| slot.tokens).sum::<u32>(),
+            ESTIMATE_COUNTER.count(&single.text)
+        );
+    }
+
+    #[test]
     fn assembly_is_deterministic_and_skips_excluded_entries() {
         let agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
         let mut excluded = entry(ContextRole::User, "forgotten");
@@ -1942,10 +2326,23 @@ mod tests {
             entry(ContextRole::User, "latest question"),
         ];
 
-        let first =
-            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
-        let second =
-            assemble_conversation_messages(&agent, std::slice::from_ref(&agent), &entries, None);
+        let first = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            None,
+        );
+        let second = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
+            &agent,
+            std::slice::from_ref(&agent),
+            &entries,
+            None,
+        );
+
+        let first = first.messages;
+        let second = second.messages;
 
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(second.iter()) {
@@ -1965,11 +2362,13 @@ mod tests {
         let entries = vec![entry(ContextRole::User, "question")];
 
         let messages = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &entries,
             Some(cowbot_core::memory::MEMORY_BLOCK_HEADER),
-        );
+        )
+        .messages;
         assert_eq!(messages[0].role, ChatRole::System);
         assert_eq!(
             messages[1].content,
@@ -1978,11 +2377,13 @@ mod tests {
         assert_eq!(messages[2].content, "question");
 
         let blank = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &entries,
             Some("  "),
-        );
+        )
+        .messages;
         assert_eq!(
             blank[1].content, "question",
             "a blank memory block adds no message"
@@ -2004,11 +2405,13 @@ mod tests {
         tool.recount();
 
         let messages = assemble_conversation_messages(
+            &ESTIMATE_COUNTER,
             &agent,
             std::slice::from_ref(&agent),
             &[assistant, tool],
             None,
-        );
+        )
+        .messages;
         assert_eq!(
             messages[1].tool_calls.as_ref().unwrap()[0].name,
             "read_file"

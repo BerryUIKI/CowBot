@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for an agent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(pub String);
@@ -21,6 +22,7 @@ impl std::fmt::Display for AgentId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Agent definition capturing role, goal, backstory, and capabilities (inspired by CrewAI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {

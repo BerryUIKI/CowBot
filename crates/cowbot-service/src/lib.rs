@@ -9,11 +9,14 @@ mod assignments;
 mod bootstrap;
 mod channel_agents;
 mod channels;
+mod compaction_locks;
 mod conversations;
 mod crew_runner;
 mod memory;
 mod permissions;
 mod permissions_rules;
+mod preview;
+mod prompt_snapshots;
 mod remember;
 mod scheduler;
 mod session_decisions;
@@ -28,9 +31,10 @@ pub use approvals::{
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
 pub use channel_agents::{
-    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
+    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity, SideAnswer,
 };
 pub use channels::ChannelService;
+pub use compaction_locks::{CompactionGuard, CompactionLocks};
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
 pub use memory::{
@@ -42,6 +46,8 @@ pub use permissions::{
     PermissionRequest,
 };
 pub use permissions_rules::PermissionService;
+pub use preview::{ConversationPreview, PreviewService, TaskRunPreview};
+pub use prompt_snapshots::PromptSnapshotService;
 pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for a collaboration channel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChannelId(pub String);
@@ -24,6 +25,7 @@ impl std::fmt::Display for ChannelId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Message sender identity (Agent, Human user, or System).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "id")]
@@ -33,6 +35,7 @@ pub enum Sender {
     System,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A collaboration channel where agents and users interact (inspired by Mattermost).
 ///
 /// A channel with `agent_id` set is that agent's direct conversation: it has a
@@ -105,6 +108,7 @@ impl Channel {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A structured message posted to a channel or thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMessage {

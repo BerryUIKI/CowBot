@@ -29,12 +29,13 @@ use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
 use crate::memory::MemoryService;
 use crate::permissions::ModelPermissionEvaluator;
+use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
 /// approval policy; the agent is asked to finish with the plan itself.
-const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
+pub(crate) const PLAN_MODE_INSTRUCTION: &str = "You are in Plan mode. Do not change files, run state-changing commands, or call tools that modify the workspace; those calls are denied. Investigate with read-only tools, then answer with a concrete, numbered plan that the user can approve. Your answer is stored with the task as its plan.";
 
 /// A conversation turn whose model request is assembled before the assignment
 /// is enqueued. The per-agent context branch receives the assistant and tool
@@ -44,6 +45,8 @@ struct PreparedConversationTurn {
     messages: Vec<ChatMessage>,
     channel_id: ChannelId,
     agent_id: AgentId,
+    /// Prompt slots and memory selection behind `messages` (ADR-0037).
+    snapshot_context: SnapshotContext,
 }
 
 /// Options for one scheduled crew run.
@@ -343,6 +346,7 @@ impl AssignmentScheduler {
         messages: Vec<ChatMessage>,
         channel_id: ChannelId,
         agent_id: AgentId,
+        snapshot_context: SnapshotContext,
     ) -> CowResult<Assignment> {
         if let Ok(mut prepared) = self.prepared.lock() {
             prepared.insert(
@@ -351,6 +355,7 @@ impl AssignmentScheduler {
                     messages,
                     channel_id,
                     agent_id,
+                    snapshot_context,
                 },
             );
         }
@@ -678,7 +683,8 @@ impl AssignmentScheduler {
 
         self.assignments.start(&assignment.id).await?;
 
-        let run = Run::new(task.id.clone(), assignment.assignee.clone());
+        let run = Run::new(task.id.clone(), assignment.assignee.clone())
+            .with_agent_profile(executor.profile.clone());
         self.assignments.store().create_run(&run).await?;
 
         let mut approvals = self
@@ -696,12 +702,25 @@ impl AssignmentScheduler {
             store: self.assignments.store().clone(),
             run_id: run.id.clone(),
         });
+        let capture_prompts = self
+            .assignments
+            .store()
+            .get_prompt_snapshot_settings(&self.workspace_id)
+            .await
+            .map(|settings| settings.enabled)
+            .unwrap_or(false);
         let usage_recorder = Arc::new(RunUsageRecorder {
             store: self.assignments.store().clone(),
+            workspace_id: self.workspace_id.clone(),
             run_id: run.id.clone(),
             task_id: task.id.clone(),
             agent_id: assignment.assignee.clone(),
             channel_id: task.channel_id.clone(),
+            capture_prompts,
+            snapshot_context: prepared
+                .as_ref()
+                .map(|turn| turn.snapshot_context.clone())
+                .unwrap_or_default(),
         });
 
         let messages = prepared.as_ref().map(|turn| turn.messages.clone());
@@ -851,14 +870,24 @@ impl ToolCallRecorder for RunToolCallRecorder {
 /// Persists LLM usage under the run that produced it.
 struct RunUsageRecorder {
     store: Store,
+    workspace_id: WorkspaceId,
     run_id: RunId,
     task_id: TaskId,
     agent_id: AgentId,
     channel_id: Option<ChannelId>,
+    /// Whether the workspace stored snapshots when this run started.
+    capture_prompts: bool,
+    /// Prompt slots and memory selection the turn was assembled from, when the
+    /// caller prepared the request.
+    snapshot_context: SnapshotContext,
 }
 
 #[async_trait]
 impl LlmUsageRecorder for RunUsageRecorder {
+    fn records_prompts(&self) -> bool {
+        self.capture_prompts
+    }
+
     async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()> {
         let mut record = LlmCallRecord::new(call.call_kind, call.model.clone());
         record.run_id = Some(self.run_id.clone());
@@ -867,7 +896,19 @@ impl LlmUsageRecorder for RunUsageRecorder {
         record.agent_id = Some(self.agent_id.clone());
         record.usage = call.usage.clone();
         record.raw_usage = call.raw_usage.clone();
-        self.store.record_llm_call(&record).await
+        self.store.record_llm_call(&record).await?;
+
+        // The snapshot is evidence beside the usage row, never a reason to
+        // fail the call that produced it.
+        if let Some(snapshot) = &call.snapshot {
+            let snapshots =
+                PromptSnapshotService::new(self.store.clone(), self.workspace_id.clone());
+            let sealed = seal_with_context(snapshot.clone(), &self.snapshot_context);
+            if let Err(error) = snapshots.record(&record.id, &sealed).await {
+                tracing::warn!(error = %error, "Failed to record a prompt snapshot");
+            }
+        }
+        Ok(())
     }
 }
 

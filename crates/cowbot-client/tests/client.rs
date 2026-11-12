@@ -240,6 +240,64 @@ async fn local_client_runs_a_crew_and_persists_history() {
 }
 
 #[tokio::test]
+async fn local_client_exposes_prompt_snapshots_and_their_settings() {
+    let client = LocalClient::open_in_memory().await.unwrap();
+
+    let settings = client.prompt_snapshot_settings().await.unwrap();
+    assert!(settings.enabled, "snapshots are on by default");
+    assert_eq!(settings.retention_days, 30);
+
+    let profile = StandardRoles::planner();
+    let agent_id = profile.id.clone();
+    let mut crew = Crew::new();
+    crew.add_agent(AgentInstance::new(
+        profile,
+        Arc::new(MockLlmProvider::echo()),
+        ToolRegistry::new(),
+        "mock-model",
+    ));
+    let task = Task::new("Plan the change", "A plan").assign_to(agent_id);
+    let task_id = task.id.clone();
+    crew.add_task(task);
+    client
+        .run_crew(&mut crew, ApprovalLevel::Trusted)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs(&task_id).await.unwrap();
+    let snapshots = client.list_run_prompt_snapshots(&runs[0].id).await.unwrap();
+    assert!(!snapshots.is_empty());
+    let detail = client
+        .prompt_snapshot(&snapshots[0].llm_call_id)
+        .await
+        .unwrap()
+        .expect("the call has a snapshot");
+    assert!(!detail.hash_mismatch);
+    assert!(detail.snapshot.hash_matches());
+    assert!(detail
+        .snapshot
+        .messages
+        .iter()
+        .any(|message| message.content.contains("Plan the change")));
+
+    let recent = client.list_recent_prompt_snapshots(10).await.unwrap();
+    assert_eq!(recent.len(), snapshots.len());
+
+    let updated = client
+        .update_prompt_snapshot_settings(None, Some(7))
+        .await
+        .unwrap();
+    assert_eq!(updated.retention_days, 7);
+    assert_eq!(client.purge_prompt_snapshots().await.unwrap(), 0);
+
+    let disabled = client
+        .update_prompt_snapshot_settings(Some(false), None)
+        .await
+        .unwrap();
+    assert!(!disabled.enabled);
+}
+
+#[tokio::test]
 async fn local_client_manages_notes_memory_and_settings() {
     let client = LocalClient::open_in_memory().await.unwrap();
     let agents = client
@@ -341,6 +399,38 @@ async fn local_client_manages_notes_memory_and_settings() {
     assert!(recalled.block.contains("Always answer with Rust examples."));
     assert!(recalled.block.contains("prefers Rust"));
     assert_eq!(recalled.entry_ids, vec![entry.id.clone()]);
+
+    // The context preview rebuilds the next request without writing.
+    let preview = client
+        .conversation_context_preview(
+            &conversation.id,
+            &agent.id,
+            Some("Which language?"),
+            None,
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.plan.kind,
+        cowbot_core::prompt::PromptKind::Conversation
+    );
+    assert!(!preview.plan.slots.is_empty());
+    assert_eq!(
+        preview.plan.messages.last().unwrap().content,
+        "Which language?"
+    );
+    assert_eq!(
+        preview
+            .plan
+            .recall
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.selected)
+            .count(),
+        1
+    );
 
     // The context meter exposes the estimated memory block per participant.
     let context = client.conversation_context(&conversation.id).await.unwrap();

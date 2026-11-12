@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cowbot_agent::StandardRoles;
@@ -7,17 +8,20 @@ use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    ContextEntry, ContextEntryKind, ContextEventKind, ContextRole, ConversationMode,
-    ConversationSettingsUpdate, RouteSource,
+    compaction_split_by, ContextEntry, ContextEntryKind, ContextEventKind, ContextRole,
+    ConversationMode, ConversationSettingsUpdate, RouteSource,
 };
 use cowbot_core::error::{CowError, CowResult};
-use cowbot_core::usage::TokenUsage;
+use cowbot_core::task::TaskSource;
+use cowbot_core::usage::{TokenSource, TokenUsage, MESSAGE_OVERHEAD_TOKENS};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider};
 use cowbot_service::{
-    bootstrap_local, ChannelService, ChannelTurnOptions, ConversationService, ParticipantCapacity,
+    bootstrap_local, ChannelAgentService, ChannelService, ChannelTurnOptions, ConversationService,
+    ParticipantCapacity,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
+use tokio::sync::{Barrier, Notify};
 
 struct RecordingLlm {
     requests: Mutex<Vec<ChatCompletionRequest>>,
@@ -76,6 +80,116 @@ impl LlmProvider for RecordingLlm {
             }),
             raw_usage: None,
         })
+    }
+}
+
+fn test_response(content: String) -> ChatCompletionResponse {
+    ChatCompletionResponse {
+        content: Some(content),
+        tool_calls: Vec::new(),
+        finish_reason: Some("stop".to_string()),
+        usage: Some(TokenUsage {
+            uncached_input_tokens: 20,
+            cached_input_tokens: 80,
+            output_tokens: 10,
+            ..TokenUsage::default()
+        }),
+        raw_usage: None,
+    }
+}
+
+fn is_summarizer_request(request: &ChatCompletionRequest) -> bool {
+    request
+        .messages
+        .first()
+        .map(|message| {
+            message
+                .content
+                .starts_with("You compress conversation history")
+        })
+        .unwrap_or(false)
+}
+
+/// Blocks the summarizing request until the test releases it.
+struct GatedLlm {
+    entered: Notify,
+    release: Notify,
+    summarizer_calls: Mutex<usize>,
+    answers: Mutex<u32>,
+}
+
+impl GatedLlm {
+    fn new() -> Self {
+        Self {
+            entered: Notify::new(),
+            release: Notify::new(),
+            summarizer_calls: Mutex::new(0),
+            answers: Mutex::new(0),
+        }
+    }
+
+    fn summarizer_calls(&self) -> usize {
+        *self.summarizer_calls.lock().unwrap()
+    }
+}
+
+#[async_trait]
+impl LlmProvider for GatedLlm {
+    fn name(&self) -> &str {
+        "gated"
+    }
+
+    async fn chat_complete(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        if is_summarizer_request(request) {
+            *self.summarizer_calls.lock().unwrap() += 1;
+            self.entered.notify_one();
+            self.release.notified().await;
+            return Ok(test_response("summary text".to_string()));
+        }
+        let mut answers = self.answers.lock().unwrap();
+        *answers += 1;
+        Ok(test_response(format!("answer {answers}")))
+    }
+}
+
+/// Requires two summarizer calls to enter before either returns.
+struct BarrierLlm {
+    barrier: Barrier,
+    summarizer_calls: Mutex<usize>,
+}
+
+impl BarrierLlm {
+    fn new() -> Self {
+        Self {
+            barrier: Barrier::new(2),
+            summarizer_calls: Mutex::new(0),
+        }
+    }
+
+    fn summarizer_calls(&self) -> usize {
+        *self.summarizer_calls.lock().unwrap()
+    }
+}
+
+#[async_trait]
+impl LlmProvider for BarrierLlm {
+    fn name(&self) -> &str {
+        "barrier"
+    }
+
+    async fn chat_complete(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        if is_summarizer_request(request) {
+            *self.summarizer_calls.lock().unwrap() += 1;
+            self.barrier.wait().await;
+            return Ok(test_response("summary text".to_string()));
+        }
+        Ok(test_response("answer".to_string()))
     }
 }
 
@@ -190,6 +304,43 @@ async fn post_user(channels: &ChannelService, channel: &Channel, content: &str) 
         .post_message(&channel.id, Sender::User("user-1".to_string()), content)
         .await
         .unwrap()
+}
+
+/// Append entries large enough that the compaction split has something to do.
+async fn seed_large_entries(
+    store: &Store,
+    channel: &Channel,
+    agent_id: &AgentId,
+    count: usize,
+) -> Vec<ContextEntry> {
+    let mut entries = Vec::with_capacity(count);
+    for index in 0..count {
+        let role = if index % 2 == 0 {
+            ContextRole::User
+        } else {
+            ContextRole::Assistant
+        };
+        let mut entry = ContextEntry::new(
+            channel.id.clone(),
+            agent_id.clone(),
+            role,
+            format!("turn {index} {}", "x".repeat(4_000)),
+        );
+        entry.recount();
+        store.append_context_entry(&entry).await.unwrap();
+        entries.push(entry);
+    }
+    entries
+}
+
+/// The split the service computes for its estimator-counted test model.
+///
+/// `recording-model` is unrecognized, so entries cost their persisted estimate
+/// plus one message-framing allowance each (ADR-0035).
+fn service_split(entries: &[ContextEntry]) -> usize {
+    compaction_split_by(entries, |entry| {
+        entry.tokens.saturating_add(MESSAGE_OVERHEAD_TOKENS)
+    })
 }
 
 fn agent_replies(messages: &[ChannelMessage]) -> Vec<AgentId> {
@@ -326,6 +477,46 @@ async fn conversation_creation_assigns_a_fixed_model_and_participant() {
     assert_eq!(context.agent_id, agent.id);
     assert_eq!(context.model, "recording-model");
     assert_eq!(context.projection.active_entries, 0);
+    assert!(context.projection.system_tokens > 0);
+    // An unrecognized model is counted with the character estimator and says so.
+    assert_eq!(context.projection.token_source, TokenSource::Estimate);
+    assert_eq!(
+        context.projection.token_counter.as_deref(),
+        Some("character estimate")
+    );
+    assert!(context.projection.is_estimated());
+}
+
+#[tokio::test]
+async fn context_counts_entries_with_the_conversation_model_tokenizer() {
+    let (store, agent, service, _, _) = setup().await;
+    let channel = service
+        .create(Some("Counting"), &agent.id, None, "gpt-4o")
+        .await
+        .unwrap();
+
+    let mut entry = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::User,
+        "hello world",
+    );
+    // The persisted estimate is model-independent and must not drive the meter.
+    entry.tokens = 999;
+    store.append_context_entry(&entry).await.unwrap();
+
+    let context = service.context(&channel.id).await.unwrap();
+    assert_eq!(context.projection.token_source, TokenSource::Tiktoken);
+    assert_eq!(
+        context.projection.token_counter.as_deref(),
+        Some("o200k_base")
+    );
+    assert!(!context.projection.is_estimated());
+    // `o200k_base` counts "hello world" as two tokens, plus message framing.
+    assert_eq!(
+        context.projection.latest_tokens,
+        2 + MESSAGE_OVERHEAD_TOKENS
+    );
     assert!(context.projection.system_tokens > 0);
 }
 
@@ -485,6 +676,593 @@ async fn compaction_summarizes_old_entries_and_keeps_recent_ones() {
         .await
         .unwrap();
     assert!(!again.compacted);
+}
+
+#[tokio::test]
+async fn compaction_keeps_entries_appended_during_the_summary_call() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let before = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    let active = before
+        .iter()
+        .filter(|entry| !entry.excluded)
+        .cloned()
+        .collect::<Vec<_>>();
+    let cutoff = active[service_split(&active)].seq;
+
+    let llm = Arc::new(GatedLlm::new());
+    let task = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the summarizer should be requested");
+
+    let mut appended = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::User,
+        "appended while the summary was running",
+    );
+    appended.recount();
+    let appended_seq = store.append_context_entry(&appended).await.unwrap();
+
+    llm.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(outcome.compacted);
+    assert_eq!(llm.summarizer_calls(), 1);
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    let summary = entries
+        .iter()
+        .find(|entry| entry.kind == ContextEntryKind::Summary)
+        .expect("one summary");
+    assert_eq!(summary.seq, cutoff);
+    let appended = entries
+        .iter()
+        .find(|entry| entry.id == appended.id)
+        .expect("the appended entry stays");
+    assert_eq!(appended.seq, appended_seq + 1);
+    assert!(appended.seq > summary.seq);
+
+    let active_tokens: u32 = entries
+        .iter()
+        .filter(|entry| !entry.excluded)
+        .map(|entry| entry.tokens)
+        .sum();
+    assert_eq!(outcome.tokens_after, active_tokens);
+    assert!(outcome.tokens_before > outcome.tokens_after);
+}
+
+#[tokio::test]
+async fn concurrent_compactions_on_one_branch_return_in_progress() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(GatedLlm::new());
+    let first = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the first summarizer should be requested");
+
+    let second = service
+        .compact(&channel.id, llm.clone(), "recording-model")
+        .await
+        .unwrap();
+    assert!(!second.compacted);
+    assert!(second.in_progress);
+    assert!(second.reason.is_some());
+
+    llm.release.notify_one();
+    let first = tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("the first compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(first.compacted);
+    assert_eq!(llm.summarizer_calls(), 1);
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.kind == ContextEntryKind::Summary)
+            .count(),
+        1
+    );
+    assert_eq!(
+        store
+            .list_context_events(&channel.id, &agent.id, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn compaction_times_out_without_writing() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(GatedLlm::new());
+    let task = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the summarizer should be requested");
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(121)).await;
+    let outcome = task.await.unwrap().unwrap();
+    tokio::time::resume();
+
+    assert!(!outcome.compacted);
+    assert!(!outcome.in_progress);
+    assert!(outcome
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("timed out")));
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.kind == ContextEntryKind::Summary));
+}
+
+#[tokio::test]
+async fn compaction_rejects_invalid_sequences_before_the_model_call() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    let mut imported = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::User,
+        "imported with a zero sequence",
+    );
+    imported.seq = 0;
+    store.insert_context_entry(&imported).await.unwrap();
+
+    let llm = Arc::new(RecordingLlm::new());
+    let outcome = service
+        .compact(&channel.id, llm.clone(), "recording-model")
+        .await
+        .unwrap();
+    assert!(!outcome.compacted);
+    assert!(!outcome.in_progress);
+    assert!(outcome
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("invalid sequence")));
+    assert!(llm.requests().is_empty());
+}
+
+#[tokio::test]
+async fn service_instances_sharing_the_registry_serialize_one_branch() {
+    let (store, agent, _service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+    let context = bootstrap_local(&store).await.unwrap();
+    let locks = Arc::new(cowbot_service::CompactionLocks::new());
+    let first_service = ConversationService::new(
+        store.clone(),
+        EventBus::default_bus(),
+        context.workspace.id.clone(),
+    )
+    .with_compaction_locks(locks.clone());
+    let second_service = ConversationService::new(
+        store.clone(),
+        EventBus::default_bus(),
+        context.workspace.id.clone(),
+    )
+    .with_compaction_locks(locks);
+
+    let llm = Arc::new(GatedLlm::new());
+    let first = {
+        let service = first_service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the first summarizer should be requested");
+
+    let second = second_service
+        .compact(&channel.id, llm.clone(), "recording-model")
+        .await
+        .unwrap();
+    assert!(!second.compacted);
+    assert!(second.in_progress);
+
+    llm.release.notify_one();
+    let first = tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("the first compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(first.compacted);
+    assert_eq!(llm.summarizer_calls(), 1);
+}
+
+#[tokio::test]
+async fn independent_branches_compact_concurrently() {
+    let fixture = group_fixture(None).await;
+    for participant in &fixture.participants {
+        seed_large_entries(&fixture.store, &fixture.channel, &participant.id, 6).await;
+    }
+
+    let llm = Arc::new(BarrierLlm::new());
+    let first = {
+        let service = fixture.service.clone();
+        let channel_id = fixture.channel.id.clone();
+        let agent_id = fixture.participants[0].id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move {
+            service
+                .compact_participant(&channel_id, &agent_id, llm, "recording-model")
+                .await
+        })
+    };
+    let second = {
+        let service = fixture.service.clone();
+        let channel_id = fixture.channel.id.clone();
+        let agent_id = fixture.participants[1].id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move {
+            service
+                .compact_participant(&channel_id, &agent_id, llm, "recording-model")
+                .await
+        })
+    };
+
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .expect("both branches should reach the summarizer barrier");
+    assert!(first.unwrap().unwrap().compacted);
+    assert!(second.unwrap().unwrap().compacted);
+    assert_eq!(llm.summarizer_calls(), 2);
+
+    for participant in &fixture.participants {
+        let entries = fixture
+            .store
+            .list_context_entries(&fixture.channel.id, &participant.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == ContextEntryKind::Summary)
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn group_auto_compaction_skips_a_branch_that_is_already_compacting() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].clone();
+    seed_large_entries(&fixture.store, &fixture.channel, &planner.id, 6).await;
+    let mut settings = fixture.service.settings(&fixture.channel.id).await.unwrap();
+    settings.auto_compact = true;
+    settings.compact_threshold = 1;
+    fixture
+        .store
+        .update_conversation_settings(&settings)
+        .await
+        .unwrap();
+
+    let llm = Arc::new(GatedLlm::new());
+    let manual = {
+        let service = fixture.service.clone();
+        let channel_id = fixture.channel.id.clone();
+        let agent_id = planner.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move {
+            service
+                .compact_participant(&channel_id, &agent_id, llm, "recording-model")
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the manual summarizer should be requested");
+
+    let message = post_user(&fixture.channels, &fixture.channel, "@Planner status").await;
+    let mut turn_options = options();
+    turn_options.participant_capacity = vec![
+        ParticipantCapacity {
+            agent_id: planner.id.clone(),
+            usable_window: 60_000,
+            tool_tokens: 0,
+        },
+        ParticipantCapacity {
+            agent_id: fixture.participants[1].id.clone(),
+            usable_window: 60_000,
+            tool_tokens: 0,
+        },
+    ];
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            llm.clone(),
+            ToolRegistry::new(),
+            &turn_options,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.replied, vec![planner.id.clone()]);
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(!messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message
+                .content
+                .contains("Context compacted automatically for Planner")
+    }));
+
+    llm.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), manual)
+        .await
+        .expect("the manual compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(outcome.compacted);
+    let entries = fixture
+        .store
+        .list_context_entries(&fixture.channel.id, &planner.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.kind == ContextEntryKind::Summary)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn group_auto_compaction_reports_an_in_progress_branch_instead_of_full_advice() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].clone();
+    let coder = fixture.participants[1].clone();
+    seed_large_entries(&fixture.store, &fixture.channel, &planner.id, 6).await;
+    let mut settings = fixture.service.settings(&fixture.channel.id).await.unwrap();
+    settings.auto_compact = true;
+    settings.compact_threshold = 1;
+    fixture
+        .store
+        .update_conversation_settings(&settings)
+        .await
+        .unwrap();
+
+    let llm = Arc::new(GatedLlm::new());
+    let manual = {
+        let service = fixture.service.clone();
+        let channel_id = fixture.channel.id.clone();
+        let agent_id = planner.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move {
+            service
+                .compact_participant(&channel_id, &agent_id, llm, "recording-model")
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the manual summarizer should be requested");
+
+    let message = post_user(&fixture.channels, &fixture.channel, "@team status update").await;
+    let mut turn_options = options();
+    turn_options.participant_capacity = vec![ParticipantCapacity {
+        agent_id: planner.id.clone(),
+        usable_window: 1,
+        tool_tokens: 0,
+    }];
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            llm.clone(),
+            ToolRegistry::new(),
+            &turn_options,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.skipped, vec![planner.id.clone()]);
+    assert_eq!(report.replied, vec![coder.id.clone()]);
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System
+            && message.content.contains("being compacted")
+            && !message.content.contains("context is full")
+    }));
+
+    llm.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), manual)
+        .await
+        .expect("the manual compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(outcome.compacted);
+}
+
+#[tokio::test]
+async fn clearing_context_during_compaction_writes_nothing() {
+    let (store, agent, service, channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(GatedLlm::new());
+    let task = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the summarizer should be requested");
+
+    let cleared = service.clear_context(&channel.id).await.unwrap();
+    assert!(cleared >= 6);
+    llm.release.notify_one();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(!outcome.compacted);
+    assert!(outcome.reason.is_some());
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.kind == ContextEntryKind::Summary));
+    let messages = channels.list_messages(&channel.id, 50).await.unwrap();
+    assert!(!messages
+        .iter()
+        .any(|message| message.content.contains("Context compacted:")));
+}
+
+#[tokio::test]
+async fn compaction_reports_a_stale_prefix_when_an_entry_is_excluded_during_the_call() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(GatedLlm::new());
+    let task = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the summarizer should be requested");
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    let active = entries
+        .iter()
+        .filter(|entry| !entry.excluded)
+        .cloned()
+        .collect::<Vec<_>>();
+    let summarized = &active[..service_split(&active)];
+    store
+        .exclude_context_entries(std::slice::from_ref(&summarized[0].id))
+        .await
+        .unwrap();
+
+    llm.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(!outcome.compacted);
+    assert!(!outcome.in_progress);
+    assert!(outcome
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("changed")));
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.kind == ContextEntryKind::Summary));
+}
+
+#[tokio::test]
+async fn clearing_one_participant_during_compaction_writes_nothing() {
+    let (store, agent, service, _channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(GatedLlm::new());
+    let task = {
+        let service = service.clone();
+        let channel_id = channel.id.clone();
+        let llm = llm.clone();
+        tokio::spawn(async move { service.compact(&channel_id, llm, "recording-model").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), llm.entered.notified())
+        .await
+        .expect("the summarizer should be requested");
+
+    let cleared = service
+        .clear_participant_context(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert!(cleared >= 6);
+    llm.release.notify_one();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("compaction should finish")
+        .unwrap()
+        .unwrap();
+    assert!(!outcome.compacted);
+    assert!(outcome.reason.is_some());
+
+    let entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.kind == ContextEntryKind::Summary));
 }
 
 #[tokio::test]
@@ -915,6 +1693,17 @@ async fn group_default_responder_answers_an_unaddressed_message() {
         .unwrap()
         .unwrap();
     assert_eq!(turn.source, RouteSource::Default);
+    let task = fixture
+        .store
+        .get_task(&turn.task_ids[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.source,
+        TaskSource::ConversationTurn,
+        "group turns are hidden from the task list like single turns"
+    );
 }
 
 #[tokio::test]
@@ -1401,5 +2190,135 @@ async fn router_provider_error_falls_back_to_the_default_responder() {
     assert!(
         reason.contains("the router call failed"),
         "unexpected reason: {reason}"
+    );
+}
+
+/// The local workspace id, for services the setup helper does not return.
+async fn workspace_id(store: Store) -> cowbot_core::identity::WorkspaceId {
+    bootstrap_local(&store)
+        .await
+        .expect("the local workspace bootstraps")
+        .workspace
+        .id
+}
+
+#[tokio::test]
+async fn a_side_question_answers_without_touching_the_conversation() {
+    let (store, agent, _service, _channels, channel) = setup().await;
+    let llm = Arc::new(RecordingLlm::new());
+    let agents = ChannelAgentService::new(
+        store.clone(),
+        EventBus::default_bus(),
+        workspace_id(store.clone()).await,
+    );
+
+    let before_messages = store.list_messages(&channel.id, 100).await.unwrap();
+    let before_entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+
+    let answer = agents
+        .ask_side_question(
+            &channel.id,
+            None,
+            "what does the compaction threshold mean?",
+            "recording-model",
+            llm.clone(),
+            ToolRegistry::default(),
+            None,
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(answer.agent_id, agent.id);
+    assert_eq!(answer.agent_name, agent.name);
+    assert!(
+        answer.content.starts_with("answer"),
+        "got {:?}",
+        answer.content
+    );
+
+    // Nothing reached the timeline, the branch, or the turn table.
+    let after_messages = store.list_messages(&channel.id, 100).await.unwrap();
+    assert_eq!(
+        after_messages.len(),
+        before_messages.len(),
+        "a side question must not post a message"
+    );
+    let after_entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_entries.len(),
+        before_entries.len(),
+        "a side question must not append a context entry"
+    );
+    assert!(
+        store
+            .list_conversation_turns(&channel.id, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a side question must not record a routing turn"
+    );
+
+    // The question reached the model, and the request carries no branch.
+    let requests = llm.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.model, "recording-model");
+    assert_eq!(request.messages.len(), 2);
+    assert!(request.messages[1]
+        .content
+        .contains("what does the compaction threshold mean?"));
+    assert!(request.messages[1].content.contains("Side question:"));
+
+    // Usage is recorded under its own call kind so the cost stays visible.
+    let calls = store.list_llm_calls_for_channel(&channel.id).await.unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.call_kind == cowbot_core::usage::LlmCallKind::SideQuestion),
+        "side question usage should be recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_side_question_strips_the_addressing_mention() {
+    let (_store, agent, _service, _channels, channel) = setup().await;
+    let llm = Arc::new(RecordingLlm::new());
+    let agents = ChannelAgentService::new(
+        _store.clone(),
+        EventBus::default_bus(),
+        workspace_id(_store.clone()).await,
+    );
+
+    let answer = agents
+        .ask_side_question(
+            &channel.id,
+            None,
+            &format!("@{} why is the sky blue?", agent.name),
+            "recording-model",
+            llm.clone(),
+            ToolRegistry::default(),
+            None,
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer.agent_id, agent.id);
+
+    let request = &llm.requests()[0];
+    let question = request.messages[1].content.clone();
+    assert!(
+        question.contains("why is the sky blue?"),
+        "the question should survive: {question}"
+    );
+    assert!(
+        !question.contains(&format!("@{}", agent.name)),
+        "the addressing mention should be stripped: {question}"
     );
 }

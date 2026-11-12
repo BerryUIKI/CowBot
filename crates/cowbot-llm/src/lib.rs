@@ -2,16 +2,20 @@ pub mod anthropic;
 mod endpoint;
 pub mod mock;
 pub mod openai;
+pub mod prompt_snapshot;
 pub mod provider;
 pub mod responses;
+pub mod tokens;
 pub mod types;
 
 pub use anthropic::AnthropicProvider;
 pub use cowbot_core::usage::TokenUsage;
 pub use mock::MockLlmProvider;
 pub use openai::OpenAiCompatibleProvider;
+pub use prompt_snapshot::{seal_snapshot, snapshot_message, snapshot_request};
 pub use provider::LlmProvider;
 pub use responses::ResponsesProvider;
+pub use tokens::{token_counter_for_model, tokenizer_for_model, ModelTokenizer, TiktokenCounter};
 pub use types::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall,
 };

@@ -13,6 +13,8 @@ import GroupAvatar from "./GroupAvatar";
 import Inspector from "./Inspector";
 import type { InspectorTab } from "./Inspector";
 import ContextMeter from "./ContextMeter";
+import ContextInspector from "./ContextInspector";
+import type { ContextTarget } from "./ContextInspector";
 import ContextMenu from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import Modal from "./Modal";
@@ -21,11 +23,25 @@ import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
+import SideAnswerPanel from "./SideAnswerPanel";
+import SlashCommandMenu from "./SlashCommandMenu";
+import { planCommand } from "./commandActions";
+import type { CommandAction } from "./commandActions";
+import {
+  acceptedDraft,
+  filterCommands,
+  isCommandDraft,
+  loadCommands,
+  parseCommandDraft,
+  slashQuery,
+} from "./command";
 import TaskDetail from "./TaskDetail";
-import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
+import TaskList from "./TaskList";import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
 import {
+  addMemoryEntry,
   addProject,
+  askSideQuestion,
   archiveTask,
   approveTaskPlan,
   cancelTask,
@@ -70,6 +86,7 @@ import {
   removeProject,
   renameChannel,
   runTask,
+  saveMemoryNote,
   setActiveModel,
   setChannelPinned,
   unarchiveTask,
@@ -91,11 +108,13 @@ import type {
   ConversationContext,
   ConversationSummary,
   ConversationTurn,
+  CommandInfo,
   ModelSettings,
   OnboardingState,
   Project,
   ProjectBranches,
   RouteSource,
+  SideAnswer,
   Task,
   TaskOverviewEntry,
   TaskWorktree,
@@ -104,11 +123,7 @@ import type {
   ToolDefinition,
   ApprovalRisk,
 } from "./types";
-import {
-  isActiveOverviewStatus,
-  taskStatusKind,
-  taskStatusLabel,
-} from "./types";
+import { approvalLevelLabel, isActiveOverviewStatus } from "./types";
 import { useUpdater } from "./updater";
 
 type View = "chat" | "tasks" | "settings";
@@ -276,9 +291,6 @@ export default function App() {
   const [previews, setPreviews] = useState<Record<string, ChannelMessage | null>>({});
   const [query, setQuery] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskFilter, setTaskFilter] = useState<"active" | "archived" | "all">(
-    "active",
-  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskAssignments, setTaskAssignments] = useState<AssignmentWithEvents[]>([]);
   const [taskRuns, setTaskRuns] = useState<RunWithCalls[]>([]);
@@ -292,6 +304,14 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
+  const [commandCatalogue, setCommandCatalogue] = useState<CommandInfo[]>([]);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandDismissed, setCommandDismissed] = useState(false);
+  const [commandHint, setCommandHint] = useState<string | null>(null);
+  const [commandExpanded, setCommandExpanded] = useState(false);
+  const [contextOpenSignal, setContextOpenSignal] = useState(0);
+  const [sideAnswer, setSideAnswer] = useState<SideAnswer | null>(null);
+  const [sideQuestionBusy, setSideQuestionBusy] = useState(false);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
@@ -313,6 +333,7 @@ export default function App() {
   >({});
   const [conversationContext, setConversationContext] =
     useState<ConversationContext | null>(null);
+  const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
   const [contextVersion, setContextVersion] = useState(0);
   const [rememberMessage, setRememberMessage] = useState<ChannelMessage | null>(
@@ -352,7 +373,13 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab | null>(() => {
     try {
       const stored = window.localStorage.getItem("cowbot.inspector-tab");
-      if (stored === "approvals" || stored === "background") return stored;
+      if (
+        stored === "approvals" ||
+        stored === "background" ||
+        stored === "task"
+      ) {
+        return stored;
+      }
       if (stored === "closed") return null;
       if (
         window.localStorage.getItem("cowbot.background-panel") === "open"
@@ -364,8 +391,14 @@ export default function App() {
       return null;
     }
   });
-  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);
-  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [conversationsOpen, setConversationsOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("cowbot.conversations-open") === "open";
+    } catch {
+      return false;
+    }
+  });
+  const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);  const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
@@ -548,6 +581,17 @@ export default function App() {
   }, [inspectorTab]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "cowbot.conversations-open",
+        conversationsOpen ? "open" : "closed",
+      );
+    } catch {
+      // Storage can be unavailable in restricted webviews; the section still works.
+    }
+  }, [conversationsOpen]);
+
+  useEffect(() => {
     let cancelled = false;
 
     (async () => {
@@ -625,6 +669,12 @@ export default function App() {
     };
   }, [contextVersion, selectedChannel]);
 
+  // A preview belongs to one conversation; switching chats clears it so the
+  // inspector never shows another conversation's request.
+  useEffect(() => {
+    setContextTarget(null);
+  }, [selectedId]);
+
   useEffect(() => {
     refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
   }, [refreshTaskDetail, selectedTaskId]);
@@ -672,6 +722,32 @@ export default function App() {
   useEffect(() => {
     if (!templateId && templates.length > 0) setTemplateId(templates[0].id);
   }, [templates, templateId]);
+
+  // The catalogue is fetched once per session. If it fails, slash mode stays
+  // off and drafts are sent as ordinary messages; the failure is reported once.
+  // A side answer belongs to one chat, so switching chats drops it: nothing
+  // about the exchange was persisted, and showing it elsewhere would imply it
+  // had been.
+  useEffect(() => {
+    setSideAnswer(null);
+  }, [selectedChannel?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCommands()
+      .then((catalogue) => {
+        if (!cancelled) setCommandCatalogue(catalogue);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setNotice(
+          `Slash commands are unavailable; drafts starting with / are sent as messages. ${errorMessage(err)}`,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!creatingTask || !worktreeEnabled) return;
@@ -993,20 +1069,25 @@ export default function App() {
 
   const normalizedQuery = query.trim().toLowerCase();
 
-  const visibleAgentRows = useMemo(
+  const chatRows = useMemo(
     () =>
-      normalizedQuery
-        ? agentRows.filter((row) => row.agent.name.toLowerCase().includes(normalizedQuery))
-        : agentRows,
-    [agentRows, normalizedQuery],
+      [
+        ...agentRows.map((row) => ({ ...row, kind: "agent" as const })),
+        ...groupChannels.map((row) => ({ ...row, kind: "channel" as const })),
+      ].sort((left, right) => byRecentActivity(left, right, previews)),
+    [agentRows, groupChannels, previews],
   );
 
-  const visibleChannels = useMemo(
+  const visibleChats = useMemo(
     () =>
       normalizedQuery
-        ? groupChannels.filter((row) => row.channel.name.toLowerCase().includes(normalizedQuery))
-        : groupChannels,
-    [groupChannels, normalizedQuery],
+        ? chatRows.filter((row) =>
+            (row.kind === "agent" ? row.agent.name : row.channel.name)
+              .toLowerCase()
+              .includes(normalizedQuery),
+          )
+        : chatRows,
+    [chatRows, normalizedQuery],
   );
 
   const visibleConversations = useMemo(
@@ -1019,22 +1100,11 @@ export default function App() {
     [conversationRows, normalizedQuery],
   );
 
-  const visibleTasks = useMemo(() => {
-    const filtered = tasks.filter((task) =>
-      taskFilter === "all"
-        ? true
-        : taskFilter === "archived"
-          ? task.archived
-          : !task.archived,
-    );
-    if (!normalizedQuery) return filtered;
-    return filtered.filter(
-      (task) =>
-        (task.title || task.description).toLowerCase().includes(normalizedQuery) ||
-        task.description.toLowerCase().includes(normalizedQuery) ||
-        agentName(agents, task.assigned_agent).toLowerCase().includes(normalizedQuery),
-    );
-  }, [agents, normalizedQuery, taskFilter, tasks]);
+  const showConversations =
+    conversationsOpen ||
+    creatingConversation ||
+    selectedChannel?.kind === "conversation" ||
+    (normalizedQuery.length > 0 && visibleConversations.length > 0);
 
   const channelMentionNames = useMemo(() => {
     const seen = new Set<string>();
@@ -1048,10 +1118,38 @@ export default function App() {
 
   const conversationParticipants = conversationContext?.participants ?? [];
 
+  // Tasks the selected chat is running, for `/stop`. Conversation turns are
+  // tasks too, so they are cancelled alongside user tasks.
+  const runningTaskIds = useMemo(
+    () =>
+      tasks
+        .filter(
+          (task) =>
+            task.channel_id === selectedChannel?.id &&
+            (task.status === "pending" || task.status === "in_progress"),
+        )
+        .map((task) => task.id),
+    [selectedChannel?.id, tasks],
+  );
+
   const mentionQuery = useMemo(() => {
     const match = draft.match(/(?:^|\s)@([\p{L}\p{N}_-]*)$/u);
     return match ? match[1] : null;
   }, [draft]);
+
+  const commandQuery = useMemo(() => slashQuery(draft), [draft]);
+
+  const commandCandidates = useMemo(() => {
+    if (commandQuery === null || commandDismissed) return [];
+    // `/help` expands the menu to the whole catalogue regardless of the query.
+    if (commandExpanded) return commandCatalogue;
+    return filterCommands(commandCatalogue, commandQuery);
+  }, [commandCatalogue, commandDismissed, commandExpanded, commandQuery]);
+
+  const activeCommandIndex = Math.min(
+    commandIndex,
+    Math.max(0, commandCandidates.length - 1),
+  );
 
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null || mentionDismissed) return [];
@@ -1164,6 +1262,7 @@ export default function App() {
 
   function openNewConversation() {
     setView("chat");
+    setConversationsOpen(true);
     setCreatingConversation(true);
     setError(null);
     if (conversationIds.length === 0 && agents.length > 0) {
@@ -1242,7 +1341,10 @@ export default function App() {
       setNotice(
         outcome.compacted
           ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
-          : "Nothing to compact yet.",
+          : outcome.reason ??
+              (outcome.in_progress
+                ? "A compaction is already running for this branch."
+                : "Nothing to compact yet."),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);
@@ -1370,23 +1472,6 @@ export default function App() {
     setMenu({ kind, channel, agent, task: null, x: rect.left + 24, y: rect.bottom + 4 });
   }
 
-  function openTaskMenu(
-    event: ReactMouseEvent<HTMLButtonElement>,
-    task: Task,
-  ) {
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = event.currentTarget.getBoundingClientRect();
-    setMenu({
-      kind: "task",
-      channel: null,
-      agent: null,
-      task,
-      x: rect.right - 4,
-      y: rect.bottom + 4,
-    });
-  }
-
   async function togglePin(channel: Channel) {
     setError(null);
     try {
@@ -1414,12 +1499,23 @@ export default function App() {
 
   function openModelMenu(event: ReactMouseEvent<HTMLButtonElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
+    openModelMenuAt(rect.left, rect.top);
+  }
+
+  /// Open the model menu anchored to the composer, for `/model` with no name.
+  function openModelMenuAboveComposer() {
+    const rect = composerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    openModelMenuAt(rect.left, rect.top);
+  }
+
+  function openModelMenuAt(left: number, top: number) {
     const modelCount =
       modelSettings?.providers.find((provider) => provider.active)?.models
         .length ?? 1;
     setModelMenu({
-      x: rect.left,
-      y: Math.max(8, rect.top - 12 - (modelCount + 1) * 34),
+      x: left,
+      y: Math.max(8, top - 12 - (modelCount + 1) * 34),
     });
   }
 
@@ -1543,9 +1639,275 @@ export default function App() {
     openEditAgentDialog(agent);
   }
 
-  async function sendMessage() {
-    const content = draft.trim();
-    if (!content || !selectedChannel || sending || conversationFull) return;
+  function acceptCommand(command: CommandInfo) {
+    setCommandHint(null);
+    setCommandExpanded(false);
+    setCommandDismissed(true);
+    setCommandIndex(0);
+    const next = acceptedDraft(command);
+    if (next) {
+      setDraft(next);
+      composerRef.current?.focus();
+      return;
+    }
+    void runCommand(`/${command.name}`);
+  }
+
+  /// Dispatch a complete command line through the pure command planner, then
+  /// carry out the action. #186 owns the menu and the parser; this owns what
+  /// each command does.
+  async function runCommand(line: string) {
+    const parsed = await parseCommandDraft(line);
+    switch (parsed.kind) {
+      case "not_a_command":
+        await sendMessage(line);
+        return;
+      case "unknown":
+        setCommandHint(
+          "Unknown command. Press Esc to send as a message, or type /help.",
+        );
+        setCommandDismissed(true);
+        return;
+      case "missing_argument":
+        setCommandHint(`Usage: ${parsed.usage}`);
+        return;
+      case "invocation": {
+        const action = planCommand(
+          parsed,
+          {
+            channel: selectedChannel,
+            participants: conversationParticipants.map((participant) => ({
+              agentId: participant.agent_id,
+              name: participant.agent_name,
+            })),
+            providers: (modelSettings?.providers ?? []).map((provider) => ({
+              id: provider.id,
+              name: provider.name,
+              active: provider.active,
+              model: provider.model,
+              models: provider.models,
+            })),
+            approval: channelApproval,
+          },
+          runningTaskIds,
+        );
+        // A notice keeps the draft so the user can correct an argument; a
+        // command that did something clears it.
+        if (action.kind === "notice" || action.kind === "error") {
+          setNotice(null);
+          setError(action.kind === "error" ? action.message : null);
+          setCommandHint(action.message);
+          setCommandDismissed(true);
+          return;
+        }
+        setCommandHint(null);
+        setCommandDismissed(false);
+        setCommandExpanded(false);
+        setDraft("");
+        await applyCommandAction(action);
+        return;
+      }
+    }
+  }
+
+  async function applyCommandAction(action: Exclude<CommandAction, { kind: "notice" } | { kind: "error" }>) {
+    switch (action.kind) {
+      case "help":
+        setCommandDismissed(false);
+        setCommandExpanded(true);
+        setCommandIndex(0);
+        composerRef.current?.focus();
+        return;
+
+      case "open-new-conversation":
+        openNewConversation();
+        if (action.participants.length > 0) {
+          setConversationIds(action.participants);
+        }
+        return;
+
+      case "open-delete": {
+        const channel = channels.find((candidate) => candidate.id === action.channelId);
+        if (channel) openDeleteDialog(channel);
+        return;
+      }
+
+      case "open-note":
+        // The conversation note lives in the context popover; open it there
+        // rather than duplicating the editor in the composer.
+        setContextOpenSignal((value) => value + 1);
+        return;
+
+      case "open-settings":
+        setSettingsSection(action.section);
+        setView("settings");
+        return;
+
+      case "open-model-menu":
+        openModelMenuAboveComposer();
+        return;
+
+      case "open-task":
+        setTaskDescription(action.description);
+        startTaskForCurrentChannel();
+        return;
+
+      case "set-approval": {
+        if (
+          action.mode === "trusted" &&
+          !window.confirm(
+            "Bypass permissions runs every tool call. Critical-risk calls follow the workspace policy in Settings → Approvals. Continue?",
+          )
+        ) {
+          return;
+        }
+        setChannelApproval(action.mode);
+        setNotice(`Approval mode set to ${approvalLevelLabel(action.mode)}.`);
+        return;
+      }
+
+      case "compact": {
+        const channel = channels.find((candidate) => candidate.id === action.channelId);
+        if (channel) await compactChannel(channel, action.agentId ?? undefined);
+        return;
+      }
+
+      case "clear": {
+        const channel = channels.find((candidate) => candidate.id === action.channelId);
+        if (channel) await clearContextForChannel(channel, action.agentId ?? undefined);
+        return;
+      }
+
+      case "rename": {
+        setError(null);
+        try {
+          await renameChannel(action.channelId, action.name, action.topic);
+          await refreshChannels(action.channelId);
+          setNotice(`Renamed to ${action.name}.`);
+        } catch (err) {
+          setError(errorMessage(err));
+        }
+        return;
+      }
+
+      case "pin": {
+        setError(null);
+        try {
+          await setChannelPinned(action.channelId, action.pinned);
+          await refreshChannels(action.channelId);
+          setNotice(action.pinned ? "Chat pinned." : "Chat unpinned.");
+        } catch (err) {
+          setError(errorMessage(err));
+        }
+        return;
+      }
+
+      case "stop": {
+        if (
+          !window.confirm(
+            `Cancel ${action.taskIds.length} running ${action.taskIds.length === 1 ? "task" : "tasks"} in this chat?`,
+          )
+        ) {
+          return;
+        }
+        setError(null);
+        let cancelled = 0;
+        for (const taskId of action.taskIds) {
+          try {
+            await cancelTask(taskId, "Cancelled from the composer");
+            cancelled += 1;
+          } catch (err) {
+            setError(errorMessage(err));
+          }
+        }
+        await refreshTasks(selectedChannel?.id ?? undefined);
+        setNotice(
+          cancelled > 0
+            ? `Cancelled ${cancelled} ${cancelled === 1 ? "task" : "tasks"}.`
+            : "No tasks were cancelled.",
+        );
+        return;
+      }
+
+      case "remember": {
+        setError(null);
+        try {
+          const saved = await addMemoryEntry(action.content, "note", {
+            agentId: action.agentId ?? undefined,
+            channelId: action.channelId ?? undefined,
+          });
+          const scope = action.channelId
+            ? "this conversation"
+            : action.agentId
+              ? "this agent"
+              : "the workspace";
+          setContextVersion((version) => version + 1);
+          setNotice(
+            saved.redacted
+              ? `Saved to ${scope} with credentials redacted.`
+              : `Saved to ${scope}.`,
+          );
+        } catch (err) {
+          setError(errorMessage(err));
+        }
+        return;
+      }
+
+      case "side-question": {
+        if (!selectedChannel) return;
+        setSideQuestionBusy(true);
+        setError(null);
+        try {
+          const answer = await askSideQuestion(selectedChannel.id, action.question, {
+            agentId: action.agentId ?? selectedAgent?.id,
+            approvalLevel: channelApproval,
+          });
+          setSideAnswer(answer);
+          setNotice(null);
+        } catch (err) {
+          setError(errorMessage(err));
+        } finally {
+          setSideQuestionBusy(false);
+        }
+        return;
+      }
+
+      case "save-note": {
+        setError(null);
+        try {
+          const saved = await saveMemoryNote(action.content, action.channelId);
+          setContextVersion((version) => version + 1);
+          setNotice(
+            saved.redacted
+              ? "Conversation note saved with credentials redacted."
+              : "Conversation note saved.",
+          );
+        } catch (err) {
+          setError(errorMessage(err));
+        }
+        return;
+      }
+    }
+  }
+
+  async function sendCommandDraft() {
+    const line = draft.trim();
+    if (!line) return;
+    setSending(true);
+    setError(null);
+    try {
+      await runCommand(line);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendMessage(text: string = draft) {
+    if (sending) return false;
+    const content = text.trim();
+    if (!content || !selectedChannel || conversationFull) return false;
 
     setSending(true);
     setError(null);
@@ -1571,10 +1933,19 @@ export default function App() {
           : null,
       );
       setDraft("");
+      // The sent message is now in the branch, so a captured draft must not be
+      // appended a second time by the context preview.
+      setContextTarget((current) =>
+        current && current.kind === "conversation" && current.draft
+          ? { ...current, draft: undefined }
+          : current,
+      );
       setPreviews((current) => ({ ...current, [selectedChannel.id]: posted }));
       await refreshMessages(selectedChannel.id);
+      return true;
     } catch (err) {
       setError(errorMessage(err));
+      return false;
     } finally {
       setSending(false);
     }
@@ -1593,6 +1964,34 @@ export default function App() {
   }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (commandCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCommandIndex((current) => (current + 1) % commandCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCommandIndex(
+          (current) =>
+            (current - 1 + commandCandidates.length) % commandCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const candidate = commandCandidates[activeCommandIndex];
+        if (candidate) acceptCommand(candidate);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandDismissed(true);
+        setCommandExpanded(false);
+        setCommandHint(null);
+        return;
+      }
+    }
     if (mentionCandidates.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -1621,7 +2020,14 @@ export default function App() {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (!conversationFull) void sendMessage();
+      if (conversationFull) return;
+      // After Escape or any dispatch failure the draft is a slash line that is
+      // not a catalogue command, and the user chose to send it as a message.
+      if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+        void sendCommandDraft();
+        return;
+      }
+      void sendMessage();
     }
   }
 
@@ -1645,6 +2051,28 @@ export default function App() {
 
   function toggleInspector(tab: InspectorTab) {
     setInspectorTab((current) => (current === tab ? null : tab));
+  }
+
+  function inspectConversationContext(agentId: string) {
+    if (!selectedChannel) return;
+    const participant = conversationParticipants.find(
+      (candidate) => candidate.agent_id === agentId,
+    );
+    setContextTarget({
+      kind: "conversation",
+      channelId: selectedChannel.id,
+      agentId,
+      agentName: participant?.agent_name ?? "",
+      title: selectedChannel.name,
+      draft: draft.trim() ? draft.trim() : undefined,
+      planMode: channelApproval === "plan_only",
+    });
+    setInspectorTab("context");
+  }
+
+  function inspectRunContext(runId: string) {
+    setContextTarget({ kind: "run", runId });
+    setInspectorTab("context");
   }
 
   function startCreatingTask() {
@@ -1999,19 +2427,6 @@ export default function App() {
 
   const menuItems: ContextMenuItem[] = (() => {
     if (!menu) return [];
-    if (menu.kind === "task" && menu.task) {
-      const task = menu.task;
-      const kind = taskStatusKind(task.status);
-      const terminal =
-        kind === "completed" || kind === "failed" || kind === "cancelled";
-      if (!terminal) return [];
-      return [
-        {
-          label: task.archived ? "Unarchive task" : "Archive task",
-          onSelect: () => void handleToggleArchive(task),
-        },
-      ];
-    }
 
     const channel = menu.channel;
     if (!channel) return [];
@@ -2118,6 +2533,7 @@ export default function App() {
       discardingWorktree={busy === "discard-worktree"}
       onDiscardWorktree={() => void handleDiscardWorktree()}
       onOpenTask={openTask}
+      onInspectRun={inspectRunContext}
       cancelling={busy === "cancel-task"}
       onCancel={handleCancelTask}
       running={runningTasks.has(selectedTask.id)}
@@ -2126,8 +2542,20 @@ export default function App() {
       approvingPlan={busy === "approve-plan"}
       onToggleArchive={() => void handleToggleArchive(selectedTask)}
       archiveBusy={busy === "archive-task"}
+      onBack={() => setSelectedTaskId(null)}
     />
-  ) : null;
+  ) : (
+    <TaskList
+      tasks={tasks}
+      agents={agents}
+      onOpenTask={openTask}
+      onNewTask={startCreatingTask}
+    />
+  );
+
+  const contextInspectorPanel = (
+    <ContextInspector target={contextTarget} version={contextVersion} />
+  );
 
   return (
     <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
@@ -2151,6 +2579,29 @@ export default function App() {
                 aria-hidden="true"
               >
                 <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`icon-button${inspectorTab === "task" ? " is-active" : ""}`}
+              title="Tasks"
+              aria-label="Tasks"
+              aria-pressed={inspectorTab === "task"}
+              onClick={() =>
+                setInspectorTab((current) => (current === "task" ? null : "task"))
+              }
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                aria-hidden="true"
+              >
+                <path d="M9 6h11M9 12h11M9 18h11" />
+                <path d="M4 6l1.5 1.5L8 5" />
+                <path d="M4 12l1.5 1.5L8 11" />
+                <path d="M4 18l1.5 1.5L8 17" />
               </svg>
             </button>
             <button
@@ -2181,8 +2632,8 @@ export default function App() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search conversations and tasks"
-              aria-label="Search conversations and tasks"
+              placeholder="Search chats and conversations"
+              aria-label="Search chats and conversations"
             />
           </label>
         ) : null}
@@ -2190,9 +2641,166 @@ export default function App() {
         <div className="sidebar-scroll">
           {view !== "settings" ? (
             <>
+              <section className="sidebar-section" aria-label="Chats">
+                <div className="nav-heading">
+                  <span>Chats</span>
+                  <button type="button" className="text-button" onClick={openNewChannel}>
+                    New
+                  </button>
+                </div>
+                {chatRows.length === 0 ? (
+                  <p className="nav-note">
+                    Add a team from a template in Settings to start a conversation.
+                  </p>
+                ) : visibleChats.length === 0 ? (
+                  <p className="nav-note">No chats match.</p>
+                ) : (
+                  <ul className="contact-list">
+                    {visibleChats.map((row) => {
+                      const preview = previews[row.channel.id] ?? null;
+                      const isAgent = row.kind === "agent";
+                      const name = isAgent ? row.agent.name : row.channel.name;
+                      return (
+                        <li key={row.channel.id} className="contact-item">
+                          <button
+                            type="button"
+                            className="contact-row"
+                            aria-current={row.channel.id === selectedId ? "page" : undefined}
+                            onClick={() => openChannel(row.channel.id)}
+                            onContextMenu={(event) =>
+                              isAgent
+                                ? openMenu(event, "agent", row.channel, row.agent)
+                                : openMenu(event, "channel", row.channel)
+                            }
+                            onKeyDown={(event) =>
+                              isAgent
+                                ? openMenuFromKey(event, "agent", row.channel, row.agent)
+                                : openMenuFromKey(event, "channel", row.channel)
+                            }
+                          >
+                            <Avatar name={name} kind={isAgent ? "agent" : "channel"} />
+                            <span className="contact-text">
+                              <span className="contact-top">
+                                <span className="contact-name">
+                                  {row.channel.pinned ? <PinMark /> : null}
+                                  {name}
+                                </span>
+                                <time className="contact-time">
+                                  {preview ? formatListTime(preview.created_at) : ""}
+                                </time>
+                              </span>
+                              <span className="contact-snippet">
+                                {preview
+                                  ? previewSnippet(preview, row.channel)
+                                  : isAgent
+                                    ? row.agent.role
+                                    : row.channel.topic || "No messages yet"}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="contact-more"
+                            title={isAgent ? "Conversation actions" : "Channel actions"}
+                            aria-label={`Actions for ${name}`}
+                            onClick={(event) =>
+                              isAgent
+                                ? openMenuFromButton(event, "agent", row.channel, row.agent)
+                                : openMenuFromButton(event, "channel", row.channel)
+                            }
+                          >
+                            ⋯
+                          </button>
+                          {!isAgent &&
+                          (activeOverviewByChannel.get(row.channel.id) ?? []).length > 0 ? (
+                            <div className="background-cards">
+                              {(activeOverviewByChannel.get(row.channel.id) ?? []).map(
+                                (entry) => (
+                                  <BackgroundTaskCard
+                                    key={entry.run_id}
+                                    entry={entry}
+                                    now={overviewNow}
+                                    onOpen={() => openTask(entry.run_id)}
+                                  />
+                                ),
+                              )}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+
+                {creatingChannel ? (
+                  <form className="new-channel" onSubmit={handleCreateChannel}>
+                    <label className="field">
+                      <span>Name</span>
+                      <input
+                        ref={channelNameRef}
+                        value={channelName}
+                        onChange={(event) => setChannelName(event.target.value)}
+                        placeholder="engineering"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Topic</span>
+                      <input
+                        value={channelTopic}
+                        onChange={(event) => setChannelTopic(event.target.value)}
+                        placeholder="What is this channel for?"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={!channelName.trim()}
+                      >
+                        Create channel
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        onClick={() => setCreatingChannel(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    className="new-channel-button"
+                    onClick={openNewChannel}
+                  >
+                    <span aria-hidden="true">+</span> New channel
+                  </button>
+                )}
+              </section>
+
               <section className="sidebar-section" aria-label="Conversations">
                 <div className="nav-heading">
-                  <span>Conversations</span>
+                  <button
+                    type="button"
+                    className="nav-disclosure"
+                    aria-expanded={showConversations}
+                    aria-controls="sidebar-conversations"
+                    onClick={() => setConversationsOpen((open) => !open)}
+                  >
+                    <span
+                      className={`disclosure-mark${showConversations ? " is-open" : ""}`}
+                      aria-hidden="true"
+                    >
+                      ▸
+                    </span>
+                    <span>Conversations</span>
+                    {conversationRows.length > 0 ? (
+                      <span className="nav-count-soft">{conversationRows.length}</span>
+                    ) : null}
+                  </button>
                   <button
                     type="button"
                     className="text-button"
@@ -2202,6 +2810,7 @@ export default function App() {
                     New
                   </button>
                 </div>
+                <div id="sidebar-conversations" hidden={!showConversations}>
                 {visibleConversations.length > 0 ? (
                   <ul className="contact-list">
                     {visibleConversations.map(({ channel }) => {
@@ -2404,278 +3013,11 @@ export default function App() {
                     <span aria-hidden="true">+</span> New conversation
                   </button>
                 )}
+                </div>
               </section>
 
-              <section className="sidebar-section" aria-label="Agents">
-                <div className="nav-heading">
-                  <span>Agents</span>
-                  <span className="nav-count-soft">{agentRows.length}</span>
-                </div>
-                {agentRows.length === 0 ? (
-                  <p className="nav-note">
-                    Add a team from a template in Settings to start a conversation.
-                  </p>
-                ) : visibleAgentRows.length === 0 ? (
-                  <p className="nav-note">No agents match.</p>
-                ) : (
-                  <ul className="contact-list">
-                    {visibleAgentRows.map(({ agent, channel }) => {
-                      const preview = previews[channel.id] ?? null;
-                      return (
-                        <li key={agent.id} className="contact-item">
-                          <button
-                            type="button"
-                            className="contact-row"
-                            aria-current={channel.id === selectedId ? "page" : undefined}
-                            onClick={() => openChannel(channel.id)}
-                            onContextMenu={(event) =>
-                              openMenu(event, "agent", channel, agent)
-                            }
-                            onKeyDown={(event) =>
-                              openMenuFromKey(event, "agent", channel, agent)
-                            }
-                          >
-                            <Avatar name={agent.name} kind="agent" />
-                            <span className="contact-text">
-                              <span className="contact-top">
-                                <span className="contact-name">
-                                  {channel.pinned ? <PinMark /> : null}
-                                  {agent.name}
-                                </span>
-                                <time className="contact-time">
-                                  {preview ? formatListTime(preview.created_at) : ""}
-                                </time>
-                              </span>
-                              <span className="contact-snippet">
-                                {preview ? previewSnippet(preview, channel) : agent.role}
-                              </span>
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className="contact-more"
-                            title="Conversation actions"
-                            aria-label={`Actions for ${agent.name}`}
-                            onClick={(event) =>
-                              openMenuFromButton(event, "agent", channel, agent)
-                            }
-                          >
-                            ⋯
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </section>
 
-              <section className="sidebar-section" aria-label="Channels">
-                <div className="nav-heading">
-                  <span>Channels</span>
-                  <button type="button" className="text-button" onClick={openNewChannel}>
-                    New
-                  </button>
-                </div>
-                {groupChannels.length > 0 ? (
-                  visibleChannels.length > 0 ? (
-                    <ul className="contact-list">
-                      {visibleChannels.map(({ channel }) => {
-                        const preview = previews[channel.id] ?? null;
-                        return (
-                          <li key={channel.id} className="contact-item">
-                            <button
-                              type="button"
-                              className="contact-row"
-                              aria-current={channel.id === selectedId ? "page" : undefined}
-                              onClick={() => openChannel(channel.id)}
-                              onContextMenu={(event) => openMenu(event, "channel", channel)}
-                              onKeyDown={(event) =>
-                                openMenuFromKey(event, "channel", channel)
-                              }
-                            >
-                              <Avatar name={channel.name} kind="channel" />
-                              <span className="contact-text">
-                                <span className="contact-top">
-                                  <span className="contact-name">
-                                    {channel.pinned ? <PinMark /> : null}
-                                    {channel.name}
-                                  </span>
-                                  <time className="contact-time">
-                                    {preview ? formatListTime(preview.created_at) : ""}
-                                  </time>
-                                </span>
-                                <span className="contact-snippet">
-                                  {preview
-                                    ? previewSnippet(preview, channel)
-                                    : channel.topic || "No messages yet"}
-                                </span>
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className="contact-more"
-                              title="Channel actions"
-                              aria-label={`Actions for ${channel.name}`}
-                              onClick={(event) =>
-                                openMenuFromButton(event, "channel", channel)
-                              }
-                            >
-                              ⋯
-                            </button>
-                            {(activeOverviewByChannel.get(channel.id) ?? []).length > 0 ? (
-                              <div className="background-cards">
-                                {(activeOverviewByChannel.get(channel.id) ?? []).map(
-                                  (entry) => (
-                                    <BackgroundTaskCard
-                                      key={entry.run_id}
-                                      entry={entry}
-                                      now={overviewNow}
-                                      onOpen={() => openTask(entry.run_id)}
-                                    />
-                                  ),
-                                )}
-                              </div>
-                            ) : null}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="nav-note">No channels match.</p>
-                  )
-                ) : null}
 
-                {creatingChannel ? (
-                  <form className="new-channel" onSubmit={handleCreateChannel}>
-                    <label className="field">
-                      <span>Name</span>
-                      <input
-                        ref={channelNameRef}
-                        value={channelName}
-                        onChange={(event) => setChannelName(event.target.value)}
-                        placeholder="engineering"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Topic</span>
-                      <input
-                        value={channelTopic}
-                        onChange={(event) => setChannelTopic(event.target.value)}
-                        placeholder="What is this channel for?"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <div className="form-actions">
-                      <button
-                        type="submit"
-                        className="primary-button"
-                        disabled={!channelName.trim()}
-                      >
-                        Create channel
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => setCreatingChannel(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <button
-                    type="button"
-                    className="new-channel-button"
-                    onClick={openNewChannel}
-                  >
-                    <span aria-hidden="true">+</span> New channel
-                  </button>
-                )}
-              </section>
-
-              <section className="sidebar-section" aria-label="Tasks">
-                <div className="nav-heading">
-                  <span>Tasks</span>
-                  <button type="button" className="text-button" onClick={startCreatingTask}>
-                    New
-                  </button>
-                </div>
-                <div className="task-filter" role="group" aria-label="Task filter">
-                  {(["active", "archived", "all"] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      type="button"
-                      className="task-filter-item"
-                      aria-pressed={taskFilter === filter}
-                      onClick={() => setTaskFilter(filter)}
-                    >
-                      {filter === "active"
-                        ? "Active"
-                        : filter === "archived"
-                          ? "Archived"
-                          : "All"}
-                    </button>
-                  ))}
-                </div>
-                <ul className="contact-list">
-                  {visibleTasks.map((task) => {
-                    const kind = taskStatusKind(task.status);
-                    return (
-                      <li key={task.id} className="task-row">
-                        <button
-                          type="button"
-                          className="contact-row"
-                          aria-current={
-                            task.id === selectedTaskId &&
-                            inspectorTab === "task" &&
-                            !creatingTask
-                              ? "page"
-                              : undefined
-                          }
-                          onClick={() => openTask(task.id)}
-                        >
-                          <Avatar
-                            name={agentName(agents, task.assigned_agent)}
-                            kind="agent"
-                            size="small"
-                          />
-                          <span className="contact-text">
-                            <span className="contact-top">
-                              <span className="contact-name">
-                                {task.title || task.description}
-                              </span>
-                            </span>
-                            <span className="contact-snippet">
-                              <span className={`status-dot status-${kind}`} />{" "}
-                              {taskStatusLabel(task.status)} ·{" "}
-                              {agentName(agents, task.assigned_agent)}
-                              {task.archived ? " · Archived" : ""}
-                            </span>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="contact-more"
-                          title="Task actions"
-                          aria-label={`Actions for ${task.title || task.description}`}
-                          onClick={(event) => openTaskMenu(event, task)}
-                        >
-                          ⋯
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {visibleTasks.length === 0 ? (
-                    <li className="nav-empty">
-                      {tasks.length === 0 ? "No tasks yet." : "No tasks match."}
-                    </li>
-                  ) : null}
-                </ul>
-                <button type="button" className="new-channel-button" onClick={startCreatingTask}>
-                  <span aria-hidden="true">+</span> New task
-                </button>
-              </section>
             </>
           ) : (
             <section className="sidebar-section" aria-label="Settings sections">
@@ -2903,6 +3245,7 @@ export default function App() {
                         <ContextMeter
                           context={conversationContext}
                           busy={contextBusy}
+                          openSignal={contextOpenSignal}
                           onCompact={(agentId) =>
                             void compactChannel(selectedChannel, agentId)
                           }
@@ -2933,6 +3276,7 @@ export default function App() {
                             setContextVersion((version) => version + 1)
                           }
                           onNewConversation={openNewConversation}
+                          onInspect={inspectConversationContext}
                         />
                       ) : null}
                       <span className="chat-kind">
@@ -3161,14 +3505,39 @@ export default function App() {
                 </div>
               ) : null}
 
+              {sideAnswer ? (
+                <SideAnswerPanel
+                  answer={sideAnswer}
+                  onDismiss={() => setSideAnswer(null)}
+                  onAskAgain={() => {
+                    setSideAnswer(null);
+                    setDraft("/btw ");
+                    composerRef.current?.focus();
+                  }}
+                />
+              ) : null}
+
               <form
                 className="composer-bar"
                 onSubmit={(event) => {
                   event.preventDefault();
+                  if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+                    void sendCommandDraft();
+                    return;
+                  }
                   void sendMessage();
                 }}
               >
                 <div className="composer-main">
+                  {commandCandidates.length > 0 || commandHint ? (
+                    <SlashCommandMenu
+                      commands={commandCandidates}
+                      activeIndex={activeCommandIndex}
+                      onAccept={acceptCommand}
+                      onHover={setCommandIndex}
+                      hint={commandHint}
+                    />
+                  ) : null}
                   {mentionCandidates.length > 0 ? (
                     <div
                       className="mention-suggestions"
@@ -3212,25 +3581,42 @@ export default function App() {
                     ref={composerRef}
                     className="composer-input"
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={(event) => {
+                      setDraft(event.target.value);
+                      // A new draft is a new question for the command menu.
+                      setCommandDismissed(false);
+                      setCommandIndex(0);
+                      setCommandHint(null);
+                      if (slashQuery(event.target.value) === null) {
+                        setCommandExpanded(false);
+                      }
+                    }}
                     onKeyDown={handleComposerKeyDown}
                     placeholder={
                       conversationFull
                         ? "Context full — compact or start a new conversation"
-                        : `Message ${composerTarget}`
+                        : sideQuestionBusy
+                          ? "Asking a side question…"
+                          : `Message ${composerTarget}`
                     }
                     aria-label={`Message ${composerTarget}`}
                     aria-autocomplete="list"
-                    aria-expanded={mentionCandidates.length > 0}
+                    aria-expanded={
+                      commandCandidates.length > 0 || mentionCandidates.length > 0
+                    }
                     aria-controls={
-                      mentionCandidates.length > 0
-                        ? "mention-suggestions"
-                        : undefined
+                      commandCandidates.length > 0
+                        ? "command-suggestions"
+                        : mentionCandidates.length > 0
+                          ? "mention-suggestions"
+                          : undefined
                     }
                     aria-activedescendant={
-                      mentionCandidates.length > 0
-                        ? `mention-option-${activeMentionIndex}`
-                        : undefined
+                      commandCandidates.length > 0
+                        ? `command-option-${activeCommandIndex}`
+                        : mentionCandidates.length > 0
+                          ? `mention-option-${activeMentionIndex}`
+                          : undefined
                     }
                     disabled={conversationFull}
                     rows={1}
@@ -3486,29 +3872,10 @@ export default function App() {
                 </form>
               )}
             </div>
-          ) : selectedTask ? (
-            <TaskDetail
-              task={selectedTask}
-              assignments={taskAssignments}
-              runs={taskRuns}
-              runTasks={taskRunTasks}
-              worktree={taskWorktree}
-              discardingWorktree={busy === "discard-worktree"}
-              onDiscardWorktree={() => void handleDiscardWorktree()}
-              onOpenTask={openTask}
-              cancelling={busy === "cancel-task"}
-              onCancel={handleCancelTask}
-              running={runningTasks.has(selectedTask.id)}
-              onRun={() => handleRunTask(selectedTask.id)}
-              onApprovePlan={() => void handleApprovePlan(selectedTask.id)}
-              approvingPlan={busy === "approve-plan"}
-              onToggleArchive={() => void handleToggleArchive(selectedTask)}
-              archiveBusy={busy === "archive-task"}
-            />
           ) : (
             <div className="empty-workspace">
               <p className="empty-title">No task selected.</p>
-              <p>Create a task and choose an agent to own it.</p>
+              <p>Pick a task in the inspector, or create a new one.</p>
               <button type="button" className="primary-button" onClick={startCreatingTask}>
                 New task
               </button>
@@ -3541,6 +3908,7 @@ export default function App() {
           onTabChange={setInspectorTab}
           onClose={() => setInspectorTab(null)}
           taskPanel={taskInspectorPanel}
+          contextPanel={contextInspectorPanel}
           overview={overview}
           agents={agents}
           now={overviewNow}

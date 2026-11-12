@@ -12,6 +12,8 @@ import type {
 interface ContextMeterProps {
   context: ConversationContext;
   busy: boolean;
+  /** Increment to open the popover from outside, such as from \`/note\`. */
+  openSignal?: number;
   onCompact: (agentId?: string) => void;
   onClear: (agentId?: string) => void;
   onAutoCompactChange: (enabled: boolean) => void;
@@ -20,6 +22,8 @@ interface ContextMeterProps {
   onDefaultResponderChange: (agentId: string) => void;
   onMemoryChanged: () => void;
   onNewConversation: () => void;
+  /** Open the read-only prompt and recall inspector for one participant. */
+  onInspect: (agentId: string) => void;
 }
 
 const RADIUS = 13;
@@ -51,6 +55,13 @@ function cacheLabel(summary: CacheUsageSummary): string {
   return `${Math.round(rate * 100)}% cached · ${formatTokens(
     summary.cached_input_tokens,
   )} of ${formatTokens(summary.total_input_tokens)} input`;
+}
+
+/** How the meter's token numbers were counted. */
+function tokenSourceLabel(context: ConversationContext): string {
+  if (context.token_source === "estimate") return "Estimated from characters";
+  const counter = context.token_counter ?? context.token_source;
+  return `Exact · ${counter}`;
 }
 
 /** View values for a backend that predates per-participant contexts. */
@@ -142,6 +153,7 @@ function buildContextBar(
 export default function ContextMeter({
   context,
   busy,
+  openSignal = 0,
   onCompact,
   onClear,
   onAutoCompactChange,
@@ -150,6 +162,7 @@ export default function ContextMeter({
   onDefaultResponderChange,
   onMemoryChanged,
   onNewConversation,
+  onInspect,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -172,6 +185,11 @@ export default function ContextMeter({
     };
   }, [open]);
 
+  // An outside request, such as `/note`, opens the popover for the editor.
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true);
+  }, [openSignal]);
+
   const participants =
     context.participants.length > 0
       ? context.participants
@@ -190,6 +208,12 @@ export default function ContextMeter({
   const state = worst.state;
   const full = current.state === "full";
   const bar = buildContextBar(current, context);
+  // Memory is always counted with the character estimator, so an exact
+  // context meter labels that segment separately (ADR-0035).
+  const exact = context.token_source === "tiktoken" || context.token_source === "provider";
+  const sourceNote = exact
+    ? `exact count${context.token_counter ? ` (${context.token_counter})` : ""}`
+    : "estimated count";
   const tabId = (position: number) => `context-tab-${context.channel_id}-${position}`;
   const panelId = `context-panel-${context.channel_id}`;
 
@@ -221,11 +245,11 @@ export default function ContextMeter({
         title={
           group
             ? percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in the fullest branch (${current.agent_name})`
-              : `${Math.round(percent)}% used in the fullest participant branch`
+              ? `${formatTokens(worst.total_tokens)} tokens in the fullest branch (${current.agent_name}) · ${sourceNote}`
+              : `${Math.round(percent)}% used in the fullest participant branch · ${sourceNote}`
             : percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in context`
-              : `${Math.round(percent)}% of the usable context window`
+              ? `${formatTokens(worst.total_tokens)} tokens in context · ${sourceNote}`
+              : `${Math.round(percent)}% of the usable context window · ${sourceNote}`
         }
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
@@ -361,7 +385,11 @@ export default function ContextMeter({
                         className={`context-swatch ${segmentClasses[segment.id]}`}
                         aria-hidden="true"
                       />
-                      <span className="context-legend-label">{segment.label}</span>
+                      <span className="context-legend-label">
+                        {segment.id === "memory" && exact
+                          ? "Memory (estimated)"
+                          : segment.label}
+                      </span>
                       <span className="context-legend-value">
                         {formatTokens(segment.tokens)} ·{" "}
                         {Math.round(segment.percent)}%
@@ -458,7 +486,11 @@ export default function ContextMeter({
                     <dd>{formatTokens(current.latest_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>Memory (next turn)</dt>
+                    <dt>
+                      {exact
+                        ? "Memory (next turn, estimated)"
+                        : "Memory (next turn)"}
+                    </dt>
                     <dd>{formatTokens(current.memory_tokens)}</dd>
                   </div>
                 </dl>
@@ -568,9 +600,21 @@ export default function ContextMeter({
               {current.excluded_entries > 0
                 ? `, ${current.excluded_entries} excluded`
                 : ""}
+              {" · "}
+              {tokenSourceLabel(context)}
             </p>
 
             <div className="context-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  setOpen(false);
+                  onInspect(current.agent_id);
+                }}
+              >
+                Inspect
+              </button>
               <button
                 type="button"
                 className="ghost-button"

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::agent::AgentId;
 use crate::channel::ChannelId;
 use crate::task::TaskId;
-use crate::usage::estimate_tokens;
+use crate::usage::{estimate_tokens, TokenCounter, TokenSource};
 
 /// Fewest participants that make a conversation a group.
 pub const MIN_GROUP_PARTICIPANTS: usize = 2;
@@ -16,6 +16,7 @@ pub const MAX_GROUP_PARTICIPANTS: usize = 8;
 /// Most participants a router may select for one turn.
 pub const MAX_ROUTED_AGENTS: usize = 3;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What a channel in the workspace represents.
 ///
 /// `Direct` is the agent-owned contact conversation provisioned automatically
@@ -56,6 +57,7 @@ impl std::str::FromStr for ChannelKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Who takes part in a conversation channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelParticipant {
@@ -84,6 +86,7 @@ impl ChannelParticipant {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Whether a conversation has one responding agent or several.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +139,7 @@ pub const DEFAULT_COMPACT_THRESHOLD: u32 = 80;
 /// of a model window is usable for input.
 pub const CONTEXT_WINDOW_BUFFER_TOKENS: u32 = 1024;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Per-conversation settings stored independently from the channel row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSettings {
@@ -196,6 +200,7 @@ impl ConversationSettings {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Editable subset of conversation settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSettingsUpdate {
@@ -208,6 +213,7 @@ pub struct ConversationSettingsUpdate {
     pub default_responder: Option<AgentId>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Role of one context entry when it is assembled into a model request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -243,6 +249,7 @@ impl std::str::FromStr for ContextRole {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What produced an entry: an ordinary message or a compaction summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -272,6 +279,7 @@ impl std::str::FromStr for ContextEntryKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A tool call stored inside a context entry.
 ///
 /// `cowbot-core` does not depend on the LLM crate, so the shape is mirrored
@@ -283,6 +291,7 @@ pub struct ContextToolCall {
     pub arguments: serde_json::Value,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One append-only entry in an agent's branch of a conversation context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextEntry {
@@ -297,6 +306,9 @@ pub struct ContextEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_agent_id: Option<AgentId>,
     /// Monotonic position inside the `(channel, agent)` branch.
+    ///
+    /// Compaction renumbers the kept tail to free the cutoff, so this is an
+    /// ordering key, not a stable identifier.
     pub seq: i64,
     pub role: ContextRole,
     pub kind: ContextEntryKind,
@@ -381,6 +393,7 @@ impl ContextEntry {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why a context event was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -444,6 +457,26 @@ impl ContextEvent {
     }
 }
 
+/// Tokens one entry contributes to a request for the counter's model.
+///
+/// The content, attached tool calls, and the tool call id form one chat
+/// message, so the counter's per-message framing overhead is added once.
+/// [`ContextEntry::tokens`] stays the persisted, model-independent estimate;
+/// this function recomputes a count for a specific model (ADR-0035).
+pub fn context_entry_tokens(counter: &dyn TokenCounter, entry: &ContextEntry) -> u32 {
+    let mut tokens = counter.count_message(&entry.content);
+    if let Some(tool_calls) = &entry.tool_calls {
+        if let Ok(serialized) = serde_json::to_string(tool_calls) {
+            tokens = tokens.saturating_add(counter.count(&serialized));
+        }
+    }
+    if let Some(tool_call_id) = &entry.tool_call_id {
+        tokens = tokens.saturating_add(counter.count(tool_call_id));
+    }
+    tokens
+}
+
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Token breakdown of a conversation's next model request.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextProjection {
@@ -457,6 +490,13 @@ pub struct ContextProjection {
     pub latest_tokens: u32,
     pub active_entries: u32,
     pub excluded_entries: u32,
+    /// Where the entry, system, and tool counts came from.
+    #[serde(default)]
+    pub token_source: TokenSource,
+    /// Label of the counter that produced the counts, for example
+    /// `o200k_base`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_counter: Option<String>,
 }
 
 impl ContextProjection {
@@ -466,13 +506,21 @@ impl ContextProjection {
             .saturating_add(self.history_tokens)
             .saturating_add(self.latest_tokens)
     }
+
+    /// True when the counts are a heuristic rather than an exact tokenization.
+    pub fn is_estimated(&self) -> bool {
+        self.token_source.is_estimate()
+    }
 }
 
 /// Build the token breakdown for a conversation branch.
 ///
 /// The latest active user entry is reported separately from the rest of the
-/// history so the meter can show what the newest message contributes.
+/// history so the meter can show what the newest message contributes. Entry
+/// counts are recomputed with `counter`, because the persisted estimates cannot
+/// reflect a specific model (ADR-0035).
 pub fn project_context(
+    counter: &dyn TokenCounter,
     system_tokens: u32,
     tool_tokens: u32,
     entries: &[ContextEntry],
@@ -484,13 +532,15 @@ pub fn project_context(
     let latest_index = active
         .iter()
         .rposition(|entry| entry.role == ContextRole::User && entry.author_agent_id.is_none());
-    let latest_tokens = latest_index.map(|index| active[index].tokens).unwrap_or(0);
+    let latest_tokens = latest_index
+        .map(|index| context_entry_tokens(counter, active[index]))
+        .unwrap_or(0);
     let history_tokens = active
         .iter()
         .enumerate()
         .filter(|(index, _)| Some(*index) != latest_index)
         .fold(0_u32, |total, (_, entry)| {
-            total.saturating_add(entry.tokens)
+            total.saturating_add(context_entry_tokens(counter, entry))
         });
 
     ContextProjection {
@@ -500,9 +550,12 @@ pub fn project_context(
         latest_tokens,
         active_entries: active.len() as u32,
         excluded_entries: (entries.len() - active.len()) as u32,
+        token_source: counter.source(),
+        token_counter: Some(counter.label().to_string()),
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One participant's context meter inside a group conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationParticipantContext {
@@ -518,6 +571,7 @@ pub struct ConversationParticipantContext {
     pub cache_conversation: CacheUsageSummary,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Everything the desktop needs to render a conversation's context meter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationContext {
@@ -534,16 +588,47 @@ pub struct ConversationContext {
     pub participants: Vec<ConversationParticipantContext>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Result of a manual or automatic compaction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompactionOutcome {
     pub compacted: bool,
     pub summarized_entries: u32,
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub summary: Option<String>,
+    /// True when another compaction already held the branch.
+    #[serde(default)]
+    pub in_progress: bool,
+    /// Why nothing was written, for the in-progress, stale, empty, and
+    /// nothing-to-summarize paths.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
+/// Result of the guarded store write behind one compaction.
+///
+/// The service decides what to summarize; the store decides whether the
+/// branch still matches that decision and applies the summary at the cutoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionWrite {
+    /// The summary was inserted at the cutoff.
+    Applied {
+        summary_seq: i64,
+        /// Active tokens at write time, including entries appended during the
+        /// model call.
+        tokens_before: u32,
+        tokens_after: u32,
+    },
+    /// The summarized prefix is no longer active, or the cutoff no longer
+    /// matches the branch. Nothing was written.
+    Stale,
+    /// The branch was cleared while the summary was being generated. Nothing
+    /// was written.
+    Empty,
+}
+
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why a group message selected the participants it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -587,6 +672,7 @@ impl std::str::FromStr for RouteSource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for one routed group message.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub String);
@@ -607,6 +693,7 @@ impl std::fmt::Display for TurnId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Persisted routing decision for one group user message.
 ///
 /// The row is the group turn record: it links the message, the selection
@@ -663,6 +750,7 @@ pub fn usable_window(context_window: Option<u32>, max_output_tokens: Option<u32>
     (usable > 0).then_some(usable)
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// How full the context is, used for colouring the meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -715,7 +803,19 @@ pub const CONTEXT_SUMMARY_INPUT_TOKENS: u32 = 24_000;
 /// are kept. The split keeps the most recent [`CONTEXT_KEEP_RECENT_TOKENS`],
 /// at least the last two entries, and never separates a tool result from the
 /// assistant message that requested it.
+///
+/// This wrapper prices entries with the persisted estimate. Callers that know
+/// the conversation's model use [`compaction_split_by`] with the model counter
+/// instead (ADR-0035).
 pub fn compaction_split(entries: &[ContextEntry]) -> usize {
+    compaction_split_by(entries, |entry| entry.tokens)
+}
+
+/// Where a compaction splits the branch when every entry costs `cost`.
+///
+/// The cost function lets a caller price entries for the conversation's model,
+/// including per-message framing overhead.
+pub fn compaction_split_by(entries: &[ContextEntry], cost: impl Fn(&ContextEntry) -> u32) -> usize {
     if entries.len() <= 2 {
         return 0;
     }
@@ -724,7 +824,7 @@ pub fn compaction_split(entries: &[ContextEntry]) -> usize {
     let mut kept_tokens = 0_u32;
     while index > 0 && kept_tokens < CONTEXT_KEEP_RECENT_TOKENS {
         index -= 1;
-        kept_tokens = kept_tokens.saturating_add(entries[index].tokens);
+        kept_tokens = kept_tokens.saturating_add(cost(&entries[index]));
     }
 
     let minimum_kept = entries.len().saturating_sub(2);
@@ -732,9 +832,23 @@ pub fn compaction_split(entries: &[ContextEntry]) -> usize {
     while index > 0 && entries[index].role == ContextRole::Tool {
         index -= 1;
     }
+
+    // A previous summary already compresses older history. Summarizing it
+    // alone would replace one summary with another without incorporating new
+    // messages; this is the state right after a compaction, when the summary
+    // is the oldest active entry.
+    if index > 0
+        && entries[..index]
+            .iter()
+            .all(|entry| entry.kind == ContextEntryKind::Summary)
+    {
+        return 0;
+    }
+
     index
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Cache hit information for a set of calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheUsageSummary {
@@ -756,12 +870,46 @@ impl CacheUsageSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usage::ESTIMATE_COUNTER;
 
     fn entry(role: ContextRole, tokens: u32) -> ContextEntry {
         let mut entry =
             ContextEntry::new(ChannelId::new("channel"), AgentId::new("agent"), role, "x");
         entry.tokens = tokens;
         entry
+    }
+
+    /// An entry whose content estimates to exactly `tokens` tokens.
+    ///
+    /// The estimator counts ASCII as a quarter token, so four ASCII characters
+    /// per token make the persisted and computed counts agree.
+    fn sized_entry(role: ContextRole, tokens: u32) -> ContextEntry {
+        let content = "x".repeat(tokens as usize * 4);
+        let entry = ContextEntry::new(
+            ChannelId::new("channel"),
+            AgentId::new("agent"),
+            role,
+            content,
+        );
+        assert_eq!(entry.tokens, tokens);
+        entry
+    }
+
+    /// A counter that treats every character as one token.
+    struct CharCounter;
+
+    impl TokenCounter for CharCounter {
+        fn count(&self, text: &str) -> u32 {
+            text.chars().count() as u32
+        }
+
+        fn source(&self) -> TokenSource {
+            TokenSource::Tiktoken
+        }
+
+        fn label(&self) -> &'static str {
+            "test characters"
+        }
     }
 
     #[test]
@@ -869,32 +1017,113 @@ mod tests {
     #[test]
     fn projection_splits_the_latest_user_message_from_history() {
         let mut entries = vec![
-            entry(ContextRole::User, 10),
-            entry(ContextRole::Assistant, 20),
-            entry(ContextRole::User, 30),
-            entry(ContextRole::Assistant, 40),
+            sized_entry(ContextRole::User, 10),
+            sized_entry(ContextRole::Assistant, 20),
+            sized_entry(ContextRole::User, 30),
+            sized_entry(ContextRole::Assistant, 40),
         ];
         entries[0].excluded = true;
 
-        let projection = project_context(100, 50, &entries);
+        let projection = project_context(&ESTIMATE_COUNTER, 100, 50, &entries);
         assert_eq!(projection.system_tokens, 100);
         assert_eq!(projection.tool_tokens, 50);
-        assert_eq!(projection.latest_tokens, 30);
-        assert_eq!(projection.history_tokens, 60);
+        // Every entry pays the per-message framing overhead.
+        assert_eq!(projection.latest_tokens, 34);
+        assert_eq!(projection.history_tokens, 24 + 44);
         assert_eq!(projection.active_entries, 3);
         assert_eq!(projection.excluded_entries, 1);
-        assert_eq!(projection.total_tokens(), 240);
+        assert_eq!(projection.total_tokens(), 100 + 50 + 34 + 68);
+        assert_eq!(projection.token_source, TokenSource::Estimate);
+        assert_eq!(
+            projection.token_counter.as_deref(),
+            Some("character estimate")
+        );
+        assert!(projection.is_estimated());
     }
 
     #[test]
     fn projection_without_a_user_message_counts_all_entries_as_history() {
         let entries = vec![
-            entry(ContextRole::System, 5),
-            entry(ContextRole::Assistant, 7),
+            sized_entry(ContextRole::System, 5),
+            sized_entry(ContextRole::Assistant, 7),
         ];
-        let projection = project_context(0, 0, &entries);
+        let projection = project_context(&ESTIMATE_COUNTER, 0, 0, &entries);
         assert_eq!(projection.latest_tokens, 0);
-        assert_eq!(projection.history_tokens, 12);
+        assert_eq!(projection.history_tokens, 9 + 11);
+    }
+
+    #[test]
+    fn projection_recomputes_counts_with_the_model_counter() {
+        let entries = vec![
+            sized_entry(ContextRole::User, 10),
+            sized_entry(ContextRole::Assistant, 20),
+        ];
+
+        let estimated = project_context(&ESTIMATE_COUNTER, 0, 0, &entries);
+        let counted = project_context(&CharCounter, 0, 0, &entries);
+
+        // The stub counts `"x".repeat(40)` as 40 tokens plus framing.
+        assert_eq!(counted.latest_tokens, 44);
+        assert_eq!(counted.history_tokens, 84);
+        assert!(counted.total_tokens() > estimated.total_tokens());
+        assert_eq!(counted.token_source, TokenSource::Tiktoken);
+        assert_eq!(counted.token_counter.as_deref(), Some("test characters"));
+        assert!(!counted.is_estimated());
+    }
+
+    #[test]
+    fn usage_state_changes_with_the_counter_for_the_same_branch() {
+        // 1,200 characters: the estimator reports 300 tokens, a character
+        // counter reports 1,200. A 70% compaction threshold over an 800-token
+        // window separates the two.
+        let entries = vec![sized_entry(ContextRole::User, 300)];
+        let estimated = project_context(&ESTIMATE_COUNTER, 0, 0, &entries);
+        let counted = project_context(&CharCounter, 0, 0, &entries);
+
+        let (percent, state) = context_usage_state(estimated.total_tokens(), Some(800));
+        assert!(percent.unwrap() < 70.0);
+        assert_eq!(state, ContextUsageState::Neutral);
+
+        let (percent, state) = context_usage_state(counted.total_tokens(), Some(800));
+        assert!(percent.unwrap() >= 70.0);
+        assert_ne!(state, ContextUsageState::Neutral);
+    }
+
+    #[test]
+    fn context_entry_tokens_include_tool_calls_and_one_framing_overhead() {
+        let mut entry = ContextEntry::new(
+            ChannelId::new("c"),
+            AgentId::new("a"),
+            ContextRole::Assistant,
+            "abcd",
+        );
+        entry.tool_calls = Some(vec![ContextToolCall {
+            id: "call-1".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({ "path": "src/main.rs" }),
+        }]);
+        entry.tool_call_id = Some("call-1".into());
+
+        let serialized = serde_json::to_string(entry.tool_calls.as_ref().unwrap()).unwrap();
+        let expected = estimate_tokens("abcd")
+            + crate::usage::MESSAGE_OVERHEAD_TOKENS
+            + estimate_tokens(&serialized)
+            + estimate_tokens("call-1");
+        assert_eq!(context_entry_tokens(&ESTIMATE_COUNTER, &entry), expected);
+    }
+
+    #[test]
+    fn compaction_split_by_prices_entries_with_the_given_cost() {
+        let entries = (0..6)
+            .map(|_| entry(ContextRole::Assistant, 1))
+            .collect::<Vec<_>>();
+
+        // The persisted estimates are one token each, so the estimator path
+        // finds nothing worth summarizing.
+        assert_eq!(compaction_split(&entries), 0);
+        // A model counter that charges 500 tokens per entry keeps the recent
+        // window and summarizes the older half.
+        assert_eq!(compaction_split_by(&entries, |_| 500), 2);
     }
 
     #[test]
@@ -972,13 +1201,13 @@ mod tests {
 
     #[test]
     fn peer_entries_are_history_not_the_latest_user_message() {
-        let user = entry(ContextRole::User, 10);
-        let mut peer = entry(ContextRole::User, 30);
+        let user = sized_entry(ContextRole::User, 10);
+        let mut peer = sized_entry(ContextRole::User, 30);
         peer.author_agent_id = Some(AgentId::new("teammate"));
 
-        let projection = project_context(0, 0, &[user, peer]);
-        assert_eq!(projection.latest_tokens, 10);
-        assert_eq!(projection.history_tokens, 30);
+        let projection = project_context(&ESTIMATE_COUNTER, 0, 0, &[user, peer]);
+        assert_eq!(projection.latest_tokens, 14);
+        assert_eq!(projection.history_tokens, 34);
     }
 
     #[test]
@@ -1056,5 +1285,38 @@ mod tests {
         });
         let context: ConversationContext = serde_json::from_value(json).unwrap();
         assert!(context.participants.is_empty());
+    }
+
+    #[test]
+    fn compaction_outcome_defaults_new_fields_for_old_payloads() {
+        let json = r#"{"compacted":true,"summarized_entries":2,"tokens_before":10,
+            "tokens_after":4,"summary":"earlier history"}"#;
+        let outcome: CompactionOutcome = serde_json::from_str(json).unwrap();
+        assert!(outcome.compacted);
+        assert!(!outcome.in_progress);
+        assert_eq!(outcome.reason, None);
+    }
+
+    #[test]
+    fn compaction_split_does_not_resummarize_a_lone_summary() {
+        let mut summary = ContextEntry::summary(
+            ChannelId::new("channel"),
+            AgentId::new("agent"),
+            "earlier history",
+        );
+        summary.tokens = 10;
+        let first = entry(ContextRole::User, 1_000);
+        let second = entry(ContextRole::Assistant, 1_000);
+        let third = entry(ContextRole::User, 1_000);
+
+        // A summary plus the two kept entries: only the summary is old.
+        assert_eq!(
+            compaction_split(&[summary.clone(), first.clone(), second.clone()]),
+            0
+        );
+
+        // A summary with an older message and two kept entries: there is new
+        // material to fold into the next summary.
+        assert_eq!(compaction_split(&[summary, first, second, third]), 2);
     }
 }

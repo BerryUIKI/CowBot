@@ -127,15 +127,20 @@ on the next start.
 
 ## Navigation
 
-Chat is the main surface. The left sidebar lists conversations, agent contacts,
-channels, and tasks. The header row switches back to Chat and starts a new
-channel; the local user row at the bottom holds Settings.
+Chat is the main surface. The left sidebar holds one **Chats** list — agent
+direct chats and group channels together, sorted by pin and then recent
+activity — and a **Conversations** section for user-created sessions, which
+collapses and expands from its header. The header row switches back to Chat,
+opens the task list, and starts a new channel; the local user row at the bottom
+holds Settings.
 
-Select a task to open its **Task** tab in the right inspector; the conversation
-stays visible. The chat header has an approval button and a background button,
-each with a count, and they open the **Approvals** and **Background** tabs of the
-same inspector. Task detail, approvals, and running work share one right-side
-panel instead of replacing Chat.
+Tasks live in the right inspector. The **Tasks** button in the sidebar header
+opens the **Task** tab: select a task there to read its detail, and use
+**← All tasks** to return to the list. A background card also opens its owning
+task. The chat header has an approval button and a background button, each with
+a count, and they open the **Approvals** and **Background** tabs of the same
+inspector. Task detail, approvals, and running work share one right-side panel
+instead of replacing Chat.
 
 The inspector remembers its last tab and closes with **×**. On windows narrower
 than about 1080 px the sidebar hides while the inspector is open so the chat and
@@ -208,13 +213,13 @@ from templates; a standalone agent editor is not part of this release.
 
 ## Agents, channels, and tasks
 
-- **Agents** — the sidebar lists every agent as a contact with its latest
-  message and time. Select one and write in the composer: the message goes to
-  that agent directly and no mention is needed. The header shows the agent's
+- **Agents** — every agent appears in **Chats** with its latest message and
+  time. Select one and write in the composer: the message goes to that agent
+  directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
   chat timeline, and a typing bubble marks a turn in progress.
-- **Conversations** — the **Conversations** section holds user-created sessions
-  with one agent or a group of two to eight. Choose **New conversation**, give
+- **Conversations** — the collapsible **Conversations** section holds
+  user-created sessions with one agent or a group of two to eight. Choose **New conversation**, give
   it a title, and select participants in the order you want them listed; use
   ↑ and ↓ to reorder a selected participant. With two or more selected, choose
   the **default responder** — preselected to the Main Assistant (`main`) when it
@@ -231,8 +236,9 @@ from templates; a standalone agent editor is not part of this release.
   the conversation's model picks up to three participants first and falls back
   to the default responder when it cannot. Type `@` in the composer to open a
   participant list: arrow keys move, Enter or Tab inserts, and Escape closes it.
-- **Channels** — group rooms sit below the agents. Create one with **New
-  channel** or the **+** button, post messages, and follow the timeline. Names
+- **Channels** — group rooms share the **Chats** list with agent chats and are
+  marked with their channel avatar. Create one with **New channel** or the
+  **+** button, post messages, and follow the timeline. Names
   must be unique in the workspace, case-insensitively. Mention an agent by name
   to get an answer in the channel: `@Planner, which module owns the parser?`
   The agents in the workspace are listed in the
@@ -248,8 +254,8 @@ from templates; a standalone agent editor is not part of this release.
   tasks keep their history but are no longer linked to that channel. Clearing an
   agent conversation keeps the agent and removes only its messages. Agent
   conversations cannot be deleted from the channel list.
-- **Search** — the field above the sidebar list filters agents, conversations,
-  channels, and tasks by name.
+- **Search** — the field above the sidebar list filters chats and
+  conversations by name.
 - **Rich answers** — agent and user messages render Markdown: headings, lists,
   tables, code blocks, and links. Links open in your system browser. A fenced
   `html` code block appears as an **HTML preview** card with **Preview**,
@@ -263,17 +269,27 @@ from templates; a standalone agent editor is not part of this release.
   risky tool call raised while an agent answers appears in **Approvals**.
   Settings → Approvals also manages workspace allow / ask / deny rules and
   session decisions; Settings → Audit filters decisions by source.
-- A direct message or a mention becomes a task for that agent: it is listed in
-  **Tasks** with its assignment, run, and tool calls, and it can be cancelled
-  there. The answer is also posted back to the conversation as a message from
-  that agent.
+- A direct message or a mention becomes a task for that agent: enable **Show
+  conversation turns** in the task list to see it with its assignment, run, and
+  tool calls, and to cancel it. The answer is also posted back to the
+  conversation as a message from that agent.
 - **Tasks** — create a task with a description, expected output, an agent, an
   optional channel, an approval policy, and optionally a project worktree.
-  Tasks are listed in the sidebar; select one to open its **Task** tab in the
-  right inspector and choose **Run** to execute the Planner → Coder → Reviewer
-  crew. The submitted task becomes the run's owning task: its detail shows the
-  run tasks, assignments, assignment events, runs, tool calls, and the worktree
-  when one exists.
+  **New task** in the task list opens the form. The **Task** tab lists tasks and
+  opens one for detail; choose **Run** there to execute the Planner → Coder →
+  Reviewer crew. The list hides conversation turns by default. Long task prompts
+  and expected output collapse behind **Show more** / **Show less**. The
+  submitted task becomes the run's owning task: its detail shows the run tasks,
+  assignments, assignment events, runs, tool calls, and the worktree when one
+  exists.
+- **Inspect a run's request** — expand a run under **Runs** and choose
+  **Inspect context**. The inspector shows the first request the run sent:
+  system prompt slots, messages, tool schemas, and the memory recall trace.
+  Prompts are not stored per iteration yet, so the panel rebuilds the first
+  request from the agent profile recorded with the run and the task's current
+  plan and memory data; later iterations are not shown and the request can
+  differ from what was actually sent. Conversation and channel turn runs are
+  inspected from their conversation's context meter instead.
 - **Crew runs** create three related tasks (Planner, Coder, Reviewer) under the
   task you ran.
 - **Cancel** stops a running task.
@@ -321,7 +337,13 @@ or compacting the context never deletes messages.
   cache figures, and the memory estimate for the next turn. Colors are never the
   only signal. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is a
   danger colour, and 100% is full. Without a configured context window the
-  popover shows absolute tokens and no bar or percentages.
+  popover shows absolute tokens and no bar or percentages. The popover's meta
+  line says how the numbers were counted: **Exact · o200k_base** or
+  **Exact · cl100k_base** for the OpenAI-compatible families CowBot ships a
+  tokenizer for (GPT-5, GPT-4.1, GPT-4o, the o-series, GPT-4, and
+  GPT-3.5-turbo), or **Estimated from characters** for every other model. The
+  memory figure stays labelled as an estimate because the next turn's memory
+  block is still counted heuristically.
 - In a group, the popover has one tab per participant with that branch's
   breakdown, latest-run cache figure, and conversation-total cache figure. The
   tabs are keyboard accessible with the left and right arrow keys.
@@ -335,7 +357,9 @@ or compacting the context never deletes messages.
 - **Compact now** summarizes older context entries into one summary and stops
   sending the summarized entries; recent turns stay verbatim. In a group it
   compacts the active participant's branch. A system notice in the timeline
-  reports the token change, and the original messages remain visible.
+  reports the token change, and the original messages remain visible. If
+  another compaction is already running for that branch, CowBot reports that
+  instead of starting a second one.
 - **Compact automatically** is off by default. When enabled, CowBot compacts a
   selected participant's branch before its turn if it would cross the configured
   percentage (80% by default) of the usable window.
@@ -348,6 +372,19 @@ or compacting the context never deletes messages.
   a full participant is skipped with a notice naming it while the others answer,
   and a turn whose selected participants are all full posts a notice without a
   model call.
+- **Inspect** in the context popover opens a read-only inspector for the active
+  participant; each group participant can be inspected from its own tab. It has
+  three tabs. **Prompt** lists the system-prompt slots with their token counts
+  (agent profile, platform context, participant roster, default responder, peer
+  convention), every message in send order — the latest user turn and any
+  composer draft included — and the tool schemas. **Recall** shows the memory
+  block, both budgets, and every candidate the recall considered: selected
+  entries carry their score and scope, and skipped entries say whether they are
+  inactive or how many recall tokens remained. **Budget** shows the request
+  total against the usable window, the same colored segments as the ring, the
+  auto-compaction threshold, and an over-budget warning. Inspecting never
+  changes recall statistics or the conversation, so it is safe to use while
+  checking why an agent ignored a remembered fact.
 - Each user message in a group gets an **Answered by** line under it, showing
   whether mentions, routing, or the default responder chose the responders,
   which participants replied, and any failures or skips. Open **Routing** for
@@ -430,13 +467,68 @@ session, human, policy, or system. Approval is a guardrail, not OS isolation:
 the subprocess sandbox runs commands with your user permissions, so treat
 model-generated commands as untrusted.
 
+### Slash commands
+
+Type `/` at the start of the composer to open the command menu. Keep typing to
+filter by name or alias, move with the arrow keys, and press Enter or Tab to
+choose a row. A command that needs an argument inserts `/name ` and leaves the
+cursor in the composer; a command that needs nothing runs at once. Commands are
+actions, never messages: nothing is posted to the chat, nothing enters the
+context branch, and no command appears in the timeline or the context meter.
+Feedback appears in the notice area above the chat.
+
+| Command | What it does |
+| --- | --- |
+| `/help` | Lists every command. Nothing is sent. |
+| `/new [@agent ...]` | Opens the new-conversation form, preselecting the named agents. |
+| `/rename <name>` | Renames the current chat and keeps its topic. |
+| `/pin`, `/unpin` | Pins or unpins the current chat. |
+| `/delete` | Opens the delete confirmation for the current chat. |
+| `/compact [@participant]` | Compacts the conversation, or one participant's branch. Requires a conversation. |
+| `/clear [@participant]` | Clears context after a confirmation; messages stay visible. Requires a conversation. |
+| `/note [text]` | Saves the conversation note, or opens the note editor when no text is given. Requires a conversation. |
+| `/remember <text>` | Saves a memory entry: conversation scope in a conversation, agent scope in an agent chat, workspace scope in a group channel. |
+| `/btw <question>` | Answers a side question in a dismissible panel. The question and answer never enter the timeline or the context branch. Add `@Agent` to pick the responder. |
+| `/task <description>` | Opens task creation with the description filled in. |
+| `/model [name]` | Switches the active model, or opens the model menu when no name is given. |
+| `/approval [mode]` | Sets the composer approval mode. Modes: `safe_auto`, `ask`, `accept_edits`, `plan_only`, `trusted`, with `auto`, `manual`, `accept-edits`, `plan`, and `bypass` as aliases. |
+| `/stop` | Cancels the running tasks in this chat after a confirmation. |
+| `/settings [section]` | Opens Settings at `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
+
+`compact`, `clear`, and `note` only work in a user-created conversation, because
+that is where a context branch exists; in an agent chat or a group channel they
+explain that instead of doing nothing. `@participant` matches a participant name
+case-insensitively, and an unknown name returns a notice listing the roster.
+
+`/btw` runs a real turn with tools and approval, but it writes nothing: no
+message, no context entry, no routing turn. The panel above the composer is the
+only place the answer exists, and switching chats dismisses it. The agent cannot
+remember the exchange afterwards, so put anything you want kept into the
+conversation itself. Its cost still appears in Settings → Audit.
+
+If the first token is not a command, the composer shows an inline hint and does
+not send. Press Escape and then Enter to send that line as an ordinary message,
+or add an argument after a space — a line such as `/usr/bin/env python` has
+whitespace after the first token and is sent as a message straight away.
+
+
+Settings → Audit also lists **recent recorded prompts**. CowBot stores each LLM
+call's request — the messages, tool schemas, prompt slots, and the memory it
+selected — with credential-shaped content redacted before storage. Set how long
+they are kept (1–3,650 days, default 30) or turn storage off; stored snapshots
+still expire, and **Purge expired now** removes them immediately. A task run's
+**Recorded prompts** action opens the same viewer from task detail. This is not
+the same as **Inspect context**: the inspector rebuilds the *next* request from
+current settings, while a snapshot is the request that was actually sent.
+
 ## Data and backups
 
 - Workspace data: the workspace databases under the app data directory.
 - Model providers, API keys, the onboarding flag, and the workspace registry:
   `config.json` in the same directory (plain text).
 - Backups: use **Export workspace** for a portable package, or copy the database
-  files while CowBot is closed.
+  files while CowBot is closed. Prompt snapshots are device-local audit evidence
+  and are never included in an exported package.
 - Uninstalling the app does not delete your data; remove the app data directory
   manually if you want a clean install.
 
@@ -578,9 +670,15 @@ reporting, see [SECURITY.md](../SECURITY.md).
   DAG workflows.
 - No streaming responses, retries, or rate limiting. Token usage is recorded per
   model call, but there are no cost or billing views.
-- Context occupancy and compaction are estimated from a character heuristic
-  between calls; provider-reported usage is authoritative once a call returns.
+- Context occupancy and compaction use a model-aware token count: exact for
+  the OpenAI-compatible families CowBot ships a tokenizer for, and a labelled
+  character estimate for every other model, including Claude, DeepSeek, and
+  local runtimes. Memory budgets and the next turn's memory block remain
+  estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Slash commands are executed by the desktop only. The `cowbot` CLI uses the
+  same catalogue and parser but does not yet run commands, command history is
+  not kept, and `/model` cannot switch to a model on an inactive provider.
 - Workspace deletion and renaming are not available in the UI.
 - Builds are unsigned; macOS may require approval again after an update.
   Automatic updates cover NSIS, the DMG-installed app, and AppImage; MSI and
