@@ -25,13 +25,15 @@ use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::tool::ToolDefinition;
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    CompactionLocks, ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
-    PermissionService, SessionDecisions, TaskService, TemplateService, WorktreeService,
+    CompactionLocks, ConversationPreview, ConversationService, CrewRunOptions, CrewRunner,
+    LocalContext, MemoryService, PermissionService, PreviewService, SessionDecisions,
+    TaskRunPreview, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -59,6 +61,7 @@ pub struct LocalClient {
     agents: AgentService,
     permissions: PermissionService,
     memory: MemoryService,
+    preview: PreviewService,
     session_decisions: Arc<SessionDecisions>,
     worktrees: WorktreeService,
 }
@@ -106,6 +109,7 @@ impl LocalClient {
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
         let memory = MemoryService::new(store.clone(), context.workspace.id.clone());
+        let preview = PreviewService::new(store.clone(), context.workspace.id.clone());
         let worktrees = WorktreeService::new(store.clone(), bus.clone());
         worktrees.reconcile().await?;
         let session = ClientSession {
@@ -131,6 +135,7 @@ impl LocalClient {
             agents,
             permissions,
             memory,
+            preview,
             session_decisions,
             worktrees,
         })
@@ -661,6 +666,36 @@ impl Client for LocalClient {
 
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
         self.conversations.context(channel_id).await
+    }
+
+    async fn conversation_context_preview(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        draft: Option<&str>,
+        platform_context: Option<&str>,
+        plan_mode: bool,
+        tools: &[ToolDefinition],
+    ) -> CowResult<ConversationPreview> {
+        self.preview
+            .conversation(
+                channel_id,
+                agent_id,
+                draft,
+                platform_context,
+                plan_mode,
+                tools,
+            )
+            .await
+    }
+
+    async fn task_run_context_preview(
+        &self,
+        run_id: &RunId,
+        model: &str,
+        tools: &[ToolDefinition],
+    ) -> CowResult<Option<TaskRunPreview>> {
+        self.preview.task_run(run_id, model, tools).await
     }
 
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {

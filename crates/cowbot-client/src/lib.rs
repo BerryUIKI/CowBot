@@ -23,6 +23,7 @@ use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
+use cowbot_core::tool::ToolDefinition;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -30,8 +31,8 @@ mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
 pub use cowbot_service::{
-    AgentUpdate, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave,
-    RecalledMemory,
+    AgentUpdate, ConversationPreview, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate,
+    NewMemory, NoteSave, RecalledMemory, TaskRunPreview,
 };
 pub use local::LocalClient;
 
@@ -249,6 +250,29 @@ pub trait Client: Send + Sync {
     ) -> CowResult<ConversationSettings>;
     /// Token breakdown and cache summaries of a conversation context.
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
+    /// The exact request one participant's next turn would send.
+    ///
+    /// The preview never writes: no context entry, recall statistic, or LLM
+    /// call. `draft` is the composer's pending message; `platform_context` is
+    /// the caller's extra environment text; `plan_mode` adds the Plan-mode
+    /// instruction a turn in that mode carries; `tools` are the schemas the
+    /// caller would send.
+    async fn conversation_context_preview(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        draft: Option<&str>,
+        platform_context: Option<&str>,
+        plan_mode: bool,
+        tools: &[ToolDefinition],
+    ) -> CowResult<ConversationPreview>;
+    /// The request a task run started with, rebuilt from stored data.
+    async fn task_run_context_preview(
+        &self,
+        run_id: &RunId,
+        model: &str,
+        tools: &[ToolDefinition],
+    ) -> CowResult<Option<TaskRunPreview>>;
     /// Exclude every active context entry; display messages are kept.
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
     /// Exclude one participant's active context entries.

@@ -342,6 +342,38 @@ async fn local_client_manages_notes_memory_and_settings() {
     assert!(recalled.block.contains("prefers Rust"));
     assert_eq!(recalled.entry_ids, vec![entry.id.clone()]);
 
+    // The context preview rebuilds the next request without writing.
+    let preview = client
+        .conversation_context_preview(
+            &conversation.id,
+            &agent.id,
+            Some("Which language?"),
+            None,
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.plan.kind,
+        cowbot_core::prompt::PromptKind::Conversation
+    );
+    assert!(!preview.plan.slots.is_empty());
+    assert_eq!(
+        preview.plan.messages.last().unwrap().content,
+        "Which language?"
+    );
+    assert_eq!(
+        preview
+            .plan
+            .recall
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.selected)
+            .count(),
+        1
+    );
+
     // The context meter exposes the estimated memory block per participant.
     let context = client.conversation_context(&conversation.id).await.unwrap();
     assert_eq!(context.participants.len(), 1);
