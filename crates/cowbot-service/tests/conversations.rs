@@ -8,11 +8,11 @@ use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split, ContextEntry, ContextEntryKind, ContextEventKind, ContextRole,
+    compaction_split_by, ContextEntry, ContextEntryKind, ContextEventKind, ContextRole,
     ConversationMode, ConversationSettingsUpdate, RouteSource,
 };
 use cowbot_core::error::{CowError, CowResult};
-use cowbot_core::usage::TokenUsage;
+use cowbot_core::usage::{TokenSource, TokenUsage, MESSAGE_OVERHEAD_TOKENS};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider};
 use cowbot_service::{
     bootstrap_local, ChannelService, ChannelTurnOptions, ConversationService, ParticipantCapacity,
@@ -304,7 +304,7 @@ async fn post_user(channels: &ChannelService, channel: &Channel, content: &str) 
         .unwrap()
 }
 
-/// Append entries large enough that `compaction_split` has something to do.
+/// Append entries large enough that the compaction split has something to do.
 async fn seed_large_entries(
     store: &Store,
     channel: &Channel,
@@ -329,6 +329,16 @@ async fn seed_large_entries(
         entries.push(entry);
     }
     entries
+}
+
+/// The split the service computes for its estimator-counted test model.
+///
+/// `recording-model` is unrecognized, so entries cost their persisted estimate
+/// plus one message-framing allowance each (ADR-0035).
+fn service_split(entries: &[ContextEntry]) -> usize {
+    compaction_split_by(entries, |entry| {
+        entry.tokens.saturating_add(MESSAGE_OVERHEAD_TOKENS)
+    })
 }
 
 fn agent_replies(messages: &[ChannelMessage]) -> Vec<AgentId> {
@@ -465,6 +475,46 @@ async fn conversation_creation_assigns_a_fixed_model_and_participant() {
     assert_eq!(context.agent_id, agent.id);
     assert_eq!(context.model, "recording-model");
     assert_eq!(context.projection.active_entries, 0);
+    assert!(context.projection.system_tokens > 0);
+    // An unrecognized model is counted with the character estimator and says so.
+    assert_eq!(context.projection.token_source, TokenSource::Estimate);
+    assert_eq!(
+        context.projection.token_counter.as_deref(),
+        Some("character estimate")
+    );
+    assert!(context.projection.is_estimated());
+}
+
+#[tokio::test]
+async fn context_counts_entries_with_the_conversation_model_tokenizer() {
+    let (store, agent, service, _, _) = setup().await;
+    let channel = service
+        .create(Some("Counting"), &agent.id, None, "gpt-4o")
+        .await
+        .unwrap();
+
+    let mut entry = ContextEntry::new(
+        channel.id.clone(),
+        agent.id.clone(),
+        ContextRole::User,
+        "hello world",
+    );
+    // The persisted estimate is model-independent and must not drive the meter.
+    entry.tokens = 999;
+    store.append_context_entry(&entry).await.unwrap();
+
+    let context = service.context(&channel.id).await.unwrap();
+    assert_eq!(context.projection.token_source, TokenSource::Tiktoken);
+    assert_eq!(
+        context.projection.token_counter.as_deref(),
+        Some("o200k_base")
+    );
+    assert!(!context.projection.is_estimated());
+    // `o200k_base` counts "hello world" as two tokens, plus message framing.
+    assert_eq!(
+        context.projection.latest_tokens,
+        2 + MESSAGE_OVERHEAD_TOKENS
+    );
     assert!(context.projection.system_tokens > 0);
 }
 
@@ -640,7 +690,7 @@ async fn compaction_keeps_entries_appended_during_the_summary_call() {
         .filter(|entry| !entry.excluded)
         .cloned()
         .collect::<Vec<_>>();
-    let cutoff = active[compaction_split(&active)].seq;
+    let cutoff = active[service_split(&active)].seq;
 
     let llm = Arc::new(GatedLlm::new());
     let task = {
@@ -1145,7 +1195,7 @@ async fn compaction_reports_a_stale_prefix_when_an_entry_is_excluded_during_the_
         .filter(|entry| !entry.excluded)
         .cloned()
         .collect::<Vec<_>>();
-    let summarized = &active[..compaction_split(&active)];
+    let summarized = &active[..service_split(&active)];
     store
         .exclude_context_entries(std::slice::from_ref(&summarized[0].id))
         .await
