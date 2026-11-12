@@ -54,6 +54,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 
 Use `pnpm run tauri dev` for the native shell. See [desktop prerequisites](../desktop/README.md); a browser-only Vite preview does not supply the native client backend.
 
+### Generated desktop types
+
+Types the desktop receives from Tauri commands are generated from `cowbot-core` rather than written by hand. After changing a core type that the desktop renders, run `pnpm run generate:types` from `desktop/` and commit `desktop/src/generated`. `pnpm run check:types` reports a stale copy, and the desktop CI job regenerates and checks it before the frontend build, so a Rust rename that the desktop has not adopted fails the pull request instead of the user (ADR-0040).
+
+Opting a type in is one attribute on its definition:
+`#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]`. Types the desktop never sees stay out of the generated surface.
+
 Desktop release bundles are built by [`.github/workflows/release.yml`](../.github/workflows/release.yml) on manual dispatch and on `v*` tags: NSIS/MSI on Windows, a universal DMG on macOS, and deb/AppImage on Linux. Manual runs upload workflow artifacts; tag runs create draft GitHub Releases that a maintainer publishes after review. Tags must match the version in `desktop/src-tauri/tauri.conf.json`. Builds are unsigned; see [ADR-0014](ADR/0014-desktop-release-builds.md). Updater artifacts are signed with `TAURI_SIGNING_PRIVATE_KEY` and its password; a final `updater-json` job writes `latest.json` from all three platform builds (ADR-0018). Local bundle builds without the key need `pnpm run tauri build -- --no-sign`.
 
 ## Runtime configuration
