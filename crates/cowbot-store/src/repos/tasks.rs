@@ -56,6 +56,7 @@ struct RunRow {
     status: String,
     started_at: String,
     finished_at: Option<String>,
+    agent_profile: Option<String>,
 }
 
 impl RunRow {
@@ -67,6 +68,11 @@ impl RunRow {
             status: run_status_from_str(&self.status)?,
             started_at: parse_datetime(&self.started_at)?,
             finished_at: parse_optional_datetime(self.finished_at.as_deref())?,
+            agent_profile: self
+                .agent_profile
+                .as_deref()
+                .map(|value| parse_json(value, "runs.agent_profile"))
+                .transpose()?,
         })
     }
 }
@@ -304,9 +310,15 @@ impl Store {
     }
 
     pub async fn create_run(&self, run: &Run) -> CowResult<()> {
+        let agent_profile = run
+            .agent_profile
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         sqlx::query(
-            "INSERT INTO runs (id, task_id, agent_id, status, started_at, finished_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs
+                (id, task_id, agent_id, status, started_at, finished_at, agent_profile)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id.0)
         .bind(&run.task_id.0)
@@ -314,6 +326,7 @@ impl Store {
         .bind(run_status_to_str(run.status))
         .bind(run.started_at.to_rfc3339())
         .bind(run.finished_at.map(|value| value.to_rfc3339()))
+        .bind(agent_profile)
         .execute(self.pool())
         .await
         .map_err(db)?;
@@ -338,7 +351,7 @@ impl Store {
 
     pub async fn get_run(&self, id: &RunId) -> CowResult<Option<Run>> {
         let row = sqlx::query_as::<_, RunRow>(
-            "SELECT id, task_id, agent_id, status, started_at, finished_at
+            "SELECT id, task_id, agent_id, status, started_at, finished_at, agent_profile
              FROM runs WHERE id = ?",
         )
         .bind(&id.0)
@@ -350,7 +363,7 @@ impl Store {
 
     pub async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>> {
         let rows = sqlx::query_as::<_, RunRow>(
-            "SELECT id, task_id, agent_id, status, started_at, finished_at
+            "SELECT id, task_id, agent_id, status, started_at, finished_at, agent_profile
              FROM runs WHERE task_id = ? ORDER BY started_at",
         )
         .bind(&task_id.0)
