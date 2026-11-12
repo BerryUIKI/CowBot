@@ -43,6 +43,7 @@ export type CommandAction =
   | { kind: "pin"; channelId: string; pinned: boolean }
   | { kind: "stop"; taskIds: string[] }
   | { kind: "remember"; content: string; agentId: string | null; channelId: string | null }
+  | { kind: "side-question"; question: string; agentId: string | null }
   | { kind: "save-note"; content: string; channelId: string };
 
 /// Approval values and the aliases the issue documents for each.
@@ -239,6 +240,27 @@ export function planCommand(
         return { kind: "remember", content, agentId: channel!.agent_id, channelId: null };
       }
       return { kind: "remember", content, agentId: null, channelId: null };
+    }
+
+    case "btw": {
+      const question = invocation.raw_args.trim();
+      if (!question) return { kind: "error", message: "Usage: /btw <question>" };
+      const missing = needsChannel(targets);
+      if (missing) return missing;
+      // The question may name its responder; the service strips that mention
+      // from the request once it has selected the agent.
+      const mentioned = resolveParticipant(targets.participants, first);
+      if (mentioned === undefined && first?.startsWith("@")) {
+        return {
+          kind: "notice",
+          message: `Unknown ${first}. Participants: ${rosterList(targets.participants) || "none"}.`,
+        };
+      }
+      return {
+        kind: "side-question",
+        question,
+        agentId: mentioned?.agentId ?? null,
+      };
     }
 
     case "task":

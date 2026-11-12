@@ -14,6 +14,7 @@ import type {
   ClientSession,
   CommandInfo,
   CommandParseResult,
+  SideAnswer,
   CompactionOutcome,
   ContextPreview,
   ConversationContext,
@@ -638,6 +639,24 @@ export function listCommands(): Promise<CommandInfo[]> {
 
 export function parseCommand(input: string): Promise<CommandParseResult> {
   return invoke<CommandParseResult>("parse_command", { input });
+}
+
+export function askSideQuestion(
+  channelId: string,
+  question: string,
+  options: {
+    agentId?: string;
+    model?: string;
+    approvalLevel?: ApprovalLevel;
+  } = {},
+): Promise<SideAnswer> {
+  return invoke<SideAnswer>("ask_side_question", {
+    channelId,
+    question,
+    agentId: options.agentId,
+    model: options.model,
+    approvalLevel: options.approvalLevel,
+  });
 }
 
 export function addProject(path: string): Promise<Project[]> {

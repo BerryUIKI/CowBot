@@ -62,6 +62,9 @@ pub enum LlmCallKind {
     Compact,
     /// Memory extraction from a completed conversation.
     MemoryExtract,
+    /// A side question asked with `/btw`: one turn whose answer is shown to the
+    /// user but never posted or appended to a context branch (ADR-0039).
+    SideQuestion,
 }
 
 impl LlmCallKind {
@@ -72,6 +75,7 @@ impl LlmCallKind {
             Self::Summary => "summary",
             Self::Compact => "compact",
             Self::MemoryExtract => "memory_extract",
+            Self::SideQuestion => "side_question",
         }
     }
 }
@@ -92,6 +96,7 @@ impl std::str::FromStr for LlmCallKind {
             "summary" => Ok(Self::Summary),
             "compact" => Ok(Self::Compact),
             "memory_extract" => Ok(Self::MemoryExtract),
+            "side_question" => Ok(Self::SideQuestion),
             _ => Err(()),
         }
     }

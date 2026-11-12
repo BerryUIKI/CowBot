@@ -31,7 +31,7 @@ pub use approvals::{
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
 pub use channel_agents::{
-    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
+    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity, SideAnswer,
 };
 pub use channels::ChannelService;
 pub use compaction_locks::{CompactionGuard, CompactionLocks};

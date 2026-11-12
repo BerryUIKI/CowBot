@@ -16,7 +16,8 @@ use cowbot_core::task::TaskSource;
 use cowbot_core::usage::{TokenSource, TokenUsage, MESSAGE_OVERHEAD_TOKENS};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider};
 use cowbot_service::{
-    bootstrap_local, ChannelService, ChannelTurnOptions, ConversationService, ParticipantCapacity,
+    bootstrap_local, ChannelAgentService, ChannelService, ChannelTurnOptions, ConversationService,
+    ParticipantCapacity,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -2189,5 +2190,135 @@ async fn router_provider_error_falls_back_to_the_default_responder() {
     assert!(
         reason.contains("the router call failed"),
         "unexpected reason: {reason}"
+    );
+}
+
+/// The local workspace id, for services the setup helper does not return.
+async fn workspace_id(store: Store) -> cowbot_core::identity::WorkspaceId {
+    bootstrap_local(&store)
+        .await
+        .expect("the local workspace bootstraps")
+        .workspace
+        .id
+}
+
+#[tokio::test]
+async fn a_side_question_answers_without_touching_the_conversation() {
+    let (store, agent, _service, _channels, channel) = setup().await;
+    let llm = Arc::new(RecordingLlm::new());
+    let agents = ChannelAgentService::new(
+        store.clone(),
+        EventBus::default_bus(),
+        workspace_id(store.clone()).await,
+    );
+
+    let before_messages = store.list_messages(&channel.id, 100).await.unwrap();
+    let before_entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+
+    let answer = agents
+        .ask_side_question(
+            &channel.id,
+            None,
+            "what does the compaction threshold mean?",
+            "recording-model",
+            llm.clone(),
+            ToolRegistry::default(),
+            None,
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(answer.agent_id, agent.id);
+    assert_eq!(answer.agent_name, agent.name);
+    assert!(
+        answer.content.starts_with("answer"),
+        "got {:?}",
+        answer.content
+    );
+
+    // Nothing reached the timeline, the branch, or the turn table.
+    let after_messages = store.list_messages(&channel.id, 100).await.unwrap();
+    assert_eq!(
+        after_messages.len(),
+        before_messages.len(),
+        "a side question must not post a message"
+    );
+    let after_entries = store
+        .list_context_entries(&channel.id, &agent.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_entries.len(),
+        before_entries.len(),
+        "a side question must not append a context entry"
+    );
+    assert!(
+        store
+            .list_conversation_turns(&channel.id, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a side question must not record a routing turn"
+    );
+
+    // The question reached the model, and the request carries no branch.
+    let requests = llm.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.model, "recording-model");
+    assert_eq!(request.messages.len(), 2);
+    assert!(request.messages[1]
+        .content
+        .contains("what does the compaction threshold mean?"));
+    assert!(request.messages[1].content.contains("Side question:"));
+
+    // Usage is recorded under its own call kind so the cost stays visible.
+    let calls = store.list_llm_calls_for_channel(&channel.id).await.unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.call_kind == cowbot_core::usage::LlmCallKind::SideQuestion),
+        "side question usage should be recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_side_question_strips_the_addressing_mention() {
+    let (_store, agent, _service, _channels, channel) = setup().await;
+    let llm = Arc::new(RecordingLlm::new());
+    let agents = ChannelAgentService::new(
+        _store.clone(),
+        EventBus::default_bus(),
+        workspace_id(_store.clone()).await,
+    );
+
+    let answer = agents
+        .ask_side_question(
+            &channel.id,
+            None,
+            &format!("@{} why is the sky blue?", agent.name),
+            "recording-model",
+            llm.clone(),
+            ToolRegistry::default(),
+            None,
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer.agent_id, agent.id);
+
+    let request = &llm.requests()[0];
+    let question = request.messages[1].content.clone();
+    assert!(
+        question.contains("why is the sky blue?"),
+        "the question should survive: {question}"
+    );
+    assert!(
+        !question.contains(&format!("@{}", agent.name)),
+        "the addressing mention should be stripped: {question}"
     );
 }

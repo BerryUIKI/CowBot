@@ -313,6 +313,7 @@ pub fn run() {
             commands::import_workspace,
             commands::list_commands,
             commands::parse_command,
+            commands::ask_side_question,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CowBot");

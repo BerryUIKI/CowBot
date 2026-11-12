@@ -23,6 +23,7 @@ import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
+import SideAnswerPanel from "./SideAnswerPanel";
 import SlashCommandMenu from "./SlashCommandMenu";
 import { planCommand } from "./commandActions";
 import type { CommandAction } from "./commandActions";
@@ -40,6 +41,7 @@ import UpdateBanner from "./UpdateBanner";
 import {
   addMemoryEntry,
   addProject,
+  askSideQuestion,
   archiveTask,
   approveTaskPlan,
   cancelTask,
@@ -112,6 +114,7 @@ import type {
   Project,
   ProjectBranches,
   RouteSource,
+  SideAnswer,
   Task,
   TaskOverviewEntry,
   TaskWorktree,
@@ -307,6 +310,8 @@ export default function App() {
   const [commandHint, setCommandHint] = useState<string | null>(null);
   const [commandExpanded, setCommandExpanded] = useState(false);
   const [contextOpenSignal, setContextOpenSignal] = useState(0);
+  const [sideAnswer, setSideAnswer] = useState<SideAnswer | null>(null);
+  const [sideQuestionBusy, setSideQuestionBusy] = useState(false);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
@@ -720,6 +725,13 @@ export default function App() {
 
   // The catalogue is fetched once per session. If it fails, slash mode stays
   // off and drafts are sent as ordinary messages; the failure is reported once.
+  // A side answer belongs to one chat, so switching chats drops it: nothing
+  // about the exchange was persisted, and showing it elsewhere would imply it
+  // had been.
+  useEffect(() => {
+    setSideAnswer(null);
+  }, [selectedChannel?.id]);
+
   useEffect(() => {
     let cancelled = false;
     loadCommands()
@@ -1837,6 +1849,25 @@ export default function App() {
           );
         } catch (err) {
           setError(errorMessage(err));
+        }
+        return;
+      }
+
+      case "side-question": {
+        if (!selectedChannel) return;
+        setSideQuestionBusy(true);
+        setError(null);
+        try {
+          const answer = await askSideQuestion(selectedChannel.id, action.question, {
+            agentId: action.agentId ?? selectedAgent?.id,
+            approvalLevel: channelApproval,
+          });
+          setSideAnswer(answer);
+          setNotice(null);
+        } catch (err) {
+          setError(errorMessage(err));
+        } finally {
+          setSideQuestionBusy(false);
         }
         return;
       }
@@ -3474,6 +3505,18 @@ export default function App() {
                 </div>
               ) : null}
 
+              {sideAnswer ? (
+                <SideAnswerPanel
+                  answer={sideAnswer}
+                  onDismiss={() => setSideAnswer(null)}
+                  onAskAgain={() => {
+                    setSideAnswer(null);
+                    setDraft("/btw ");
+                    composerRef.current?.focus();
+                  }}
+                />
+              ) : null}
+
               <form
                 className="composer-bar"
                 onSubmit={(event) => {
@@ -3552,7 +3595,9 @@ export default function App() {
                     placeholder={
                       conversationFull
                         ? "Context full — compact or start a new conversation"
-                        : `Message ${composerTarget}`
+                        : sideQuestionBusy
+                          ? "Asking a side question…"
+                          : `Message ${composerTarget}`
                     }
                     aria-label={`Message ${composerTarget}`}
                     aria-autocomplete="list"

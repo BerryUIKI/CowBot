@@ -488,6 +488,7 @@ Feedback appears in the notice area above the chat.
 | `/clear [@participant]` | Clears context after a confirmation; messages stay visible. Requires a conversation. |
 | `/note [text]` | Saves the conversation note, or opens the note editor when no text is given. Requires a conversation. |
 | `/remember <text>` | Saves a memory entry: conversation scope in a conversation, agent scope in an agent chat, workspace scope in a group channel. |
+| `/btw <question>` | Answers a side question in a dismissible panel. The question and answer never enter the timeline or the context branch. Add `@Agent` to pick the responder. |
 | `/task <description>` | Opens task creation with the description filled in. |
 | `/model [name]` | Switches the active model, or opens the model menu when no name is given. |
 | `/approval [mode]` | Sets the composer approval mode. Modes: `safe_auto`, `ask`, `accept_edits`, `plan_only`, `trusted`, with `auto`, `manual`, `accept-edits`, `plan`, and `bypass` as aliases. |
@@ -498,6 +499,12 @@ Feedback appears in the notice area above the chat.
 that is where a context branch exists; in an agent chat or a group channel they
 explain that instead of doing nothing. `@participant` matches a participant name
 case-insensitively, and an unknown name returns a notice listing the roster.
+
+`/btw` runs a real turn with tools and approval, but it writes nothing: no
+message, no context entry, no routing turn. The panel above the composer is the
+only place the answer exists, and switching chats dismisses it. The agent cannot
+remember the exchange afterwards, so put anything you want kept into the
+conversation itself. Its cost still appears in Settings → Audit.
 
 If the first token is not a command, the composer shows an inline hint and does
 not send. Press Escape and then Enter to send that line as an ordinary message,
