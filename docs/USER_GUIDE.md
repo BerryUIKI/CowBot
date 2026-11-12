@@ -467,6 +467,44 @@ session, human, policy, or system. Approval is a guardrail, not OS isolation:
 the subprocess sandbox runs commands with your user permissions, so treat
 model-generated commands as untrusted.
 
+### Slash commands
+
+Type `/` at the start of the composer to open the command menu. Keep typing to
+filter by name or alias, move with the arrow keys, and press Enter or Tab to
+choose a row. A command that needs an argument inserts `/name ` and leaves the
+cursor in the composer; a command that needs nothing runs at once. Commands are
+actions, never messages: nothing is posted to the chat, nothing enters the
+context branch, and no command appears in the timeline or the context meter.
+Feedback appears in the notice area above the chat.
+
+| Command | What it does |
+| --- | --- |
+| `/help` | Lists every command. Nothing is sent. |
+| `/new [@agent ...]` | Opens the new-conversation form, preselecting the named agents. |
+| `/rename <name>` | Renames the current chat and keeps its topic. |
+| `/pin`, `/unpin` | Pins or unpins the current chat. |
+| `/delete` | Opens the delete confirmation for the current chat. |
+| `/compact [@participant]` | Compacts the conversation, or one participant's branch. Requires a conversation. |
+| `/clear [@participant]` | Clears context after a confirmation; messages stay visible. Requires a conversation. |
+| `/note [text]` | Saves the conversation note, or opens the note editor when no text is given. Requires a conversation. |
+| `/remember <text>` | Saves a memory entry: conversation scope in a conversation, agent scope in an agent chat, workspace scope in a group channel. |
+| `/task <description>` | Opens task creation with the description filled in. |
+| `/model [name]` | Switches the active model, or opens the model menu when no name is given. |
+| `/approval [mode]` | Sets the composer approval mode. Modes: `safe_auto`, `ask`, `accept_edits`, `plan_only`, `trusted`, with `auto`, `manual`, `accept-edits`, `plan`, and `bypass` as aliases. |
+| `/stop` | Cancels the running tasks in this chat after a confirmation. |
+| `/settings [section]` | Opens Settings at `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
+
+`compact`, `clear`, and `note` only work in a user-created conversation, because
+that is where a context branch exists; in an agent chat or a group channel they
+explain that instead of doing nothing. `@participant` matches a participant name
+case-insensitively, and an unknown name returns a notice listing the roster.
+
+If the first token is not a command, the composer shows an inline hint and does
+not send. Press Escape and then Enter to send that line as an ordinary message,
+or add an argument after a space — a line such as `/usr/bin/env python` has
+whitespace after the first token and is sent as a message straight away.
+
+
 Settings → Audit also lists **recent recorded prompts**. CowBot stores each LLM
 call's request — the messages, tool schemas, prompt slots, and the memory it
 selected — with credential-shaped content redacted before storage. Set how long
@@ -631,6 +669,9 @@ reporting, see [SECURITY.md](../SECURITY.md).
   local runtimes. Memory budgets and the next turn's memory block remain
   estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Slash commands are executed by the desktop only. The `cowbot` CLI uses the
+  same catalogue and parser but does not yet run commands, command history is
+  not kept, and `/model` cannot switch to a model on an inactive provider.
 - Workspace deletion and renaming are not available in the UI.
 - Builds are unsigned; macOS may require approval again after an update.
   Automatic updates cover NSIS, the DMG-installed app, and AppImage; MSI and
