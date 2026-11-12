@@ -62,11 +62,8 @@ export default function Inspector({
     isActiveOverviewStatus(entry.status),
   ).length;
 
-  const tabs = taskPanel
-    ? [{ id: "task" as const, label: "Task" }, ...baseTabs]
-    : baseTabs;
-  const activeTab: InspectorTab =
-    taskPanel || tab !== "task" ? tab : "approvals";
+  const tabs = [{ id: "task" as const, label: "Task" }, ...baseTabs];
+  const activeTab: InspectorTab = tab;
 
   return (
     <aside className="inspector" aria-label="Inspector" inert={inert}>
@@ -105,17 +102,15 @@ export default function Inspector({
       </header>
 
       <div className="inspector-body">
-        {taskPanel ? (
-          <div
-            className="inspector-pane"
-            role="tabpanel"
-            id="inspector-panel-task"
-            aria-labelledby="inspector-tab-task"
-            hidden={activeTab !== "task"}
-          >
-            {taskPanel}
-          </div>
-        ) : null}
+        <div
+          className="inspector-pane"
+          role="tabpanel"
+          id="inspector-panel-task"
+          aria-labelledby="inspector-tab-task"
+          hidden={activeTab !== "task"}
+        >
+          {taskPanel}
+        </div>
         <div
           className="inspector-pane"
           role="tabpanel"

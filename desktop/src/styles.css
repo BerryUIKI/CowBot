@@ -312,6 +312,37 @@ button {
   font-size: 11px;
 }
 
+.nav-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.nav-disclosure:hover {
+  color: var(--paper);
+}
+
+.nav-disclosure:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.disclosure-mark {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 120ms ease;
+}
+
+.disclosure-mark.is-open {
+  transform: rotate(90deg);
+}
+
 .contact-item {
   position: relative;
 }
@@ -2637,6 +2668,47 @@ button {
   white-space: pre-wrap;
 }
 
+.task-output-text {
+  margin: 3px 0 0;
+  white-space: pre-wrap;
+}
+
+.task-output-text.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.task-prompt-text.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
+.task-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.task-section-head .task-prompt-label {
+  margin: 0;
+}
+
+.task-toggle {
+  padding: 0;
+  color: var(--paper-faint);
+  font-size: 11px;
+}
+
+.task-toggle:hover {
+  color: var(--paper);
+}
+
 .task-plan {
   margin-top: 24px;
   padding: 16px 18px;
@@ -2668,6 +2740,43 @@ button {
 
 .task-plan .form-actions {
   margin-top: 14px;
+}
+
+.task-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 12px 0;
+  overflow-y: auto;
+}
+
+.task-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-panel-head .task-filter {
+  flex: 1;
+  margin: 0;
+}
+
+.task-panel-empty {
+  margin: 8px 2px;
+  color: var(--paper-faint);
+  font-size: 13px;
+}
+
+.task-panel-toggle {
+  margin: 10px 2px 12px;
+}
+
+.task-back {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 2px 0;
 }
 
 .task-filter {

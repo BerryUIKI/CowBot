@@ -46,6 +46,7 @@ interface TaskDetailProps {
   approvingPlan: boolean;
   onToggleArchive: () => void;
   archiveBusy: boolean;
+  onBack?: () => void;
 }
 
 function outcomeText(outcome: AssignmentOutcome): string {
@@ -91,10 +92,19 @@ export default function TaskDetail({
   approvingPlan,
   onToggleArchive,
   archiveBusy,
+  onBack,
 }: TaskDetailProps) {
   const kind = taskStatusKind(task.status);
   const canCancel = (kind === "pending" || kind === "in_progress") && !running;
   const canRun = kind === "pending" && !running;
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [outputExpanded, setOutputExpanded] = useState(false);
+  const promptLines = task.description ? task.description.split("\n").length : 0;
+  const promptLong = task.description.length > 400 || promptLines > 6;
+  const outputLines = task.expected_output
+    ? task.expected_output.split("\n").length
+    : 0;
+  const outputLong = task.expected_output.length > 240 || outputLines > 3;
   const canArchive =
     kind === "completed" || kind === "failed" || kind === "cancelled";
   const approvalLevel = assignments[0]
@@ -152,6 +162,11 @@ export default function TaskDetail({
 
   return (
     <article className="task-detail">
+      {onBack ? (
+        <button type="button" className="text-button task-back" onClick={onBack}>
+          ← All tasks
+        </button>
+      ) : null}
       <header className="task-header">
         <div className="task-heading">
           <div className="task-badges">
@@ -160,10 +175,28 @@ export default function TaskDetail({
             <span className="task-id">Task {task.id.slice(0, 8)}</span>
           </div>
           <h2 className="task-title">{task.title || task.description}</h2>
-          <p className="task-output">
+          <div className="task-output">
             <span className="task-output-label">Expected output</span>
-            {task.expected_output}
-          </p>
+            <p
+              id="task-output-text"
+              className={`task-output-text${
+                outputLong && !outputExpanded ? " is-collapsed" : ""
+              }`}
+            >
+              {task.expected_output}
+            </p>
+            {outputLong ? (
+              <button
+                type="button"
+                className="text-button task-toggle"
+                aria-expanded={outputExpanded}
+                aria-controls="task-output-text"
+                onClick={() => setOutputExpanded((value) => !value)}
+              >
+                {outputExpanded ? "Show less" : `Show more (${outputLines} lines)`}
+              </button>
+            ) : null}
+          </div>
         </div>
         <div className="task-actions">
           {canRun || running ? (
@@ -204,8 +237,30 @@ export default function TaskDetail({
       </header>
 
       <section className="task-prompt" aria-label="Task prompt">
-        <h3 className="task-prompt-label">Task prompt</h3>
-        <p className="task-prompt-text">{task.description}</p>
+        <div className="task-section-head">
+          <h3 className="task-prompt-label">Task prompt</h3>
+          {promptLong ? (
+            <button
+              type="button"
+              className="text-button task-toggle"
+              aria-expanded={promptExpanded}
+              aria-controls="task-prompt-text"
+              onClick={() => setPromptExpanded((value) => !value)}
+            >
+              {promptExpanded
+                ? "Show less"
+                : `Show more (${promptLines} lines)`}
+            </button>
+          ) : null}
+        </div>
+        <p
+          id="task-prompt-text"
+          className={`task-prompt-text${
+            promptLong && !promptExpanded ? " is-collapsed" : ""
+          }`}
+        >
+          {task.description}
+        </p>
       </section>
 
       {task.plan ? (

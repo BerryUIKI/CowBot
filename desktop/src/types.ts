@@ -290,6 +290,8 @@ export type TaskStatus =
   | { completed: { output: string } }
   | { failed: { error: string } };
 
+export type TaskSource = "user" | "channel_turn" | "conversation_turn";
+
 export interface Task {
   id: string;
   title: string;
@@ -299,6 +301,7 @@ export interface Task {
   channel_id: string | null;
   context_tasks: string[];
   run_group: string | null;
+  source: TaskSource;
   status: TaskStatus;
   archived: boolean;
   plan?: string | null;
