@@ -7,12 +7,15 @@
 
 use crate::endpoint::{endpoint_url, models_url, parse_model_ids};
 use crate::provider::LlmProvider;
+use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, CompletionOutcome,
+    LlmToolCall, StreamChunk,
 };
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::usage::TokenUsage;
+use futures::StreamExt;
 use serde_json::{json, Value};
 use tracing::{debug, error};
 
@@ -164,6 +167,294 @@ fn request_body(request: &ChatCompletionRequest) -> Value {
     body
 }
 
+/// Which kind of content block streamed text belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockKind {
+    Text,
+    Thinking,
+    ToolUse,
+}
+
+/// Accumulates one Anthropic content block while it streams.
+///
+/// `tool_use` input arrives as JSON fragments in `input_json_delta` events, so
+/// the arguments are only usable once `content_block_stop` closes the block.
+#[derive(Default)]
+struct StreamedBlock {
+    kind: Option<BlockKind>,
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[async_trait]
+impl LlmProvider for AnthropicProvider {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    async fn chat_complete(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        let url = self.messages_url();
+        debug!(url = %url, model = %request.model, "Dispatching Anthropic messages request");
+
+        let mut http = self
+            .client
+            .post(&url)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(&request_body(request));
+        if let Some(key) = &self.api_key {
+            http = http.header("x-api-key", key.as_str()).bearer_auth(key);
+        }
+
+        let response = http
+            .send()
+            .await
+            .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read response body".to_string());
+            error!(status = %status, body = %err_text, "LLM provider returned non-200 status");
+            return Err(CowError::Llm(format!(
+                "API returned error status {}: {}",
+                status, err_text
+            )));
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
+
+        parse_response(payload)
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+        cancel: &CancelSignal,
+        on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
+    ) -> CowResult<CompletionOutcome> {
+        cancel.ensure_live()?;
+        let url = self.messages_url();
+        let mut body = request_body(request);
+        body["stream"] = Value::Bool(true);
+        debug!(url = %url, model = %request.model, "Streaming Anthropic messages");
+
+        let mut http = self
+            .client
+            .post(&url)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("accept", "text/event-stream")
+            .json(&body);
+        if let Some(key) = &self.api_key {
+            http = http.header("x-api-key", key.as_str()).bearer_auth(key);
+        }
+
+        let response = tokio::select! {
+            response = http.send() => response
+                .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?,
+            () = cancel.cancelled() => return Err(CowError::Cancelled),
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read response body".to_string());
+            error!(status = %status, body = %err_text, "LLM provider returned non-200 status");
+            return Err(CowError::Llm(format!(
+                "API returned error status {}: {}",
+                status, err_text
+            )));
+        }
+
+        let mut outcome = CompletionOutcome::default();
+        let mut decoder = SseDecoder::new();
+        let mut block = StreamedBlock::default();
+        let mut finished = false;
+        let mut stream = response.bytes_stream();
+
+        loop {
+            let next = tokio::select! {
+                next = stream.next() => next,
+                () = cancel.cancelled() => return Err(CowError::Cancelled),
+            };
+            let Some(chunk) = next else {
+                break;
+            };
+            let bytes = chunk
+                .map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
+
+            for frame in decoder.push(&bytes) {
+                let data = frame.data.trim();
+                if data.is_empty() {
+                    continue;
+                }
+                let Ok(event) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                let event_type = frame
+                    .event
+                    .clone()
+                    .or_else(|| event.get("type").and_then(Value::as_str).map(str::to_string))
+                    .unwrap_or_default();
+
+                match event_type.as_str() {
+                    "message_start" => {
+                        if let Some(usage) = event.pointer("/message/usage") {
+                            emit_usage(usage, &mut outcome, on_chunk);
+                        }
+                    }
+                    "content_block_start" => {
+                        block = StreamedBlock::default();
+                        block.kind = match event.pointer("/content_block/type").and_then(Value::as_str)
+                        {
+                            Some("tool_use") => Some(BlockKind::ToolUse),
+                            Some("thinking") => Some(BlockKind::Thinking),
+                            _ => Some(BlockKind::Text),
+                        };
+                        if let Some(id) = event.pointer("/content_block/id").and_then(Value::as_str) {
+                            block.id = id.to_string();
+                        }
+                        if let Some(name) =
+                            event.pointer("/content_block/name").and_then(Value::as_str)
+                        {
+                            block.name = name.to_string();
+                        }
+                    }
+                    "content_block_delta" => {
+                        let delta_type = event.pointer("/delta/type").and_then(Value::as_str);
+                        match delta_type {
+                            Some("input_json_delta") => {
+                                if let Some(partial) = event
+                                    .pointer("/delta/partial_json")
+                                    .and_then(Value::as_str)
+                                {
+                                    block.arguments.push_str(partial);
+                                }
+                            }
+                            Some("thinking_delta") => {
+                                if let Some(text) =
+                                    event.pointer("/delta/thinking").and_then(Value::as_str)
+                                {
+                                    if !text.is_empty() {
+                                        emit_text(
+                                            StreamChunk::Reasoning(text.to_string()),
+                                            &mut outcome,
+                                            on_chunk,
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {
+                                if let Some(text) = event.pointer("/delta/text").and_then(Value::as_str)
+                                {
+                                    if !text.is_empty() {
+                                        let kind = block.kind.unwrap_or(BlockKind::Text);
+                                        let chunk = match kind {
+                                            BlockKind::Thinking => {
+                                                StreamChunk::Reasoning(text.to_string())
+                                            }
+                                            _ => StreamChunk::Text(text.to_string()),
+                                        };
+                                        emit_text(chunk, &mut outcome, on_chunk);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "content_block_stop" => {
+                        let closed = std::mem::take(&mut block);
+                        if closed.kind == Some(BlockKind::ToolUse) {
+                            let call = LlmToolCall {
+                                id: closed.id,
+                                name: closed.name,
+                                arguments: serde_json::from_str(&closed.arguments)
+                                    .unwrap_or_else(|_| json!({ "raw": closed.arguments })),
+                            };
+                            emit_text(StreamChunk::ToolCall(call), &mut outcome, on_chunk);
+                        }
+                    }
+                    "message_delta" => {
+                        if let Some(reason) =
+                            event.pointer("/delta/stop_reason").and_then(Value::as_str)
+                        {
+                            outcome.finish_reason = Some(reason.to_string());
+                        }
+                        if let Some(usage) = event.get("usage") {
+                            emit_usage(usage, &mut outcome, on_chunk);
+                        }
+                    }
+                    "message_stop" => {
+                        finished = true;
+                        break;
+                    }
+                    "error" => {
+                        let message = event
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the provider reported a streaming error");
+                        return Err(CowError::Llm(message.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+
+            if finished {
+                break;
+            }
+        }
+
+        Ok(outcome)
+    }
+
+    async fn list_models(&self) -> CowResult<Vec<String>> {
+        let url = self.models_url();
+        debug!(url = %url, "Fetching Anthropic model list");
+
+        let mut http = self
+            .client
+            .get(&url)
+            .header("anthropic-version", ANTHROPIC_VERSION);
+        if let Some(key) = &self.api_key {
+            http = http.header("x-api-key", key.as_str()).bearer_auth(key);
+        }
+
+        let response = http
+            .send()
+            .await
+            .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read response body".to_string());
+            error!(status = %status, body = %err_text, "Model list request returned non-200 status");
+            return Err(CowError::Llm(format!(
+                "API returned error status {}: {}",
+                status, err_text
+            )));
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
+
+        parse_model_ids(&payload)
+    }
+}
+
 fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
     let raw_usage = value.get("usage").cloned();
     let blocks = value
@@ -250,92 +541,34 @@ fn parse_usage(raw: &Value) -> Option<TokenUsage> {
     })
 }
 
-#[async_trait]
-impl LlmProvider for AnthropicProvider {
-    fn name(&self) -> &str {
-        "anthropic"
-    }
-
-    async fn chat_complete(
-        &self,
-        request: &ChatCompletionRequest,
-    ) -> CowResult<ChatCompletionResponse> {
-        let url = self.messages_url();
-        debug!(url = %url, model = %request.model, "Dispatching Anthropic messages request");
-
-        let mut http = self
-            .client
-            .post(&url)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .json(&request_body(request));
-        if let Some(key) = &self.api_key {
-            http = http.header("x-api-key", key.as_str()).bearer_auth(key);
-        }
-
-        let response = http
-            .send()
-            .await
-            .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let err_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read response body".to_string());
-            error!(status = %status, body = %err_text, "LLM provider returned non-200 status");
-            return Err(CowError::Llm(format!(
-                "API returned error status {}: {}",
-                status, err_text
-            )));
-        }
-
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
-
-        parse_response(payload)
-    }
-
-    async fn list_models(&self) -> CowResult<Vec<String>> {
-        let url = self.models_url();
-        debug!(url = %url, "Fetching Anthropic model list");
-
-        let mut http = self
-            .client
-            .get(&url)
-            .header("anthropic-version", ANTHROPIC_VERSION);
-        if let Some(key) = &self.api_key {
-            http = http.header("x-api-key", key.as_str()).bearer_auth(key);
-        }
-
-        let response = http
-            .send()
-            .await
-            .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let err_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read response body".to_string());
-            error!(status = %status, body = %err_text, "Model list request returned non-200 status");
-            return Err(CowError::Llm(format!(
-                "API returned error status {}: {}",
-                status, err_text
-            )));
-        }
-
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
-
-        parse_model_ids(&payload)
-    }
+/// Record streamed usage and forward it.
+///
+/// Anthropic splits usage across `message_start` (input and cache) and
+/// `message_delta` (output), so each object is normalized on its own and the
+/// later values replace the earlier ones.
+fn emit_usage(
+    raw: &Value,
+    outcome: &mut CompletionOutcome,
+    on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
+) {
+    let chunk = StreamChunk::Usage {
+        usage: parse_usage(raw),
+        raw_usage: Some(raw.clone()),
+    };
+    outcome.apply(chunk.clone());
+    on_chunk(chunk);
 }
+
+/// Record a streamed piece of content.
+fn emit_text(
+    chunk: StreamChunk,
+    outcome: &mut CompletionOutcome,
+    on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
+) {
+    outcome.apply(chunk.clone());
+    on_chunk(chunk);
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -6,12 +6,15 @@
 
 use crate::endpoint::{endpoint_url, models_url, parse_model_ids};
 use crate::provider::LlmProvider;
+use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, LlmToolCall,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, CompletionOutcome,
+    LlmToolCall, StreamChunk,
 };
 use async_trait::async_trait;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::usage::TokenUsage;
+use futures::StreamExt;
 use serde_json::{json, Value};
 use tracing::{debug, error};
 
@@ -228,6 +231,12 @@ fn parse_usage(raw: &Value) -> Option<TokenUsage> {
     })
 }
 
+/// A function call accumulating streamed argument fragments.
+struct PendingCall {
+    id: String,
+    arguments: String,
+}
+
 #[async_trait]
 impl LlmProvider for ResponsesProvider {
     fn name(&self) -> &str {
@@ -270,6 +279,201 @@ impl LlmProvider for ResponsesProvider {
             .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
 
         parse_response(payload)
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+        cancel: &CancelSignal,
+        on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
+    ) -> CowResult<CompletionOutcome> {
+        cancel.ensure_live()?;
+        let url = self.responses_url();
+        let mut body = request_body(request);
+        body["stream"] = Value::Bool(true);
+        debug!(url = %url, model = %request.model, "Streaming OpenAI responses request");
+
+        let mut http = self
+            .client
+            .post(&url)
+            .header("accept", "text/event-stream")
+            .json(&body);
+        if let Some(key) = &self.api_key {
+            http = http.bearer_auth(key);
+        }
+
+        let response = tokio::select! {
+            response = http.send() => response
+                .map_err(|e| CowError::Llm(format!("HTTP request failed: {}", e)))?,
+            () = cancel.cancelled() => return Err(CowError::Cancelled),
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read response body".to_string());
+            error!(status = %status, body = %err_text, "LLM provider returned non-200 status");
+            return Err(CowError::Llm(format!(
+                "API returned error status {}: {}",
+                status, err_text
+            )));
+        }
+
+        let mut outcome = CompletionOutcome::default();
+        let mut decoder = SseDecoder::new();
+        // Function-call arguments stream as fragments; the call is complete at
+        // `response.output_item.done`.
+        let mut pending: Vec<PendingCall> = Vec::new();
+        let mut finished = false;
+        let mut stream = response.bytes_stream();
+
+        loop {
+            let next = tokio::select! {
+                next = stream.next() => next,
+                () = cancel.cancelled() => return Err(CowError::Cancelled),
+            };
+            let Some(chunk) = next else {
+                break;
+            };
+            let bytes = chunk
+                .map_err(|e| CowError::Llm(format!("Streaming read failed: {}", e)))?;
+
+            for frame in decoder.push(&bytes) {
+                let data = frame.data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(event) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                let event_type = frame
+                    .event
+                    .clone()
+                    .or_else(|| event.get("type").and_then(Value::as_str).map(str::to_string))
+                    .unwrap_or_default();
+
+                match event_type.as_str() {
+                    "response.output_text.delta" => {
+                        if let Some(text) = event.get("delta").and_then(Value::as_str) {
+                            if !text.is_empty() {
+                                let piece = StreamChunk::Text(text.to_string());
+                                outcome.apply(piece.clone());
+                                on_chunk(piece);
+                            }
+                        }
+                    }
+                    "response.reasoning_summary_text.delta"
+                    | "response.reasoning_text.delta" => {
+                        if let Some(text) = event.get("delta").and_then(Value::as_str) {
+                            if !text.is_empty() {
+                                let piece = StreamChunk::Reasoning(text.to_string());
+                                outcome.apply(piece.clone());
+                                on_chunk(piece);
+                            }
+                        }
+                    }
+                    "response.output_item.added" => {
+                        if let Some(item) = event.get("item") {
+                            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                                pending.push(PendingCall {
+                                    id: item
+                                        .get("call_id")
+                                        .or_else(|| item.get("id"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    arguments: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    "response.function_call_arguments.delta" => {
+                        if let (Some(index), Some(partial)) = (
+                            event.get("output_index").and_then(Value::as_u64),
+                            event.get("delta").and_then(Value::as_str),
+                        ) {
+                            if let Some(slot) = pending.get_mut(index as usize) {
+                                slot.arguments.push_str(partial);
+                            }
+                        }
+                    }
+                    "response.output_item.done" => {
+                        if let Some(item) = event.get("item") {
+                            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                                let id = item
+                                    .get("call_id")
+                                    .or_else(|| item.get("id"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let arguments = item
+                                    .get("arguments")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                                    .filter(|arguments| !arguments.is_empty())
+                                    .or_else(|| {
+                                        pending
+                                            .iter()
+                                            .find(|call| call.id == id)
+                                            .map(|call| call.arguments.clone())
+                                    })
+                                    .unwrap_or_else(|| "{}".to_string());
+                                let call = LlmToolCall {
+                                    id,
+                                    name: item
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    arguments: serde_json::from_str(&arguments)
+                                        .unwrap_or_else(|_| json!({ "raw": arguments })),
+                                };
+                                let piece = StreamChunk::ToolCall(call);
+                                outcome.apply(piece.clone());
+                                on_chunk(piece);
+                            }
+                        }
+                    }
+                    "response.completed" => {
+                        if let Some(response) = event.get("response") {
+                            if let Some(reason) =
+                                response.get("status").and_then(Value::as_str)
+                            {
+                                outcome.finish_reason = Some(reason.to_string());
+                            }
+                            if let Some(usage) = response.get("usage") {
+                                let piece = StreamChunk::Usage {
+                                    usage: parse_usage(usage),
+                                    raw_usage: Some(usage.clone()),
+                                };
+                                outcome.apply(piece.clone());
+                                on_chunk(piece);
+                            }
+                        }
+                        finished = true;
+                        break;
+                    }
+                    "response.failed" | "error" => {
+                        let message = event
+                            .pointer("/response/error/message")
+                            .or_else(|| event.pointer("/error/message"))
+                            .or_else(|| event.get("message"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("the provider reported a streaming error");
+                        return Err(CowError::Llm(message.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+
+            if finished {
+                break;
+            }
+        }
+
+        Ok(outcome)
     }
 
     async fn list_models(&self) -> CowResult<Vec<String>> {

@@ -32,6 +32,13 @@ pub enum CowError {
 
     #[error("Workspace package error: {0}")]
     Package(String),
+
+    /// The work was stopped on purpose, for example by a turn cancellation.
+    ///
+    /// A cancelled turn is not a failure: callers persist what was produced and
+    /// report it as stopped rather than reporting an error.
+    #[error("Cancelled")]
+    Cancelled,
 }
 
 pub type CowResult<T> = Result<T, CowError>;
