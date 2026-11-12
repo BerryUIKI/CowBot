@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::identity::WorkspaceId;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a permission or approval decision came from.
 ///
 /// Stored on audit entries so the audit view can filter decisions by source.
@@ -37,6 +38,7 @@ impl std::fmt::Display for AuditSource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// An auditable action performed in a workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {

@@ -51,6 +51,7 @@ pub const MIN_PROMPT_SNAPSHOT_RETENTION_DAYS: u32 = 1;
 /// Longest selectable retention.
 pub const MAX_PROMPT_SNAPSHOT_RETENTION_DAYS: u32 = 3_650;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One tool call carried by an assistant message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotToolCall {
@@ -59,6 +60,7 @@ pub struct SnapshotToolCall {
     pub arguments: serde_json::Value,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One message exactly as the provider received it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotMessage {
@@ -99,6 +101,7 @@ impl SnapshotMessage {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A sealed, redacted record of one model request.
 ///
 /// The row that stores this is keyed by the LLM call it belongs to; the call
@@ -337,6 +340,7 @@ impl LlmPromptSnapshot {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Whether this workspace stores prompt snapshots, and for how long.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSnapshotSettings {
@@ -374,6 +378,7 @@ pub fn clamp_retention_days(value: u32) -> u32 {
     )
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What a stored snapshot is, without its payload.
 ///
 /// The row that stores a snapshot also stores the call it belongs to, so a
@@ -417,6 +422,7 @@ impl PromptSnapshotSummary {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A stored snapshot together with the call it belongs to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptSnapshotDetail {

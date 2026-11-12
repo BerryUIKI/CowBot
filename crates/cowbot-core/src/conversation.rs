@@ -16,6 +16,7 @@ pub const MAX_GROUP_PARTICIPANTS: usize = 8;
 /// Most participants a router may select for one turn.
 pub const MAX_ROUTED_AGENTS: usize = 3;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What a channel in the workspace represents.
 ///
 /// `Direct` is the agent-owned contact conversation provisioned automatically
@@ -56,6 +57,7 @@ impl std::str::FromStr for ChannelKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Who takes part in a conversation channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelParticipant {
@@ -84,6 +86,7 @@ impl ChannelParticipant {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Whether a conversation has one responding agent or several.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +139,7 @@ pub const DEFAULT_COMPACT_THRESHOLD: u32 = 80;
 /// of a model window is usable for input.
 pub const CONTEXT_WINDOW_BUFFER_TOKENS: u32 = 1024;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Per-conversation settings stored independently from the channel row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSettings {
@@ -196,6 +200,7 @@ impl ConversationSettings {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Editable subset of conversation settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSettingsUpdate {
@@ -208,6 +213,7 @@ pub struct ConversationSettingsUpdate {
     pub default_responder: Option<AgentId>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Role of one context entry when it is assembled into a model request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -243,6 +249,7 @@ impl std::str::FromStr for ContextRole {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What produced an entry: an ordinary message or a compaction summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -272,6 +279,7 @@ impl std::str::FromStr for ContextEntryKind {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A tool call stored inside a context entry.
 ///
 /// `cowbot-core` does not depend on the LLM crate, so the shape is mirrored
@@ -283,6 +291,7 @@ pub struct ContextToolCall {
     pub arguments: serde_json::Value,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One append-only entry in an agent's branch of a conversation context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextEntry {
@@ -384,6 +393,7 @@ impl ContextEntry {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why a context event was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -466,6 +476,7 @@ pub fn context_entry_tokens(counter: &dyn TokenCounter, entry: &ContextEntry) ->
     tokens
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Token breakdown of a conversation's next model request.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextProjection {
@@ -544,6 +555,7 @@ pub fn project_context(
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One participant's context meter inside a group conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationParticipantContext {
@@ -559,6 +571,7 @@ pub struct ConversationParticipantContext {
     pub cache_conversation: CacheUsageSummary,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Everything the desktop needs to render a conversation's context meter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationContext {
@@ -575,6 +588,7 @@ pub struct ConversationContext {
     pub participants: Vec<ConversationParticipantContext>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Result of a manual or automatic compaction.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompactionOutcome {
@@ -614,6 +628,7 @@ pub enum CompactionWrite {
     Empty,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why a group message selected the participants it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -657,6 +672,7 @@ impl std::str::FromStr for RouteSource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Unique identifier for one routed group message.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub String);
@@ -677,6 +693,7 @@ impl std::fmt::Display for TurnId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Persisted routing decision for one group user message.
 ///
 /// The row is the group turn record: it links the message, the selection
@@ -733,6 +750,7 @@ pub fn usable_window(context_window: Option<u32>, max_output_tokens: Option<u32>
     (usable > 0).then_some(usable)
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// How full the context is, used for colouring the meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -830,6 +848,7 @@ pub fn compaction_split_by(entries: &[ContextEntry], cost: impl Fn(&ContextEntry
     index
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Cache hit information for a set of calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheUsageSummary {

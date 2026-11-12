@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::identity::WorkspaceId;
 use crate::tool::ToolCall;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// What a workspace permission rule decides for a matching tool call.
 ///
 /// Priority is `Deny > Ask > Allow`; see [`matching_rule`].
@@ -32,6 +33,7 @@ impl std::fmt::Display for RuleDecision {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a permission rule came from.
 ///
 /// Rules that arrive with an imported workspace package start disabled and
@@ -53,6 +55,7 @@ impl RuleSource {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// A workspace-level allow / ask / deny rule for tool calls.
 ///
 /// `tool` is an exact tool name or `"*"` for every tool. `command` is an

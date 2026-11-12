@@ -48,6 +48,7 @@ impl TokenUsage {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why an LLM call was made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -196,6 +197,7 @@ pub trait LlmUsageRecorder: Send + Sync {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Where a token count came from.
 ///
 /// Counts are not interchangeable: only [`Self::Tiktoken`] and

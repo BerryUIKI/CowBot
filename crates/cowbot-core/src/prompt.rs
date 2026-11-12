@@ -15,6 +15,7 @@ use crate::memory::RecallPreview;
 use crate::tool::ToolDefinition;
 use crate::usage::TokenCounter;
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Which kind of request a plan describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +28,7 @@ pub enum PromptKind {
     TaskRun,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Role of one message in a model request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +39,7 @@ pub enum PromptRole {
     Tool,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One named segment of a system prompt.
 ///
 /// Slot token counts are prefix differences over the assembled prompt, so the
@@ -66,6 +69,7 @@ pub enum PromptSlotName {
     Instruction,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One named segment of a system prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSlot {
@@ -74,6 +78,7 @@ pub struct PromptSlot {
     pub tokens: u32,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One message in send order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptMessage {
@@ -95,6 +100,7 @@ pub struct PromptMessage {
     pub tool_call_id: Option<String>,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// One tool schema sent with a request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptTool {
@@ -137,6 +143,7 @@ impl PromptTool {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// The memory block one request injects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptMemory {
@@ -145,6 +152,7 @@ pub struct PromptMemory {
     pub tokens: u32,
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Everything the next request would contain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptPlan {
