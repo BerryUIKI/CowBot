@@ -12,6 +12,7 @@ use cowbot_core::conversation::{
     ConversationMode, ConversationSettingsUpdate, RouteSource,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::task::TaskSource;
 use cowbot_core::usage::{TokenSource, TokenUsage, MESSAGE_OVERHEAD_TOKENS};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, LlmProvider};
 use cowbot_service::{
@@ -1691,6 +1692,17 @@ async fn group_default_responder_answers_an_unaddressed_message() {
         .unwrap()
         .unwrap();
     assert_eq!(turn.source, RouteSource::Default);
+    let task = fixture
+        .store
+        .get_task(&turn.task_ids[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.source,
+        TaskSource::ConversationTurn,
+        "group turns are hidden from the task list like single turns"
+    );
 }
 
 #[tokio::test]

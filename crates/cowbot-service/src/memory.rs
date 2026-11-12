@@ -14,10 +14,10 @@ use cowbot_core::channel::{Channel, ChannelId};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{
-    rank_memories, redact_secrets, render_memory_block, render_notes_for_prompt,
-    select_recalled_entries, truncate_to_tokens, MemoryEntry, MemoryKind, MemorySettings,
-    MemorySource, MemoryStatus, Note, ScoredMemory, MEMORY_ENTRY_MAX_CHARS,
-    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
+    plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,
+    render_notes_for_prompt, truncate_to_tokens, MemoryEntry, MemoryKind, MemorySettings,
+    MemorySource, MemoryStatus, Note, RecallCandidate, RecallPreview, ScoredMemory,
+    MEMORY_ENTRY_MAX_CHARS, MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
 };
 use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
@@ -145,6 +145,12 @@ pub struct RecalledMemory {
     pub block: String,
     pub entry_ids: Vec<String>,
     pub tokens: u32,
+}
+
+/// One recall computation shared by the prompt path and the inspector preview.
+struct RecallDetails {
+    preview: RecallPreview,
+    selected_ids: Vec<String>,
 }
 
 /// Notes, memory entries, settings, and recall for one workspace.
@@ -375,6 +381,22 @@ impl MemoryService {
         }
     }
 
+    /// What the next recall would inject, including every candidate it
+    /// considered and why skipped candidates were left out.
+    ///
+    /// Computing this never touches recall statistics.
+    pub async fn preview_recall_trace(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<RecallPreview> {
+        Ok(self
+            .recall_details(channel_id, agent_id, query)
+            .await?
+            .preview)
+    }
+
     async fn recall(
         &self,
         channel_id: Option<&ChannelId>,
@@ -382,9 +404,48 @@ impl MemoryService {
         query: &str,
         touch: bool,
     ) -> CowResult<Option<RecalledMemory>> {
+        let details = self.recall_details(channel_id, agent_id, query).await?;
+        let Some(block) = details.preview.block.clone() else {
+            return Ok(None);
+        };
+
+        if touch && !details.selected_ids.is_empty() {
+            if let Err(error) = self.store.touch_memory_recalls(&details.selected_ids).await {
+                tracing::warn!(
+                    error = %error,
+                    "Failed to record memory recall statistics"
+                );
+            }
+        }
+
+        Ok(Some(RecalledMemory {
+            tokens: details.preview.estimated_tokens,
+            block,
+            entry_ids: details.selected_ids,
+        }))
+    }
+
+    async fn recall_details(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<RecallDetails> {
         let settings = self.settings().await?;
         if !settings.recall_enabled {
-            return Ok(None);
+            return Ok(RecallDetails {
+                preview: RecallPreview {
+                    enabled: false,
+                    query: String::new(),
+                    block: None,
+                    estimated_tokens: 0,
+                    budget_tokens: settings.recall_budget_tokens,
+                    notes_budget_tokens: settings.notes_budget_tokens,
+                    notes_tokens: 0,
+                    candidates: Vec::new(),
+                },
+                selected_ids: Vec::new(),
+            });
         }
 
         let (workspace_note, conversation_note) = self.notes(channel_id).await?;
@@ -393,6 +454,7 @@ impl MemoryService {
             conversation_note.as_ref(),
             settings.notes_budget_tokens,
         );
+        let notes_tokens = notes.as_deref().map(estimate_tokens).unwrap_or(0);
 
         let query = query
             .trim()
@@ -434,29 +496,43 @@ impl MemoryService {
         }
 
         let ranked = rank_memories(candidates);
-        let selected = select_recalled_entries(&ranked, settings.recall_budget_tokens);
-        let entry_ids = selected
+        let plan = plan_recalled_entries(&ranked, settings.recall_budget_tokens);
+        let selected_ids = plan
+            .selected
             .iter()
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
-        let Some(block) = render_memory_block(notes.as_deref(), &selected) else {
-            return Ok(None);
-        };
+        let block = render_memory_block(notes.as_deref(), &plan.selected);
+        let estimated_tokens = block.as_deref().map(estimate_tokens).unwrap_or(0);
+        let candidates = plan
+            .candidates
+            .iter()
+            .map(|trace| RecallCandidate {
+                entry_id: trace.entry.id.clone(),
+                content: trace.entry.content.clone(),
+                kind: trace.entry.kind,
+                scope: trace.entry.scope(),
+                pinned: trace.entry.pinned,
+                score: trace.score,
+                tokens: trace.tokens,
+                selected: trace.selected,
+                skip_reason: trace.skip_reason,
+            })
+            .collect();
 
-        if touch && !entry_ids.is_empty() {
-            if let Err(error) = self.store.touch_memory_recalls(&entry_ids).await {
-                tracing::warn!(
-                    error = %error,
-                    "Failed to record memory recall statistics"
-                );
-            }
-        }
-
-        Ok(Some(RecalledMemory {
-            tokens: estimate_tokens(&block),
-            block,
-            entry_ids,
-        }))
+        Ok(RecallDetails {
+            preview: RecallPreview {
+                enabled: true,
+                query,
+                block,
+                estimated_tokens,
+                budget_tokens: settings.recall_budget_tokens,
+                notes_budget_tokens: settings.notes_budget_tokens,
+                notes_tokens,
+                candidates,
+            },
+            selected_ids,
+        })
     }
 
     /// Extract up to three pending candidates from a settled conversation turn.

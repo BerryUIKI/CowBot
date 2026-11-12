@@ -15,6 +15,7 @@ mod crew_runner;
 mod memory;
 mod permissions;
 mod permissions_rules;
+mod preview;
 mod remember;
 mod scheduler;
 mod session_decisions;
@@ -44,6 +45,7 @@ pub use permissions::{
     PermissionRequest,
 };
 pub use permissions_rules::PermissionService;
+pub use preview::{ConversationPreview, PreviewService, TaskRunPreview};
 pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
