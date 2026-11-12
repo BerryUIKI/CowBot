@@ -12,7 +12,7 @@ import type {
 } from "./types";
 import { isActiveOverviewStatus } from "./types";
 
-export type InspectorTab = "approvals" | "background" | "task";
+export type InspectorTab = "approvals" | "background" | "task" | "context";
 
 interface InspectorProps {
   tab: InspectorTab;
@@ -20,6 +20,7 @@ interface InspectorProps {
   onClose: () => void;
   inert?: boolean;
   taskPanel?: ReactNode | null;
+  contextPanel?: ReactNode | null;
   overview: TaskOverviewEntry[];
   agents: AgentProfile[];
   now: number;
@@ -41,12 +42,17 @@ const baseTabs: { id: InspectorTab; label: string }[] = [
   { id: "background", label: "Background" },
 ];
 
+const middleTabs: { id: InspectorTab; label: string }[] = [
+  { id: "context", label: "Context" },
+];
+
 export default function Inspector({
   tab,
   onTabChange,
   onClose,
   inert = false,
   taskPanel = null,
+  contextPanel = null,
   overview,
   agents,
   now,
@@ -62,7 +68,11 @@ export default function Inspector({
     isActiveOverviewStatus(entry.status),
   ).length;
 
-  const tabs = [{ id: "task" as const, label: "Task" }, ...baseTabs];
+  const tabs = [
+    { id: "task" as const, label: "Task" },
+    ...middleTabs,
+    ...baseTabs,
+  ];
   const activeTab: InspectorTab = tab;
 
   return (
@@ -110,6 +120,15 @@ export default function Inspector({
           hidden={activeTab !== "task"}
         >
           {taskPanel}
+        </div>
+        <div
+          className="inspector-pane"
+          role="tabpanel"
+          id="inspector-panel-context"
+          aria-labelledby="inspector-tab-context"
+          hidden={activeTab !== "context"}
+        >
+          {contextPanel}
         </div>
         <div
           className="inspector-pane"

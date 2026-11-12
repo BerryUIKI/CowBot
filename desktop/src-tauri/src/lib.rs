@@ -234,6 +234,8 @@ pub fn run() {
             commands::list_conversation_participants,
             commands::list_conversation_turns,
             commands::get_conversation_context,
+            commands::get_conversation_context_preview,
+            commands::get_task_run_context_preview,
             commands::update_conversation_settings,
             commands::compact_conversation,
             commands::clear_conversation_context,

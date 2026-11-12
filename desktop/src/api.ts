@@ -13,6 +13,7 @@ import type {
   ChannelMessage,
   ClientSession,
   CompactionOutcome,
+  ContextPreview,
   ConversationContext,
   ConversationParticipant,
   ConversationSummary,
@@ -139,6 +140,26 @@ export function listConversationTurns(
 
 export function getConversationContext(channelId: string): Promise<ConversationContext> {
   return invoke<ConversationContext>("get_conversation_context", { channelId });
+}
+
+/** Rebuild what one participant's next turn would send. */
+export function getConversationContextPreview(
+  channelId: string,
+  agentId: string,
+  draft?: string,
+  planMode = false,
+): Promise<ContextPreview> {
+  return invoke<ContextPreview>("get_conversation_context_preview", {
+    channelId,
+    agentId,
+    draft: draft ?? null,
+    planMode,
+  });
+}
+
+/** Rebuild the first request one task run sent. */
+export function getTaskRunContextPreview(runId: string): Promise<ContextPreview> {
+  return invoke<ContextPreview>("get_task_run_context_preview", { runId });
 }
 
 export function updateConversationSettings(
