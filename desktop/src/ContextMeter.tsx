@@ -12,6 +12,8 @@ import type {
 interface ContextMeterProps {
   context: ConversationContext;
   busy: boolean;
+  /** Increment to open the popover from outside, such as from \`/note\`. */
+  openSignal?: number;
   onCompact: (agentId?: string) => void;
   onClear: (agentId?: string) => void;
   onAutoCompactChange: (enabled: boolean) => void;
@@ -151,6 +153,7 @@ function buildContextBar(
 export default function ContextMeter({
   context,
   busy,
+  openSignal = 0,
   onCompact,
   onClear,
   onAutoCompactChange,
@@ -181,6 +184,11 @@ export default function ContextMeter({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  // An outside request, such as `/note`, opens the popover for the editor.
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true);
+  }, [openSignal]);
 
   const participants =
     context.participants.length > 0
