@@ -329,7 +329,13 @@ or compacting the context never deletes messages.
   cache figures, and the memory estimate for the next turn. Colors are never the
   only signal. Below 70% the ring is neutral, 70–89% is a warning, 90–99% is a
   danger colour, and 100% is full. Without a configured context window the
-  popover shows absolute tokens and no bar or percentages.
+  popover shows absolute tokens and no bar or percentages. The popover's meta
+  line says how the numbers were counted: **Exact · o200k_base** or
+  **Exact · cl100k_base** for the OpenAI-compatible families CowBot ships a
+  tokenizer for (GPT-5, GPT-4.1, GPT-4o, the o-series, GPT-4, and
+  GPT-3.5-turbo), or **Estimated from characters** for every other model. The
+  memory figure stays labelled as an estimate because the next turn's memory
+  block is still counted heuristically.
 - In a group, the popover has one tab per participant with that branch's
   breakdown, latest-run cache figure, and conversation-total cache figure. The
   tabs are keyboard accessible with the left and right arrow keys.
@@ -588,8 +594,11 @@ reporting, see [SECURITY.md](../SECURITY.md).
   DAG workflows.
 - No streaming responses, retries, or rate limiting. Token usage is recorded per
   model call, but there are no cost or billing views.
-- Context occupancy and compaction are estimated from a character heuristic
-  between calls; provider-reported usage is authoritative once a call returns.
+- Context occupancy and compaction use a model-aware token count: exact for
+  the OpenAI-compatible families CowBot ships a tokenizer for, and a labelled
+  character estimate for every other model, including Claude, DeepSeek, and
+  local runtimes. Memory budgets and the next turn's memory block remain
+  estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
 - Workspace deletion and renaming are not available in the UI.
 - Builds are unsigned; macOS may require approval again after an update.
