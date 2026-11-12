@@ -17,7 +17,7 @@ use cowbot_core::command::{
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
-    ConversationTurn,
+    ConversationTurn, TurnId,
 };
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
@@ -945,6 +945,19 @@ pub async fn cancel_task(
     state
         .client
         .cancel_task(&TaskId::new(task_id), &reason)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Stop a running conversation, group, or task turn (ADR-0039).
+///
+/// Returns whether a live turn was stopped. The turn keeps the text it
+/// produced, stored with a stopped marker, and reloads show that state.
+#[tauri::command]
+pub async fn cancel_turn(state: State<'_, AppState>, turn_id: String) -> Result<bool, String> {
+    state
+        .client
+        .cancel_turn(&TurnId::new(turn_id))
         .await
         .map_err(|error| error.to_string())
 }

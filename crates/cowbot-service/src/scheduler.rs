@@ -261,7 +261,7 @@ pub struct AssignmentScheduler {
     /// Tasks whose completed Plan-mode output becomes their stored plan.
     plan_tasks: Arc<StdMutex<HashSet<TaskId>>>,
     /// One lifecycle owner for every turn this scheduler runs (ADR-0039).
-    turns: TurnRunner,
+    turns: Arc<TurnRunner>,
 }
 
 enum Claim {
@@ -285,7 +285,7 @@ impl AssignmentScheduler {
         let assignments = AssignmentService::new(store.clone(), bus.clone());
         let approvals = ApprovalService::new(store, bus.clone(), workspace_id.clone());
         let memory = MemoryService::new(assignments.store().clone(), workspace_id.clone());
-        let turns = TurnRunner::new(assignments.store().clone(), bus);
+        let turns = Arc::new(TurnRunner::new(assignments.store().clone(), bus));
         Self {
             assignments,
             approvals,
@@ -348,8 +348,20 @@ impl AssignmentScheduler {
     }
 
     /// The runner this scheduler publishes turn events through.
-    pub fn turns(&self) -> &TurnRunner {
-        &self.turns
+    ///
+    /// Sharing it with the caller lets a service cancel any turn it spawned,
+    /// wherever that turn is running.
+    pub fn turns(&self) -> Arc<TurnRunner> {
+        Arc::clone(&self.turns)
+    }
+
+    /// Run with a shared turn registry instead of a private one.
+    ///
+    /// Services that spawn several schedulers pass the registry here so one
+    /// `cancel_turn` reaches every turn.
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = turns;
+        self
     }
 
     fn tracks(&self, root_id: &AssignmentId) -> bool {

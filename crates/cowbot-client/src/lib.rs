@@ -13,7 +13,7 @@ use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
     ChannelParticipant, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn,
+    ConversationTurn, TurnId,
 };
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
@@ -355,6 +355,12 @@ pub trait Client: Send + Sync {
     async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>>;
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>>;
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
+    /// Stop a running turn: a conversation reply, a group reply, or a task run.
+    ///
+    /// Idempotent: an unknown or already finished turn returns `false` and does
+    /// nothing. A stopped turn keeps the text it produced, stored with a
+    /// stopped marker (ADR-0039).
+    async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool>;
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     /// Approve the Plan-mode artifact stored with a task.

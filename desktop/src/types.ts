@@ -428,6 +428,32 @@ export interface ChannelMessage {
   created_at: string;
 }
 
+/// One event in a turn's streaming lifecycle (ADR-0039).
+export interface TurnEvent {
+  turn_id: string;
+  type:
+    | "turn_started"
+    | "text_delta"
+    | "reasoning_delta"
+    | "tool_call_started"
+    | "tool_call_finished"
+    | "approval_required"
+    | "turn_done"
+    | "turn_error";
+  agent_ids?: string[];
+  text?: string;
+  call?: { id: string; name: string; arguments: unknown };
+  result?: { call_id: string; output: string; success: boolean; error: string | null };
+  approval?: {
+    approval: { id: string; task_id: string; tool_call_id: string; status: string };
+    call: { id: string; name: string; arguments: unknown };
+  };
+  message?: string;
+  stopped?: boolean;
+  error?: string;
+  partial?: string;
+}
+
 export interface CowEvent {
   id: string;
   timestamp: string;

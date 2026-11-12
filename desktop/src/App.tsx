@@ -43,6 +43,7 @@ import {
   archiveTask,
   approveTaskPlan,
   cancelTask,
+  cancelTurn,
   clearChannelMessages,
   clearConversationContext,
   compactConversation,
@@ -92,6 +93,7 @@ import {
   updateConversationSettings,
 } from "./api";
 import type { ChannelReplyFinished } from "./api";
+import type { TurnEvent } from "./types";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
@@ -308,6 +310,15 @@ export default function App() {
   const [commandExpanded, setCommandExpanded] = useState(false);
   const [contextOpenSignal, setContextOpenSignal] = useState(0);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
+  /// Live turns keyed by turn id: streamed text, tool activity, and channel.
+  const [streamingTurns, setStreamingTurns] = useState<
+    Record<string, {
+      channelId: string | null;
+      text: string;
+      reasoning: string;
+      tools: { name: string; running: boolean }[];
+    }>
+  >({});
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
@@ -803,6 +814,10 @@ export default function App() {
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
+      if (type === "Turn") {
+        const turn = event.payload.payload as TurnEvent | undefined;
+        if (turn) handleTurnEvent(turn);
+      }
       if (
         type === "TaskCreated" ||
         type === "TaskUpdated" ||
@@ -1202,6 +1217,11 @@ export default function App() {
   }, [mentionQuery]);
 
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+  /// Live turns streaming into the selected channel, oldest first.
+  const channelStreams = Object.entries(streamingTurns)
+    .filter(([, turn]) => selectedId && turn.channelId === selectedId)
+    .map(([id, turn]) => ({ id, ...turn }));
+  const channelIsStreaming = channelStreams.length > 0;
   const conversationParticipantNames = conversationParticipants.map(
     (participant) => participant.agent_name,
   );
@@ -1870,6 +1890,104 @@ export default function App() {
       setError(errorMessage(err));
     } finally {
       setSending(false);
+    }
+  }
+
+  /// Fold one turn lifecycle event into the streaming state (ADR-0039).
+  function handleTurnEvent(turn: TurnEvent) {
+    const id = turn.turn_id;
+    if (turn.type === "turn_started") {
+      const channel = (turn as unknown as {
+        target?: { conversation?: { channel_id?: string }; task?: unknown };
+      }).target;
+      const channelId =
+        (channel as { conversation?: { channel_id?: string } } | undefined)?.conversation
+          ?.channel_id ?? null;
+      setStreamingTurns((current) => ({
+        ...current,
+        [id]: current[id] ?? {
+          channelId,
+          text: "",
+          reasoning: "",
+          tools: [],
+        },
+      }));
+      return;
+    }
+    if (turn.type === "text_delta" || turn.type === "reasoning_delta") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        return {
+          ...current,
+          [id]:
+            turn.type === "text_delta"
+              ? { ...existing, text: existing.text + (turn.text ?? "") }
+              : { ...existing, reasoning: existing.reasoning + (turn.text ?? "") },
+        };
+      });
+      return;
+    }
+    if (turn.type === "tool_call_started") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        return {
+          ...current,
+          [id]: {
+            ...existing,
+            tools: [...existing.tools, { name: turn.call?.name ?? "tool", running: true }],
+          },
+        };
+      });
+      return;
+    }
+    if (turn.type === "tool_call_finished") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        const tools = [...existing.tools];
+        for (let index = tools.length - 1; index >= 0; index -= 1) {
+          if (tools[index].running) {
+            tools[index] = { ...tools[index], running: false };
+            break;
+          }
+        }
+        return { ...current, [id]: { ...existing, tools } };
+      });
+      return;
+    }
+    if (turn.type === "turn_done" || turn.type === "turn_error") {
+      // The terminal event follows persistence, so the stored message is
+      // authoritative: refresh and drop the live bubble.
+      setStreamingTurns((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setContextVersion((version) => version + 1);
+      const channel = streamingTurns[id]?.channelId;
+      if (channel) {
+        refreshMessages(channel).catch((err) => setError(errorMessage(err)));
+      }
+      if (turn.type === "turn_error" && turn.error) {
+        setError(turn.error);
+      }
+    }
+  }
+
+  /// Stop the one live turn answering in the selected channel (ADR-0039).
+  async function stopCurrentTurn() {
+    const entries = Object.entries(streamingTurns);
+    const match = entries.find(
+      ([, turn]) => selectedId && turn.channelId === selectedId,
+    );
+    if (!match) return;
+    const [turnId] = match;
+    try {
+      await cancelTurn(turnId);
+    } catch (err) {
+      setError(errorMessage(err));
     }
   }
 
@@ -3435,6 +3553,58 @@ export default function App() {
                         </li>
                       ))
                     ) : null}
+                    {channelStreams.map((turn) => {
+                      const agent = agents.find(
+                        (candidate) =>
+                          candidate.id ===
+                          pendingReply?.agents.find(
+                            (listed) => listed.id === candidate.id,
+                          )?.id,
+                      );
+                      const name =
+                        agent?.name ?? pendingReply?.agents[0]?.name ?? "Agent";
+                      return (
+                        <li className="chat-row chat-row-agent" key={`stream-${turn.id}`}>
+                          <Avatar name={name} kind="agent" size="small" />
+                          <div className="chat-bubble-wrap">
+                            <span className="chat-sender">{name}</span>
+                            <div className="chat-bubble chat-bubble-agent chat-bubble-streaming">
+                              {turn.reasoning ? (
+                                <details className="stream-reasoning">
+                                  <summary>Thinking</summary>
+                                  <RichText content={turn.reasoning} />
+                                </details>
+                              ) : null}
+                              {turn.tools.length > 0 ? (
+                                <div className="stream-tools">
+                                  {turn.tools.map((tool, index) => (
+                                    <span
+                                      className={
+                                        tool.running
+                                          ? "stream-tool stream-tool-running"
+                                          : "stream-tool"
+                                      }
+                                      key={`${tool.name}-${index}`}
+                                    >
+                                      {tool.running ? "⟳" : "✓"} {tool.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {turn.text ? (
+                                <RichText content={turn.text} />
+                              ) : (
+                                <span className="typing-dots" aria-label="Working">
+                                  <span />
+                                  <span />
+                                  <span />
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
                 <div ref={endRef} />
@@ -3576,6 +3746,23 @@ export default function App() {
                     disabled={conversationFull}
                     rows={1}
                   />
+                  {channelIsStreaming ? (
+                    <button
+                      type="button"
+                      className="composer-stop"
+                      title="Stop the running reply"
+                      aria-label="Stop the running reply"
+                      onClick={() => void stopCurrentTurn()}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <rect x="7" y="7" width="10" height="10" rx="2" />
+                      </svg>
+                    </button>
+                  ) : null}
                   <button
                     type="submit"
                     className="composer-send"

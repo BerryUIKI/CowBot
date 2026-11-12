@@ -12,7 +12,7 @@ use cowbot_core::conversation::{
     CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
     ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
+    ConversationTurn, RouteSource, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
     MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
@@ -38,6 +38,8 @@ use crate::memory::{MemoryService, RecalledMemory};
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::TurnRunner;
+use cowbot_core::turn::TurnControl;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
 const MAX_TITLE_CHARS: usize = 68;
@@ -90,13 +92,17 @@ pub struct ConversationService {
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
     compaction_locks: Arc<CompactionLocks>,
+    /// Shared turn registry for every turn this service spawns (ADR-0039).
+    turns: Arc<TurnRunner>,
 }
 
 impl ConversationService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
+        let turns = Arc::new(TurnRunner::new(store.clone(), bus.clone()));
         Self {
             channels: ChannelService::new(store.clone(), bus.clone()),
             memory: MemoryService::new(store.clone(), workspace_id.clone()),
+            turns,
             store,
             bus,
             workspace_id,
@@ -116,6 +122,17 @@ impl ConversationService {
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions;
         self
+    }
+
+    /// Share another service's turn registry.
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = turns;
+        self
+    }
+
+    /// Stop a running turn of this conversation service.
+    pub fn cancel_turn(&self, turn: &TurnId) -> bool {
+        self.turns.cancel(turn)
     }
 
     /// Create a single-agent conversation with a fixed provider and model.
@@ -492,7 +509,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         scheduler.register_agent(agent.clone(), llm.clone(), tools, settings.model.clone());
 
         let mut run_options = CrewRunOptions {
@@ -846,7 +864,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),

@@ -17,7 +17,7 @@ use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     ChannelParticipant, CompactionOutcome, ConversationContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn,
+    ConversationSettingsUpdate, ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
@@ -868,6 +868,12 @@ impl Client for LocalClient {
 
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()> {
         self.tasks.cancel(task_id, reason).await
+    }
+
+    async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool> {
+        // Both turn-spawning services share one registry, so one lookup covers
+        // conversation, group, and channel turns.
+        Ok(self.channel_agents.cancel_turn(turn_id))
     }
 
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task> {

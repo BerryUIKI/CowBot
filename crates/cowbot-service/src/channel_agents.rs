@@ -21,6 +21,8 @@ use crate::conversations::ConversationService;
 use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::TurnRunner;
+use cowbot_core::turn::TurnControl;
 
 /// How many channel messages are used as conversation context for one turn.
 const HISTORY_LIMIT: u32 = 20;
@@ -111,21 +113,26 @@ pub struct ChannelAgentService {
     conversations: ConversationService,
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
+    /// Shared turn registry, propagated to the conversation service.
+    turns: Arc<TurnRunner>,
 }
 
 impl ChannelAgentService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
+        let turns = Arc::new(TurnRunner::new(store.clone(), bus.clone()));
         Self {
             conversations: ConversationService::new(
                 store.clone(),
                 bus.clone(),
                 workspace_id.clone(),
-            ),
+            )
+            .with_turns(turns.clone()),
             memory: MemoryService::new(store.clone(), workspace_id.clone()),
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
             session_decisions: None,
+            turns,
         }
     }
 
@@ -140,6 +147,11 @@ impl ChannelAgentService {
     pub fn with_compaction_locks(mut self, locks: Arc<CompactionLocks>) -> Self {
         self.conversations = self.conversations.with_compaction_locks(locks);
         self
+    }
+
+    /// Stop a running turn spawned by this service.
+    pub fn cancel_turn(&self, turn: &TurnId) -> bool {
+        self.turns.cancel(turn)
     }
 
     /// Answer `message` on behalf of every agent it mentions.
@@ -258,7 +270,8 @@ impl ChannelAgentService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
