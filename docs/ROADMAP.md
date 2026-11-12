@@ -83,6 +83,8 @@ Delivered:
 >
 > **Composer slash commands (0.1.9)**: typing `/` in the composer opens a command menu driven by a catalogue and parser in `cowbot-core`, so the CLI and future remote clients share the same names, aliases, quoting, and arity rules. Fifteen commands cover help, chat management, context compaction and clearing, notes and memory, task creation, model and approval switching, cancellation, and Settings navigation. Commands are desktop actions and never become messages or context entries; context commands require a user-created conversation, destructive commands keep their confirmations, and an unknown first token shows a hint that Escape overrides so path-like input still sends (ADR-0038).
 >
+> **Turn streaming and cancellation (0.1.9)**: `chat_stream` delivers normalized text, reasoning, tool-call, and usage chunks from all three protocols over a shared SSE decoder, and every agent loop reports its progress through a `TurnObserver`. One shared `TurnRunner` opens each turn, publishes the `turn_started` / delta / tool / `turn_done` / `turn_error` lifecycle on the event bus, stores the reply before the terminal event, and keeps a stopped turn's partial text with a stopped marker; `cancel_turn(turn_id)` is idempotent and covers conversation, group, channel, and task turns. The desktop renders the live bubble — reasoning, tool chips, incremental text — with a Stop button beside the composer, and a reload shows the persisted state (ADR-0039).
+>
 > **Phase 1 status**: complete. The exit criteria below are met. Reproducible path: install a release → complete onboarding → add agents from a template → create a channel and a task in it → run the crew and decide an approval → inspect run and tool-call history → export the workspace, import it as a new local workspace, and switch between them. The CLI reads `cowbot.toml`, lists and creates channels and messages, and can attach a crew's tasks to a channel (ADR-0020). 0.1.x remains the current release line until Phase 2 work starts.
 
 ### 4.2 Phase 1 Exit Criteria
@@ -101,7 +103,7 @@ Delivered:
 
 - Multi-user server, invitations, and remote sessions.
 - OIDC/SSO, PostgreSQL, Docker sandbox, IM/Webhook integrations.
-- Project-scoped long-term knowledge bases, streaming responses, cost accounting.
+- Project-scoped long-term knowledge bases, a remote streaming transport, cost accounting.
 - Template marketplace and plugin/MCP ecosystem.
 
 ---

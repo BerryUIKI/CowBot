@@ -42,6 +42,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0036](0036-context-preview-and-recall-trace.md) | Context preview and recall trace |
 | [0037](0037-prompt-snapshots-for-audit.md) | Redacted prompt snapshots for LLM call audit |
 | [0038](0038-slash-commands.md) | Slash commands as desktop actions |
+| [0039](0039-turn-streaming-and-cancellation.md) | Turn streaming and cancellation |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

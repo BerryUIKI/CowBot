@@ -112,7 +112,8 @@ CLI (cowbot) -- cowbot-client -- local mode or remote server
 - `LlmProvider::list_models` queries the endpoint's catalogue (`/models` for the OpenAI-style protocols, `/v1/models` for Anthropic); the desktop's vendor-first provider editor uses it to populate a provider's model list (ADR-0021).
 - Model configuration is workspace- or agent-scoped, with a connection test.
 - Every completion stores normalized token usage per call in `llm_calls`, including cached and cache-write input, and preserves the provider's raw usage object (ADR-0029). Pre-request counts go through a model-aware `TokenCounter`: `o200k_base` and `cl100k_base` OpenAI-compatible models are counted exactly, every other model falls back to the character estimator with an explicit label, and the persisted `tokens` columns stay model-independent history (ADR-0035). Conversation calls carry their channel id, so cache hit rate and context occupancy can be queried without joining through tasks (ADR-0030). A router decision is a `router`-kind call with the conversation channel and no run, task, or agent id, keeping it out of participant figures while counting toward the conversation total (ADR-0032).
-- P1 adds streaming, retries/backoff, rate limiting, and token/cost accounting.
+- `chat_stream` streams normalized text, reasoning, tool-call, and usage chunks over server-sent events, with cooperative cancellation through a shared `CancelSignal`; a default adapter keeps a non-streaming provider working as a one-chunk stream (ADR-0039).
+- P1 adds retries/backoff, rate limiting, and token/cost accounting over a remote streaming transport.
 
 ### 3.7 Memory
 
