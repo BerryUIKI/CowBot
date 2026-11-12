@@ -3,4 +3,4 @@
 /**
  * Why an LLM call was made.
  */
-export type LlmCallKind = "agent" | "router" | "summary" | "compact" | "memory_extract";
+export type LlmCallKind = "agent" | "router" | "summary" | "compact" | "memory_extract" | "side_question";

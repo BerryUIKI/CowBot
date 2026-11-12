@@ -25,6 +25,7 @@ const callKindLabels: Record<LlmCallKind, string> = {
   summary: "Summary",
   compact: "Compaction",
   memory_extract: "Memory extraction",
+  side_question: "Side question",
 };
 
 const roleLabels: Record<string, string> = {
