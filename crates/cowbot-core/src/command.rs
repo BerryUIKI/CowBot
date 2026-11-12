@@ -202,6 +202,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         target: CommandTarget::Chat,
     },
     CommandSpec {
+        name: "btw",
+        aliases: &["side"],
+        usage: "/btw <question>",
+        summary: "Ask a side question; the answer never enters the conversation.",
+        args: &[CommandArg {
+            placeholder: "<question>",
+            required: true,
+            kind: CommandArgKind::Text,
+        }],
+        target: CommandTarget::Chat,
+    },
+    CommandSpec {
         name: "clear",
         aliases: &[],
         usage: "/clear [@participant]",
@@ -575,6 +587,7 @@ mod tests {
             ("/rename   ", "rename"),
             ("/task", "task"),
             ("/remember", "remember"),
+            ("/btw", "btw"),
         ] {
             let usage = find_command(name).expect("command exists").usage;
             assert_eq!(
@@ -652,8 +665,8 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
-                "approval", "clear", "compact", "delete", "help", "model", "new", "note", "pin",
-                "remember", "rename", "settings", "stop", "task", "unpin",
+                "approval", "btw", "clear", "compact", "delete", "help", "model", "new", "note",
+                "pin", "remember", "rename", "settings", "stop", "task", "unpin",
             ]
         );
     }

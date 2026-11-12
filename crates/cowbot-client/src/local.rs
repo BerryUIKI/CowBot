@@ -28,7 +28,7 @@ use cowbot_core::prompt_snapshot::{
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
-use cowbot_core::tool::ToolDefinition;
+use cowbot_core::tool::{ToolDefinition, ToolGate};
 use cowbot_core::worktree::{TaskWorktree, TaskWorktreeDiff};
 use cowbot_llm::LlmProvider;
 use cowbot_service::{
@@ -36,7 +36,8 @@ use cowbot_service::{
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
     CompactionLocks, ConversationPreview, ConversationService, CrewRunOptions, CrewRunner,
     LocalContext, MemoryService, PermissionService, PreviewService, PromptSnapshotService,
-    SessionDecisions, TaskRunPreview, TaskService, TemplateService, WorktreeService,
+    ScopedApprovalGate, SessionDecisions, SideAnswer, TaskRunPreview, TaskService, TemplateService,
+    WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -353,6 +354,43 @@ impl LocalClient {
         self.channel_agents
             .reply(channel_id, message, llm, tools, model, &options)
             .await
+    }
+
+    /// Answer a `/btw` side question without touching the conversation.
+    ///
+    /// Nothing is posted, no context entry is appended, and no routing turn is
+    /// recorded; the answer returns to the caller, which shows it in an
+    /// ephemeral panel. Local-only for the same reason as
+    /// [`Self::reply_to_mentions`]: the LLM handle lives in the desktop runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ask_side_question(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: Option<&AgentId>,
+        question: &str,
+        model: &str,
+        llm: Arc<dyn LlmProvider>,
+        tools: ToolRegistry,
+        gate: Option<Arc<dyn ToolGate>>,
+        options: ChannelTurnOptions,
+    ) -> CowResult<SideAnswer> {
+        self.channel_agents
+            .ask_side_question(
+                channel_id, agent_id, question, model, llm, tools, gate, &options,
+            )
+            .await
+    }
+
+    /// A tool gate for a `/btw` side question.
+    ///
+    /// The gate is scoped to `assignment_id`, which the desktop derives from the
+    /// channel so an approval card names the chat it came from. The question is
+    /// not an assignment, so no assignment row is created.
+    pub fn side_question_gate(&self, assignment_id: AssignmentId) -> Arc<dyn ToolGate> {
+        Arc::new(ScopedApprovalGate::new(
+            self.approvals.clone(),
+            assignment_id,
+        ))
     }
 
     /// Compact a conversation context with the caller's fixed model client.

@@ -822,6 +822,18 @@ export type CommandParseResult =
   | { kind: "unknown"; name: string }
   | { kind: "missing_argument"; name: string; usage: string };
 
+/**
+ * One `/btw` answer. It is deliberately not a {@link ChannelMessage}: nothing
+ * was posted, so the panel that shows it is the only place it exists.
+ */
+export interface SideAnswer {
+  agent_id: string;
+  agent_name: string;
+  content: string;
+  model: string;
+  call_id: string;
+}
+
 const taskStatusLabels = {
   pending: "Pending",
   in_progress: "In progress",

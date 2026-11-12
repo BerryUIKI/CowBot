@@ -4706,6 +4706,51 @@ button {
   line-height: 1.45;
 }
 
+.side-answer {
+  margin: 0 8px 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--brass);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brass) 5%, var(--panel, #1b1a18));
+}
+
+.side-answer-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.side-answer-title {
+  flex: 1 1 auto;
+  color: var(--paper);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.side-answer-meta {
+  color: var(--paper-faint);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.side-answer-body {
+  max-height: 320px;
+  overflow-y: auto;
+  color: var(--paper-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.side-answer-footnote {
+  margin: 8px 0 0;
+  color: var(--paper-faint);
+  font-size: 11px;
+  font-style: italic;
+}
+
 .context-hint {
   margin: 0;
   color: var(--paper-faint);

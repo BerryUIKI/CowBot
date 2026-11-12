@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use cowbot_agent::AgentInstance;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
@@ -11,7 +12,9 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
 use cowbot_core::task::{Task, TaskId, TaskSource, TaskStatus};
-use cowbot_llm::LlmProvider;
+use cowbot_core::tool::ToolGate;
+use cowbot_core::usage::{LlmCallKind, LlmCallRecord, LlmCallUsage, LlmUsageRecorder};
+use cowbot_llm::{ChatMessage, LlmProvider};
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
@@ -66,6 +69,57 @@ impl Default for ChannelTurnOptions {
             platform_context: None,
             participant_capacity: Vec::new(),
         }
+    }
+}
+
+/// One answer to a `/btw` side question.
+///
+/// The answer is deliberately not a [`ChannelMessage`]: the caller shows it in
+/// an ephemeral panel so it never enters the timeline, the sidebar preview, or
+/// a context branch (ADR-0039).
+#[derive(Debug, Clone)]
+pub struct SideAnswer {
+    /// The agent that answered.
+    pub agent_id: AgentId,
+    /// Its display name, so the panel can label the answer.
+    pub agent_name: String,
+    /// The answer text.
+    pub content: String,
+    /// The model that produced it.
+    pub model: String,
+    /// The `llm_calls` row this answer was recorded under.
+    pub call_id: String,
+}
+
+/// Records the usage of one side question.
+///
+/// A side question is not an assignment, so there is no run to attribute the
+/// call to. The row carries the channel and the call kind instead, which keeps
+/// the cost visible in Settings → Audit without implying a conversation turn.
+struct SideQuestionUsageRecorder {
+    store: Store,
+    channel_id: ChannelId,
+    model: String,
+    call_id: String,
+}
+
+#[async_trait::async_trait]
+impl LlmUsageRecorder for SideQuestionUsageRecorder {
+    async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()> {
+        let mut record = LlmCallRecord::new(LlmCallKind::SideQuestion, self.model.clone());
+        record.id = self.call_id.clone();
+        record.channel_id = Some(self.channel_id.clone());
+        record.usage = call.usage.clone();
+        record.raw_usage = call.raw_usage.clone();
+        if let Err(error) = self.store.record_llm_call(&record).await {
+            // Usage accounting never fails the user's answer.
+            tracing::warn!(error = %error, "Failed to record side question usage");
+        }
+        Ok(())
+    }
+
+    fn records_prompts(&self) -> bool {
+        false
     }
 }
 
@@ -343,6 +397,116 @@ impl ChannelAgentService {
         })
     }
 
+    /// Answer a side question without changing the conversation.
+    ///
+    /// The `/btw` path runs one agent turn on a caller-assembled request and
+    /// deliberately skips every side effect the normal turn has: it posts no
+    /// message, appends no context entry, records no routing turn, and updates
+    /// no preview. The answer is returned to the caller, which shows it in an
+    /// ephemeral panel. Usage is still recorded so the cost stays visible in
+    /// Settings → Audit, tagged [`LlmCallKind::SideQuestion`] (ADR-0039).
+    ///
+    /// `agent_id` picks the responder; `None` uses the conversation's only
+    /// participant, the group default responder, or the single `@mentioned`
+    /// agent. The question may still carry a leading `@name`, which is stripped
+    /// from the request once it has been used to select the responder.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ask_side_question(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: Option<&AgentId>,
+        question: &str,
+        model: &str,
+        llm: Arc<dyn LlmProvider>,
+        tools: ToolRegistry,
+        gate: Option<Arc<dyn ToolGate>>,
+        options: &ChannelTurnOptions,
+    ) -> CowResult<SideAnswer> {
+        let question = question.trim();
+        if question.is_empty() {
+            return Err(CowError::Task(
+                "a side question needs some text".to_string(),
+            ));
+        }
+
+        let Some(channel) = self.store.get_channel(channel_id).await? else {
+            return Err(CowError::Task(format!(
+                "channel '{channel_id}' was not found"
+            )));
+        };
+        let agents = self.store.list_agents(&self.workspace_id).await?;
+        if agents.is_empty() {
+            return Err(CowError::Task(
+                "this workspace has no agents yet".to_string(),
+            ));
+        }
+
+        let agent = match agent_id {
+            Some(agent_id) => agents
+                .iter()
+                .find(|agent| &agent.id == agent_id)
+                .cloned()
+                .ok_or_else(|| CowError::Task(format!("agent '{}' was not found", agent_id.0)))?,
+            None => {
+                self.side_question_responder(&channel, question, &agents)
+                    .await?
+            }
+        };
+
+        // Strip the addressing mention so the model sees the question itself.
+        let content = strip_addressing_mention(question, &agent.name);
+
+        let platform = Self::platform_context(&agents, options.platform_context.as_deref());
+        let draft = format!(
+            "{platform}\n\n\
+             You are answering a side question in a private, continuous \
+             conversation with the user. The question below is not part of the \
+             conversation: it will not appear in the transcript and will not be \
+             remembered as context. Answer it on its own terms, be concise, and \
+             do not refer to earlier turns.\n\n\
+             Side question:\n{content}"
+        );
+
+        // The model is the conversation's fixed model, or the caller's choice
+        // for an agent chat and a group channel.
+        let model = self.side_question_model(&channel, model).await?;
+        let messages = vec![
+            ChatMessage::system(agent.build_system_prompt()),
+            ChatMessage::user(draft),
+        ];
+        let call_id = uuid::Uuid::new_v4().to_string();
+
+        // The agent loop is reused so approval policies, tool gating, and usage
+        // recording stay identical to a normal turn. Tools are passed through,
+        // so a side question that touches the workspace still asks first.
+        let mut instance = AgentInstance::new(agent.clone(), llm.clone(), tools, model.clone());
+        instance.set_usage_recorder(Some(Arc::new(SideQuestionUsageRecorder {
+            store: self.store.clone(),
+            channel_id: channel.id.clone(),
+            model: model.clone(),
+            call_id: call_id.clone(),
+        })));
+        if let Some(gate) = gate {
+            instance.set_tool_gate(Some(gate));
+        }
+        let task = Task::new(content, "A concise answer to a side question.")
+            .assign_to(agent.id.clone())
+            .in_channel(channel.id.clone())
+            .from_source(TaskSource::ConversationTurn);
+
+        let output = instance
+            .execute_messages(&task, messages, self.channels.bus())
+            .await?;
+
+        Ok(SideAnswer {
+            agent_id: agent.id,
+            agent_name: agent.name,
+            content: output.trim().to_string(),
+            model,
+            call_id,
+        })
+    }
+
     /// Environment shared by every channel turn.
     pub(crate) fn platform_context(agents: &[AgentProfile], extra: Option<&str>) -> String {
         let mut roster = agents
@@ -379,6 +543,82 @@ impl ChannelAgentService {
             roster = roster.join("\n"),
             extra = extra,
         )
+    }
+
+    /// Which agent answers a side question that named none.
+    ///
+    /// A conversation uses its stored default responder or its single
+    /// participant, and a direct conversation uses its agent. A group channel
+    /// uses an explicitly mentioned agent and otherwise refuses rather than
+    /// guessing: a side answer has one voice, so mentioning several agents is
+    /// also refused.
+    async fn side_question_responder(
+        &self,
+        channel: &Channel,
+        question: &str,
+        agents: &[AgentProfile],
+    ) -> CowResult<AgentProfile> {
+        let mentioned = resolve_mentions(question, agents);
+        if mentioned.agents.len() > 1 {
+            return Err(CowError::Task(
+                "a side question is answered by one agent; mention at most one".to_string(),
+            ));
+        }
+        if let Some(agent) = mentioned.agents.first() {
+            return Ok(agent.clone());
+        }
+
+        if let Some(agent_id) = &channel.agent_id {
+            return agents
+                .iter()
+                .find(|agent| &agent.id == agent_id)
+                .cloned()
+                .ok_or_else(|| {
+                    CowError::Task("this conversation's agent is no longer available".to_string())
+                });
+        }
+
+        if channel.is_conversation() {
+            let participants = self.store.list_channel_participants(&channel.id).await?;
+            let settings = self.conversations.settings(&channel.id).await?;
+            let preferred = settings
+                .default_responder
+                .as_ref()
+                .and_then(|id| participants.iter().find(|p| &p.agent_id == id))
+                .or_else(|| participants.first());
+            if let Some(participant) = preferred {
+                return self
+                    .store
+                    .get_agent(&participant.agent_id)
+                    .await?
+                    .ok_or_else(|| {
+                        CowError::Task(
+                            "the conversation's agent is no longer available".to_string(),
+                        )
+                    });
+            }
+        }
+
+        Err(CowError::Task(
+            "mention an agent, for example /btw @Planner, or open that agent's chat".to_string(),
+        ))
+    }
+
+    /// The model a side question runs on.
+    ///
+    /// A user-created conversation has a fixed model that its branch is counted
+    /// against, so it always wins. A direct conversation or a group channel has
+    /// no stored model, so the caller supplies the one the chat is using.
+    async fn side_question_model(&self, channel: &Channel, model: &str) -> CowResult<String> {
+        if channel.is_conversation() {
+            return Ok(self.conversations.settings(&channel.id).await?.model);
+        }
+        if model.trim().is_empty() {
+            return Err(CowError::Task(
+                "an agent chat needs the model the chat is using".to_string(),
+            ));
+        }
+        Ok(model.to_string())
     }
 
     fn turn_task(
@@ -529,5 +769,32 @@ impl ChannelAgentService {
             .post_message(&channel.id, Sender::System, content.to_string())
             .await?;
         Ok(())
+    }
+}
+
+/// Remove the leading `@name` that selected the responder from a side
+/// question, so the model answers the question rather than addressing itself.
+///
+/// Only a mention that opens the text is removed: a mention in the middle may
+/// be part of what the user is asking about.
+fn strip_addressing_mention(question: &str, agent_name: &str) -> String {
+    let trimmed = question.trim_start();
+    let Some(rest) = trimmed.strip_prefix('@') else {
+        return trimmed.to_string();
+    };
+    let name_len = rest
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-')
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let (name, remainder) = rest.split_at(name_len);
+    if !name.eq_ignore_ascii_case(agent_name) {
+        return trimmed.to_string();
+    }
+    let remainder = remainder.trim_start();
+    if remainder.is_empty() {
+        trimmed.to_string()
+    } else {
+        remainder.to_string()
     }
 }

@@ -2752,6 +2752,88 @@ fn command_info(spec: &CommandSpec) -> CommandInfo {
     }
 }
 
+/// One answer to a `/btw` side question.
+#[derive(Debug, Clone, Serialize)]
+pub struct SideAnswerView {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub content: String,
+    pub model: String,
+    pub call_id: String,
+}
+
+/// Answer a `/btw` side question without changing the conversation.
+///
+/// Nothing is posted, no context entry is appended, and no routing turn is
+/// recorded; the view returns the answer for an ephemeral panel. `agent_id`
+/// picks the responder and defaults to the chat's own agent or its default
+/// responder. The model comes from the conversation's settings, or from
+/// `model` for an agent chat and a group channel (ADR-0039).
+#[tauri::command]
+pub async fn ask_side_question(
+    state: State<'_, AppState>,
+    channel_id: String,
+    agent_id: Option<String>,
+    question: String,
+    model: Option<String>,
+    approval_level: Option<ApprovalLevel>,
+) -> Result<SideAnswerView, String> {
+    let channel_id = ChannelId::new(channel_id);
+    let channel = state
+        .client
+        .get_channel(&channel_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
+
+    let (llm, default_model) = if channel.is_conversation() {
+        let settings = state
+            .client
+            .conversation_settings(&channel_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        conversation_runtime(&state, &settings)
+    } else {
+        state.runtime_model()
+    };
+    let model = model
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or(default_model);
+
+    let gate = state
+        .client
+        .side_question_gate(AssignmentId::new(format!("side-question-{}", channel_id.0)));
+    let responder = agent_id.as_deref().map(AgentId::new);
+    let answer = state
+        .client
+        .ask_side_question(
+            &channel_id,
+            responder.as_ref(),
+            &question,
+            &model,
+            llm,
+            state.tools.clone(),
+            Some(gate),
+            ChannelTurnOptions {
+                approval_level: approval_level.unwrap_or(ApprovalLevel::Ask),
+                max_concurrency: 4,
+                use_model_permissions: state.uses_remote_model(),
+                platform_context: project_platform_context(&state),
+                participant_capacity: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(SideAnswerView {
+        agent_id: answer.agent_id.0,
+        agent_name: answer.agent_name,
+        content: answer.content,
+        model: answer.model,
+        call_id: answer.call_id,
+    })
+}
+
 /// The composer's slash command catalogue, fetched once per frontend session.
 #[tauri::command]
 pub fn list_commands() -> Vec<CommandInfo> {
