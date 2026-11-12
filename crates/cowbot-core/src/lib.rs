@@ -3,6 +3,7 @@ pub mod approval;
 pub mod assignment;
 pub mod audit;
 pub mod channel;
+pub mod command;
 pub mod conversation;
 pub mod error;
 pub mod event;
@@ -31,6 +32,10 @@ pub use assignment::{
 };
 pub use audit::{AuditEvent, AuditSource};
 pub use channel::{Channel, ChannelId, ChannelMessage, Sender};
+pub use command::{
+    command_catalogue, find_command, parse_command, CommandArg, CommandArgKind, CommandInvocation,
+    CommandParse, CommandSpec, CommandTarget, APPROVAL_CHOICES, COMMANDS, SETTINGS_CHOICES,
+};
 pub use conversation::{
     compaction_split, compaction_split_by, context_entry_tokens, context_usage_state,
     project_context, usable_window, CacheUsageSummary, ChannelKind, ChannelParticipant,
