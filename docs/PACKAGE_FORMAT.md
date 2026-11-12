@@ -59,7 +59,8 @@ serialize.
 - `context_entries.jsonl`: one append-only context entry per line, with its
   branch sequence, role, kind, content, optional tool calls, optional
   `author_agent_id` for mirrored peer replies, exclusion flag, estimated tokens,
-  and timestamp.
+  and timestamp. Import shifts a branch whose minimum sequence is zero or
+  negative so it starts at 1, preserving within-branch order (ADR-0034).
 - `context_events.jsonl`: one compaction or clear event per line with token
   counts before and after.
 - `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
