@@ -282,6 +282,14 @@ from templates; a standalone agent editor is not part of this release.
   submitted task becomes the run's owning task: its detail shows the run tasks,
   assignments, assignment events, runs, tool calls, and the worktree when one
   exists.
+- **Inspect a run's request** — expand a run under **Runs** and choose
+  **Inspect context**. The inspector shows the first request the run sent:
+  system prompt slots, messages, tool schemas, and the memory recall trace.
+  Prompts are not stored per iteration yet, so the panel rebuilds the first
+  request from the agent profile recorded with the run and the task's current
+  plan and memory data; later iterations are not shown and the request can
+  differ from what was actually sent. Conversation and channel turn runs are
+  inspected from their conversation's context meter instead.
 - **Crew runs** create three related tasks (Planner, Coder, Reviewer) under the
   task you ran.
 - **Cancel** stops a running task.
@@ -364,6 +372,19 @@ or compacting the context never deletes messages.
   a full participant is skipped with a notice naming it while the others answer,
   and a turn whose selected participants are all full posts a notice without a
   model call.
+- **Inspect** in the context popover opens a read-only inspector for the active
+  participant; each group participant can be inspected from its own tab. It has
+  three tabs. **Prompt** lists the system-prompt slots with their token counts
+  (agent profile, platform context, participant roster, default responder, peer
+  convention), every message in send order — the latest user turn and any
+  composer draft included — and the tool schemas. **Recall** shows the memory
+  block, both budgets, and every candidate the recall considered: selected
+  entries carry their score and scope, and skipped entries say whether they are
+  inactive or how many recall tokens remained. **Budget** shows the request
+  total against the usable window, the same colored segments as the ring, the
+  auto-compaction threshold, and an over-budget warning. Inspecting never
+  changes recall statistics or the conversation, so it is safe to use while
+  checking why an agent ignored a remembered fact.
 - Each user message in a group gets an **Answered by** line under it, showing
   whether mentions, routing, or the default responder chose the responders,
   which participants replied, and any failures or skips. Open **Routing** for
