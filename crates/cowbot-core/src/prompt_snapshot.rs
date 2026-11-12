@@ -15,10 +15,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::agent::AgentId;
+use crate::channel::ChannelId;
 use crate::conversation::ContextProjection;
 use crate::identity::WorkspaceId;
 use crate::memory::{redact_secrets, TRUNCATION_MARKER};
 use crate::prompt::{PromptMemory, PromptRole, PromptSlot};
+use crate::run::RunId;
+use crate::task::TaskId;
 use crate::tool::ToolDefinition;
 use crate::usage::{LlmCallKind, TokenCounter};
 
@@ -136,6 +140,10 @@ pub struct LlmPromptSnapshot {
 
 impl LlmPromptSnapshot {
     /// Start an empty snapshot for one call.
+    ///
+    /// `created_at` defaults to now. A caller that records the time the call
+    /// happened — not the time the snapshot was sealed — sets it before
+    /// [`Self::seal`], because the hash covers the stored document.
     pub fn new(call_kind: LlmCallKind, model: impl Into<String>) -> Self {
         Self {
             schema_version: PROMPT_SNAPSHOT_SCHEMA_VERSION,
@@ -354,6 +362,29 @@ pub fn clamp_retention_days(value: u32) -> u32 {
         MIN_PROMPT_SNAPSHOT_RETENTION_DAYS,
         MAX_PROMPT_SNAPSHOT_RETENTION_DAYS,
     )
+}
+
+/// What a stored snapshot is, without its payload.
+///
+/// The row that stores a snapshot also stores the call it belongs to, so a
+/// list of summaries answers "which calls have evidence, and what was sent"
+/// without parsing every document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptSnapshotSummary {
+    pub llm_call_id: String,
+    pub run_id: Option<RunId>,
+    pub task_id: Option<TaskId>,
+    pub channel_id: Option<ChannelId>,
+    pub agent_id: Option<AgentId>,
+    pub call_kind: LlmCallKind,
+    pub model: String,
+    /// Tokens the stored request occupies, counted when the snapshot sealed.
+    pub token_count: u32,
+    /// Size of the stored payload in bytes.
+    pub byte_size: u32,
+    pub truncated: bool,
+    pub redacted: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Redact one text field, reporting whether anything changed.

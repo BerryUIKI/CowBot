@@ -67,10 +67,10 @@ pub use prompt::{
     PromptTool,
 };
 pub use prompt_snapshot::{
-    clamp_retention_days, LlmPromptSnapshot, PromptSnapshotSettings, SnapshotMessage,
-    SnapshotToolCall, DEFAULT_PROMPT_SNAPSHOT_RETENTION_DAYS, MAX_PROMPT_SNAPSHOT_RETENTION_DAYS,
-    MIN_PROMPT_SNAPSHOT_RETENTION_DAYS, PROMPT_SNAPSHOT_MAX_BYTES,
-    PROMPT_SNAPSHOT_MESSAGE_MAX_CHARS, PROMPT_SNAPSHOT_SCHEMA_VERSION,
+    clamp_retention_days, LlmPromptSnapshot, PromptSnapshotSettings, PromptSnapshotSummary,
+    SnapshotMessage, SnapshotToolCall, DEFAULT_PROMPT_SNAPSHOT_RETENTION_DAYS,
+    MAX_PROMPT_SNAPSHOT_RETENTION_DAYS, MIN_PROMPT_SNAPSHOT_RETENTION_DAYS,
+    PROMPT_SNAPSHOT_MAX_BYTES, PROMPT_SNAPSHOT_MESSAGE_MAX_CHARS, PROMPT_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use risk::RiskLevel;
 pub use run::{Run, RunId, RunStatus, ToolCallRecord};

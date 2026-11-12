@@ -7,6 +7,7 @@ pub(crate) mod identity;
 pub(crate) mod memory;
 pub(crate) mod permissions;
 pub(crate) mod policies;
+pub(crate) mod prompt_snapshots;
 pub(crate) mod tasks;
 pub(crate) mod usage;
 pub(crate) mod worktrees;
