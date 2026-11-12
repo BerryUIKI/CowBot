@@ -796,6 +796,32 @@ export interface AppInfo {
   autoCheckUpdates: boolean;
 }
 
+export type CommandTarget = "chat" | "conversation";
+
+export type CommandArgKind = "text" | "participant" | "choice";
+
+export interface CommandArgInfo {
+  placeholder: string;
+  required: boolean;
+  kind: CommandArgKind;
+  choices: string[];
+}
+
+export interface CommandInfo {
+  name: string;
+  aliases: string[];
+  usage: string;
+  summary: string;
+  target: CommandTarget;
+  args: CommandArgInfo[];
+}
+
+export type CommandParseResult =
+  | { kind: "not_a_command" }
+  | { kind: "invocation"; name: string; args: string[]; raw_args: string }
+  | { kind: "unknown"; name: string }
+  | { kind: "missing_argument"; name: string; usage: string };
+
 const taskStatusLabels = {
   pending: "Pending",
   in_progress: "In progress",

@@ -23,6 +23,15 @@ import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
+import SlashCommandMenu from "./SlashCommandMenu";
+import {
+  acceptedDraft,
+  filterCommands,
+  isCommandDraft,
+  loadCommands,
+  parseCommandDraft,
+  slashQuery,
+} from "./command";
 import TaskDetail from "./TaskDetail";
 import TaskList from "./TaskList";import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
@@ -93,6 +102,7 @@ import type {
   ConversationContext,
   ConversationSummary,
   ConversationTurn,
+  CommandInfo,
   ModelSettings,
   OnboardingState,
   Project,
@@ -287,6 +297,11 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
+  const [commandCatalogue, setCommandCatalogue] = useState<CommandInfo[]>([]);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandDismissed, setCommandDismissed] = useState(false);
+  const [commandHint, setCommandHint] = useState<string | null>(null);
+  const [commandExpanded, setCommandExpanded] = useState(false);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
@@ -698,6 +713,25 @@ export default function App() {
     if (!templateId && templates.length > 0) setTemplateId(templates[0].id);
   }, [templates, templateId]);
 
+  // The catalogue is fetched once per session. If it fails, slash mode stays
+  // off and drafts are sent as ordinary messages; the failure is reported once.
+  useEffect(() => {
+    let cancelled = false;
+    loadCommands()
+      .then((catalogue) => {
+        if (!cancelled) setCommandCatalogue(catalogue);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setNotice(
+          `Slash commands are unavailable; drafts starting with / are sent as messages. ${errorMessage(err)}`,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!creatingTask || !worktreeEnabled) return;
     if (!taskProject && availableProjects.length > 0) {
@@ -1071,6 +1105,20 @@ export default function App() {
     const match = draft.match(/(?:^|\s)@([\p{L}\p{N}_-]*)$/u);
     return match ? match[1] : null;
   }, [draft]);
+
+  const commandQuery = useMemo(() => slashQuery(draft), [draft]);
+
+  const commandCandidates = useMemo(() => {
+    if (commandQuery === null || commandDismissed) return [];
+    // `/help` expands the menu to the whole catalogue regardless of the query.
+    if (commandExpanded) return commandCatalogue;
+    return filterCommands(commandCatalogue, commandQuery);
+  }, [commandCatalogue, commandDismissed, commandExpanded, commandQuery]);
+
+  const activeCommandIndex = Math.min(
+    commandIndex,
+    Math.max(0, commandCandidates.length - 1),
+  );
 
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null || mentionDismissed) return [];
@@ -1549,9 +1597,80 @@ export default function App() {
     openEditAgentDialog(agent);
   }
 
-  async function sendMessage() {
-    const content = draft.trim();
-    if (!content || !selectedChannel || sending || conversationFull) return;
+  function acceptCommand(command: CommandInfo) {
+    setCommandHint(null);
+    setCommandExpanded(false);
+    setCommandDismissed(true);
+    setCommandIndex(0);
+    const next = acceptedDraft(command);
+    if (next) {
+      setDraft(next);
+      composerRef.current?.focus();
+      return;
+    }
+    void runCommand(`/${command.name}`);
+  }
+
+  /// Dispatch a complete command line. #187 fills every handler except the
+  /// ones this issue owns; until then a command that parses reports that it is
+  /// not wired rather than being posted as a message.
+  async function runCommand(line: string) {
+    const parsed = await parseCommandDraft(line);
+    switch (parsed.kind) {
+      case "not_a_command":
+        await sendMessage(line);
+        return;
+      case "unknown":
+        setCommandHint(
+          "Unknown command. Press Esc to send as a message, or type /help.",
+        );
+        setCommandDismissed(true);
+        return;
+      case "missing_argument":
+        setCommandHint(`Usage: ${parsed.usage}`);
+        return;
+      case "invocation": {
+        const spec = commandCatalogue.find((item) => item.name === parsed.name);
+        if (!spec) return;
+        if (spec.target === "conversation" && selectedChannel?.kind !== "conversation") {
+          setNotice(`/${parsed.name} only works in a conversation.`);
+          return;
+        }
+        if (spec.name === "help") {
+          setCommandHint(null);
+          setCommandDismissed(false);
+          setCommandExpanded(true);
+          setCommandIndex(0);
+          composerRef.current?.focus();
+          return;
+        }
+        setDraft("");
+        setCommandHint(null);
+        setCommandExpanded(false);
+        setNotice(`/${parsed.name} is not wired up yet.`);
+        return;
+      }
+    }
+  }
+
+  async function sendCommandDraft() {
+    const line = draft.trim();
+    if (!line) return;
+    setSending(true);
+    setError(null);
+    try {
+      await runCommand(line);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendMessage(text: string = draft) {
+    if (sending) return false;
+    const content = text.trim();
+    if (!content || !selectedChannel || conversationFull) return false;
 
     setSending(true);
     setError(null);
@@ -1586,8 +1705,10 @@ export default function App() {
       );
       setPreviews((current) => ({ ...current, [selectedChannel.id]: posted }));
       await refreshMessages(selectedChannel.id);
+      return true;
     } catch (err) {
       setError(errorMessage(err));
+      return false;
     } finally {
       setSending(false);
     }
@@ -1606,6 +1727,34 @@ export default function App() {
   }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (commandCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCommandIndex((current) => (current + 1) % commandCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCommandIndex(
+          (current) =>
+            (current - 1 + commandCandidates.length) % commandCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const candidate = commandCandidates[activeCommandIndex];
+        if (candidate) acceptCommand(candidate);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandDismissed(true);
+        setCommandExpanded(false);
+        setCommandHint(null);
+        return;
+      }
+    }
     if (mentionCandidates.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -1634,7 +1783,14 @@ export default function App() {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (!conversationFull) void sendMessage();
+      if (conversationFull) return;
+      // After Escape or any dispatch failure the draft is a slash line that is
+      // not a catalogue command, and the user chose to send it as a message.
+      if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+        void sendCommandDraft();
+        return;
+      }
+      void sendMessage();
     }
   }
 
@@ -3115,10 +3271,23 @@ export default function App() {
                 className="composer-bar"
                 onSubmit={(event) => {
                   event.preventDefault();
+                  if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+                    void sendCommandDraft();
+                    return;
+                  }
                   void sendMessage();
                 }}
               >
                 <div className="composer-main">
+                  {commandCandidates.length > 0 || commandHint ? (
+                    <SlashCommandMenu
+                      commands={commandCandidates}
+                      activeIndex={activeCommandIndex}
+                      onAccept={acceptCommand}
+                      onHover={setCommandIndex}
+                      hint={commandHint}
+                    />
+                  ) : null}
                   {mentionCandidates.length > 0 ? (
                     <div
                       className="mention-suggestions"
@@ -3162,7 +3331,16 @@ export default function App() {
                     ref={composerRef}
                     className="composer-input"
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={(event) => {
+                      setDraft(event.target.value);
+                      // A new draft is a new question for the command menu.
+                      setCommandDismissed(false);
+                      setCommandIndex(0);
+                      setCommandHint(null);
+                      if (slashQuery(event.target.value) === null) {
+                        setCommandExpanded(false);
+                      }
+                    }}
                     onKeyDown={handleComposerKeyDown}
                     placeholder={
                       conversationFull
@@ -3171,16 +3349,22 @@ export default function App() {
                     }
                     aria-label={`Message ${composerTarget}`}
                     aria-autocomplete="list"
-                    aria-expanded={mentionCandidates.length > 0}
+                    aria-expanded={
+                      commandCandidates.length > 0 || mentionCandidates.length > 0
+                    }
                     aria-controls={
-                      mentionCandidates.length > 0
-                        ? "mention-suggestions"
-                        : undefined
+                      commandCandidates.length > 0
+                        ? "command-suggestions"
+                        : mentionCandidates.length > 0
+                          ? "mention-suggestions"
+                          : undefined
                     }
                     aria-activedescendant={
-                      mentionCandidates.length > 0
-                        ? `mention-option-${activeMentionIndex}`
-                        : undefined
+                      commandCandidates.length > 0
+                        ? `command-option-${activeCommandIndex}`
+                        : mentionCandidates.length > 0
+                          ? `mention-option-${activeMentionIndex}`
+                          : undefined
                     }
                     disabled={conversationFull}
                     rows={1}

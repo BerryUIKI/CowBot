@@ -11,6 +11,9 @@ use cowbot_core::assignment::{
 };
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
+use cowbot_core::command::{
+    command_catalogue, parse_command as command_parse, CommandParse, CommandSpec,
+};
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
@@ -2709,6 +2712,92 @@ fn summarize_reply(reply: &str) -> String {
     summary
 }
 
+/// One argument of a composer command, flattened for the frontend.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandArgInfo {
+    pub placeholder: String,
+    pub required: bool,
+    pub kind: String,
+    pub choices: Vec<String>,
+}
+
+/// A composer command, flattened for the frontend.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub usage: String,
+    pub summary: String,
+    pub target: String,
+    pub args: Vec<CommandArgInfo>,
+}
+
+fn command_info(spec: &CommandSpec) -> CommandInfo {
+    CommandInfo {
+        name: spec.name.to_string(),
+        aliases: spec.aliases.iter().map(|alias| alias.to_string()).collect(),
+        usage: spec.usage.to_string(),
+        summary: spec.summary.to_string(),
+        target: spec.target.as_str().to_string(),
+        args: spec
+            .args
+            .iter()
+            .map(|arg| CommandArgInfo {
+                placeholder: arg.placeholder.to_string(),
+                required: arg.required,
+                kind: arg.kind.as_str().to_string(),
+                choices: arg.kind.choices().iter().map(|c| c.to_string()).collect(),
+            })
+            .collect(),
+    }
+}
+
+/// The composer's slash command catalogue, fetched once per frontend session.
+#[tauri::command]
+pub fn list_commands() -> Vec<CommandInfo> {
+    command_catalogue().iter().map(command_info).collect()
+}
+
+/// One composer command with its arguments filled in.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandInvocationView {
+    pub name: String,
+    pub args: Vec<String>,
+    pub raw_args: String,
+}
+
+/// The outcome of reading composer input as a slash command.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CommandParseView {
+    NotACommand,
+    Invocation(CommandInvocationView),
+    Unknown { name: String },
+    MissingArgument { name: String, usage: String },
+}
+
+/// Read composer input as a slash command.
+///
+/// Called once per Enter press while the draft starts with `/`, so typing
+/// never costs an IPC round trip.
+#[tauri::command]
+pub fn parse_command(input: String) -> CommandParseView {
+    match command_parse(&input) {
+        CommandParse::NotACommand => CommandParseView::NotACommand,
+        CommandParse::Invocation(invocation) => {
+            CommandParseView::Invocation(CommandInvocationView {
+                name: invocation.name,
+                args: invocation.args,
+                raw_args: invocation.raw_args,
+            })
+        }
+        CommandParse::Unknown { name } => CommandParseView::Unknown { name },
+        CommandParse::MissingArgument { name, usage } => {
+            CommandParseView::MissingArgument { name, usage }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3279,5 +3368,73 @@ mod tests {
         assert_eq!(unknown.percent_used, None);
         assert_eq!(unknown.state, ContextUsageState::Unknown);
         assert!(!unknown.over_budget);
+    }
+
+    #[test]
+    fn list_commands_serializes_every_catalogue_entry() {
+        let commands = list_commands();
+        assert_eq!(commands.len(), command_catalogue().len());
+
+        let json = serde_json::to_value(&commands).expect("command catalogue serializes");
+        let approval = json
+            .as_array()
+            .expect("catalogue is a list")
+            .iter()
+            .find(|command| command["name"] == "approval")
+            .expect("approval is catalogued");
+        assert_eq!(approval["target"], "chat");
+        assert_eq!(approval["args"][0]["kind"], "choice");
+        assert_eq!(
+            approval["args"][0]["choices"],
+            serde_json::json!(cowbot_core::command::APPROVAL_CHOICES)
+        );
+
+        let compact = json
+            .as_array()
+            .expect("catalogue is a list")
+            .iter()
+            .find(|command| command["name"] == "compact")
+            .expect("compact is catalogued");
+        assert_eq!(compact["target"], "conversation");
+        assert_eq!(compact["args"][0]["kind"], "participant");
+        assert_eq!(compact["args"][0]["choices"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn parse_command_crosses_ipc_in_a_flat_shape() {
+        assert_eq!(
+            serde_json::to_value(parse_command("hello".to_string())).expect("serializes"),
+            serde_json::json!({ "kind": "not_a_command" })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/pin".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "invocation",
+                "name": "pin",
+                "args": [],
+                "raw_args": "",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/task write it".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "invocation",
+                "name": "task",
+                "args": ["write", "it"],
+                "raw_args": "write it",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/nope".to_string())).expect("serializes"),
+            serde_json::json!({ "kind": "unknown", "name": "nope" })
+        );
+        assert_eq!(
+            serde_json::to_value(parse_command("/rename".to_string())).expect("serializes"),
+            serde_json::json!({
+                "kind": "missing_argument",
+                "name": "rename",
+                "usage": "/rename <name>",
+            })
+        );
     }
 }
