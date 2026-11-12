@@ -1253,7 +1253,10 @@ export default function App() {
       setNotice(
         outcome.compacted
           ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
-          : "Nothing to compact yet.",
+          : outcome.reason ??
+              (outcome.in_progress
+                ? "A compaction is already running for this branch."
+                : "Nothing to compact yet."),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);

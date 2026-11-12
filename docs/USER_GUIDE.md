@@ -343,7 +343,9 @@ or compacting the context never deletes messages.
 - **Compact now** summarizes older context entries into one summary and stops
   sending the summarized entries; recent turns stay verbatim. In a group it
   compacts the active participant's branch. A system notice in the timeline
-  reports the token change, and the original messages remain visible.
+  reports the token change, and the original messages remain visible. If
+  another compaction is already running for that branch, CowBot reports that
+  instead of starting a second one.
 - **Compact automatically** is off by default. When enabled, CowBot compacts a
   selected participant's branch before its turn if it would cross the configured
   percentage (80% by default) of the usable window.

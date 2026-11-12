@@ -5,8 +5,8 @@ use chrono::Utc;
 use cowbot_core::agent::AgentId;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    ChannelKind, ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationMode,
-    ConversationSettings, ConversationTurn, RouteSource,
+    ChannelKind, CompactionWrite, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
+    ContextRole, ConversationMode, ConversationSettings, ConversationTurn, RouteSource,
 };
 use cowbot_core::identity::{User, Workspace};
 use cowbot_core::run::{Run, RunId};
@@ -127,8 +127,16 @@ async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
         ContextRole::Assistant,
         "first answer",
     );
+    let third = entry(
+        &channel.id,
+        &agent_id,
+        ContextRole::User,
+        "the kept follow-up",
+    );
     assert_eq!(store.append_context_entry(&first).await.unwrap(), 1);
     assert_eq!(store.append_context_entry(&second).await.unwrap(), 2);
+    let third_seq = store.append_context_entry(&third).await.unwrap();
+    assert_eq!(third_seq, 3);
 
     let other_agent = AgentId::new("agent-reviewer");
     let other = entry(
@@ -143,7 +151,7 @@ async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
         .list_context_entries(&channel.id, &agent_id)
         .await
         .unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].seq, 1);
     assert_eq!(entries[0].content, "first question");
     assert_eq!(entries[1].seq, 2);
@@ -154,28 +162,64 @@ async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
         "summary of the earlier turn",
     );
     summary.recount();
-    let event = ContextEvent::new(
+    let mut event = ContextEvent::new(
         channel.id.clone(),
         agent_id.clone(),
         ContextEventKind::Compact,
         10,
         4,
     );
-    store
-        .compact_context(&summary, &[first.id.clone(), second.id.clone()], &event)
+    let written = store
+        .compact_context(
+            &summary,
+            &[first.id.clone(), second.id.clone()],
+            third_seq,
+            &mut event,
+        )
         .await
         .unwrap();
+    assert!(matches!(
+        written,
+        cowbot_core::conversation::CompactionWrite::Applied { .. }
+    ));
 
     let after = store
         .list_context_entries(&channel.id, &agent_id)
         .await
         .unwrap();
-    assert_eq!(after.len(), 3);
+    assert_eq!(after.len(), 4);
     let excluded: Vec<_> = after.iter().filter(|entry| entry.excluded).collect();
     assert_eq!(excluded.len(), 2);
     assert_eq!(
         after[2].kind,
         cowbot_core::conversation::ContextEntryKind::Summary
+    );
+    assert_eq!(after[2].seq, third_seq);
+    assert_eq!(after[3].seq, third_seq + 1);
+    assert_eq!(after[3].content, "the kept follow-up");
+    assert!(!after[3].excluded);
+    assert!(event.tokens_before > 0);
+    assert!(event.tokens_after > 0);
+
+    let fourth = entry(
+        &channel.id,
+        &agent_id,
+        ContextRole::User,
+        "a message appended after compaction",
+    );
+    let fourth_seq = store.append_context_entry(&fourth).await.unwrap();
+    assert_eq!(fourth_seq, third_seq + 2);
+    let final_entries = store
+        .list_context_entries(&channel.id, &agent_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        final_entries.last().map(|entry| entry.content.as_str()),
+        Some("a message appended after compaction")
+    );
+    assert_eq!(
+        final_entries.last().map(|entry| entry.seq),
+        Some(fourth_seq)
     );
 
     let events = store
@@ -192,6 +236,128 @@ async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
         .unwrap();
     assert_eq!(reviewer_entries.len(), 1);
     assert!(!reviewer_entries[0].excluded);
+}
+
+#[tokio::test]
+async fn compaction_rejects_a_stale_prefix_without_writing() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Stale compaction", "");
+    let agent_id = AgentId::new("agent-coder");
+    let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
+        .await
+        .unwrap();
+
+    let first = entry(&channel.id, &agent_id, ContextRole::User, "one");
+    let second = entry(&channel.id, &agent_id, ContextRole::Assistant, "two");
+    let third = entry(&channel.id, &agent_id, ContextRole::User, "three");
+    store.append_context_entry(&first).await.unwrap();
+    store.append_context_entry(&second).await.unwrap();
+    store.append_context_entry(&third).await.unwrap();
+
+    // Another writer excludes one of the entries the summary was built from.
+    store
+        .exclude_context_entries(std::slice::from_ref(&first.id))
+        .await
+        .unwrap();
+
+    let mut summary = ContextEntry::summary(
+        channel.id.clone(),
+        agent_id.clone(),
+        "summary that must not be written",
+    );
+    summary.recount();
+    let mut event = ContextEvent::new(
+        channel.id.clone(),
+        agent_id.clone(),
+        ContextEventKind::Compact,
+        10,
+        4,
+    );
+    let written = store
+        .compact_context(
+            &summary,
+            &[first.id.clone(), second.id.clone()],
+            3,
+            &mut event,
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, CompactionWrite::Stale);
+
+    let after = store
+        .list_context_entries(&channel.id, &agent_id)
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 3);
+    assert!(after
+        .iter()
+        .all(|entry| entry.kind != ContextEntryKind::Summary));
+    assert!(after[0].excluded);
+    assert!(!after[1].excluded);
+    assert!(!after[2].excluded);
+    assert_eq!(
+        after.iter().map(|entry| entry.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(store
+        .list_context_events(&channel.id, &agent_id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(event.tokens_before, 10);
+    assert_eq!(event.tokens_after, 4);
+}
+
+#[tokio::test]
+async fn compaction_rejects_non_positive_sequence_numbers() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Imported branch", "");
+    let agent_id = AgentId::new("agent-coder");
+    let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
+        .await
+        .unwrap();
+
+    let mut first = entry(&channel.id, &agent_id, ContextRole::User, "imported");
+    first.seq = 0;
+    store.insert_context_entry(&first).await.unwrap();
+    let mut second = entry(&channel.id, &agent_id, ContextRole::Assistant, "kept");
+    second.seq = 1;
+    store.insert_context_entry(&second).await.unwrap();
+
+    let mut summary = ContextEntry::summary(
+        channel.id.clone(),
+        agent_id.clone(),
+        "summary that must not be written",
+    );
+    summary.recount();
+    let mut event = ContextEvent::new(
+        channel.id.clone(),
+        agent_id.clone(),
+        ContextEventKind::Compact,
+        10,
+        4,
+    );
+    let error = store
+        .compact_context(&summary, std::slice::from_ref(&first.id), 1, &mut event)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, cowbot_core::error::CowError::Config(_)));
 }
 
 #[tokio::test]

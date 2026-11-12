@@ -30,7 +30,7 @@ use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
+    CompactionLocks, ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
     PermissionService, SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
@@ -92,12 +92,15 @@ impl LocalClient {
         approvals.reconcile_on_startup().await?;
 
         let channels = ChannelService::new(store.clone(), bus.clone());
+        let compaction_locks = Arc::new(CompactionLocks::new());
         let channel_agents =
             ChannelAgentService::new(store.clone(), bus.clone(), context.workspace.id.clone())
-                .with_session_decisions(Some(session_decisions.clone()));
+                .with_session_decisions(Some(session_decisions.clone()))
+                .with_compaction_locks(compaction_locks.clone());
         let conversations =
             ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
-                .with_session_decisions(Some(session_decisions.clone()));
+                .with_session_decisions(Some(session_decisions.clone()))
+                .with_compaction_locks(compaction_locks);
         let templates = TemplateService::new(store.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
