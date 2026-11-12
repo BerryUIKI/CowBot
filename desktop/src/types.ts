@@ -208,6 +208,8 @@ export interface CompactionOutcome {
   tokens_before: number;
   tokens_after: number;
   summary: string | null;
+  in_progress: boolean;
+  reason: string | null;
 }
 
 export type Sender =

@@ -223,11 +223,18 @@ pub async fn post_message(
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
-                    state
+                    let outcome = state
                         .client
                         .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
                         .await
                         .map_err(|error| error.to_string())?;
+                    if outcome.in_progress {
+                        return Err(
+                            "This conversation's context is already being compacted. Try again \
+                             shortly."
+                                .to_string(),
+                        );
+                    }
                     view = conversation_context_view(&state, &channel_id).await?;
                 }
                 if view.total_tokens.saturating_add(pending) >= usable {
