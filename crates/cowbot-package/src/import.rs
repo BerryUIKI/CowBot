@@ -127,8 +127,9 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     resequence_legacy_participant_positions(&mut participants);
     let conversation_settings: Vec<ConversationSettings> =
         optional_jsonl(&entries, CONVERSATION_SETTINGS_PATH)?.unwrap_or_default();
-    let context_entries: Vec<ContextEntry> =
+    let mut context_entries: Vec<ContextEntry> =
         optional_jsonl(&entries, CONTEXT_ENTRIES_PATH)?.unwrap_or_default();
+    normalize_context_sequences(&mut context_entries);
     let context_events: Vec<ContextEvent> =
         optional_jsonl(&entries, CONTEXT_EVENTS_PATH)?.unwrap_or_default();
     let tasks: Vec<Task> = parse(required(&entries, TASKS_PATH)?)?;
@@ -418,6 +419,33 @@ fn resequence_legacy_participant_positions(participants: &mut [ChannelParticipan
     }
 }
 
+/// Shift any branch whose minimum sequence is non-positive so it starts at 1.
+///
+/// CowBot writes sequences from 1, but a crafted or foreign package can carry
+/// zero or negative values. The compaction renumber in ADR-0034 uses negative
+/// sequences as a staging range, so imported branches must stay positive.
+/// Shifting every row in a branch by the same amount preserves order and
+/// uniqueness.
+fn normalize_context_sequences(entries: &mut [ContextEntry]) {
+    let mut minima: std::collections::HashMap<(ChannelId, AgentId), i64> =
+        std::collections::HashMap::new();
+    for entry in entries.iter() {
+        let key = (entry.channel_id.clone(), entry.agent_id.clone());
+        let minimum = minima.entry(key).or_insert(entry.seq);
+        if entry.seq < *minimum {
+            *minimum = entry.seq;
+        }
+    }
+    for entry in entries.iter_mut() {
+        let key = (entry.channel_id.clone(), entry.agent_id.clone());
+        if let Some(minimum) = minima.get(&key) {
+            if *minimum <= 0 {
+                entry.seq += 1 - *minimum;
+            }
+        }
+    }
+}
+
 fn parse_jsonl<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<Vec<T>, PackageError> {
     let mut values = Vec::new();
     for line in bytes.split(|byte| *byte == b'\n') {
@@ -668,5 +696,46 @@ mod tests {
         assert!(entry.content.contains("[redacted]"));
         assert_eq!(entry.channel_id, Some(ChannelId::new("known")));
         assert_eq!(entry.agent_id, Some(AgentId::new("known-agent")));
+    }
+
+    #[test]
+    fn non_positive_context_sequences_are_shifted_per_branch() {
+        let channel = ChannelId::new("c");
+        let agent = AgentId::new("a");
+        let other = AgentId::new("b");
+        let context_entry = |agent: &AgentId, seq: i64, content: &str| {
+            let mut entry = ContextEntry::new(
+                channel.clone(),
+                agent.clone(),
+                cowbot_core::conversation::ContextRole::User,
+                content,
+            );
+            entry.seq = seq;
+            entry
+        };
+
+        let mut entries = vec![
+            context_entry(&agent, -2, "oldest"),
+            context_entry(&agent, 0, "middle"),
+            context_entry(&agent, 5, "newest"),
+            context_entry(&other, -7, "other oldest"),
+            context_entry(&other, 1, "other newest"),
+        ];
+        normalize_context_sequences(&mut entries);
+        assert_eq!(entries[0].seq, 1);
+        assert_eq!(entries[1].seq, 3);
+        assert_eq!(entries[2].seq, 8);
+        assert_eq!(entries[3].seq, 1);
+        assert_eq!(entries[4].seq, 9);
+        assert!(entries[0].seq < entries[1].seq && entries[1].seq < entries[2].seq);
+        assert!(entries[3].seq < entries[4].seq);
+
+        let mut positive = vec![
+            context_entry(&agent, 2, "two"),
+            context_entry(&agent, 4, "four"),
+        ];
+        normalize_context_sequences(&mut positive);
+        assert_eq!(positive[0].seq, 2);
+        assert_eq!(positive[1].seq, 4);
     }
 }
