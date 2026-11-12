@@ -7,6 +7,7 @@ interface ApprovalCardsProps {
   toolCalls: Record<string, ToolCallDetail>;
   risks: Record<string, ApprovalRisk>;
   decidingId: string | null;
+  embedded?: boolean;
   onDecide: (
     approval: Approval,
     approved: boolean,
@@ -20,14 +21,19 @@ export default function ApprovalCards({
   toolCalls,
   risks,
   decidingId,
+  embedded = false,
   onDecide,
 }: ApprovalCardsProps) {
   return (
-    <div className="approvals-view">
-      <header className="view-header">
-        <h2 className="view-title">Approvals</h2>
-        <p className="view-subtitle">Tool calls waiting for your decision.</p>
-      </header>
+    <div
+      className={`approvals-view${embedded ? " approvals-view-embedded" : ""}`}
+    >
+      {embedded ? null : (
+        <header className="view-header">
+          <h2 className="view-title">Approvals</h2>
+          <p className="view-subtitle">Tool calls waiting for your decision.</p>
+        </header>
+      )}
 
       {approvals.length === 0 ? (
         <div className="empty-timeline">

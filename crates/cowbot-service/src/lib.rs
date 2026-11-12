@@ -11,8 +11,10 @@ mod channel_agents;
 mod channels;
 mod conversations;
 mod crew_runner;
+mod memory;
 mod permissions;
 mod permissions_rules;
+mod remember;
 mod scheduler;
 mod session_decisions;
 mod task_service;
@@ -25,15 +27,22 @@ pub use approvals::{
 };
 pub use assignments::AssignmentService;
 pub use bootstrap::{bootstrap_local, bootstrap_local_named, LocalContext};
-pub use channel_agents::{ChannelAgentService, ChannelTurnOptions, ChannelTurnReport};
+pub use channel_agents::{
+    ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
+};
 pub use channels::ChannelService;
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
+pub use memory::{
+    parse_extraction_response, ExtractionCandidate, MemoryFilter, MemorySave, MemoryService,
+    MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave, RecalledMemory,
+};
 pub use permissions::{
     ModelPermissionEvaluator, PermissionDecision, PermissionDecisionKind, PermissionEvaluator,
     PermissionRequest,
 };
 pub use permissions_rules::PermissionService;
+pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;

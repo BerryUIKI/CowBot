@@ -2,10 +2,12 @@ mod config;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
-use cowbot_client::{Client, LocalClient};
+use cowbot_client::{Client, LocalClient, MemoryFilter, NewMemory};
+use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::channel::{ChannelId, ChannelMessage, Sender};
 use cowbot_core::event::EventPayload;
+use cowbot_core::memory::{MemoryKind, MemoryStatus};
 use cowbot_core::task::Task;
 use cowbot_llm::{LlmProvider, MockLlmProvider, OpenAiCompatibleProvider};
 use cowbot_service::{ChannelTurnOptions, CrewRunOptions};
@@ -123,6 +125,12 @@ enum Commands {
         #[command(subcommand)]
         command: MessageCommands,
     },
+
+    /// List, add, or archive workspace memory
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -171,6 +179,45 @@ enum MessageCommands {
         /// Run mentioned agents against the offline mock model
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemoryCommands {
+    /// List memory entries
+    List {
+        /// Filter by status (active, pending, or archived)
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by owning agent id
+        #[arg(long)]
+        agent: Option<String>,
+        /// Filter by conversation or channel id
+        #[arg(long)]
+        channel: Option<String>,
+    },
+    /// Add a memory entry
+    Add {
+        /// Entry content
+        #[arg(long)]
+        content: String,
+        /// Kind: fact, preference, decision, summary, or note
+        #[arg(long, default_value = "fact")]
+        kind: String,
+        /// Owning agent id
+        #[arg(long)]
+        agent: Option<String>,
+        /// Conversation or channel id
+        #[arg(long)]
+        channel: Option<String>,
+        /// Recall this entry before scored entries
+        #[arg(long)]
+        pinned: bool,
+    },
+    /// Archive a memory entry
+    Archive {
+        /// Entry id
+        id: String,
     },
 }
 
@@ -226,14 +273,16 @@ async fn import_package(input: PathBuf, settings: &Settings) -> anyhow::Result<(
     println!("  exported by:  {}", manifest.exported_by.workspace_name);
     println!(
         "  contents:     {} channels, {} messages, {} agents, {} tasks, {} runs, \
-         {} conversations, {} context entries",
+         {} conversations, {} context entries, {} memory notes, {} memory entries",
         summary.channels,
         summary.messages,
         summary.agents,
         summary.tasks,
         summary.runs,
         summary.conversations,
-        summary.context_entries
+        summary.context_entries,
+        summary.memory_notes,
+        summary.memory_entries
     );
     Ok(())
 }
@@ -320,6 +369,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Message { command } => {
             let settings = config::resolve(Overrides::default(), file);
             handle_message(command, &settings).await?;
+        }
+        Commands::Memory { command } => {
+            let settings = config::resolve(Overrides::default(), file);
+            handle_memory(command, &settings).await?;
         }
     }
 
@@ -412,6 +465,89 @@ async fn handle_message(command: MessageCommands, settings: &Settings) -> anyhow
     Ok(())
 }
 
+async fn handle_memory(command: MemoryCommands, settings: &Settings) -> anyhow::Result<()> {
+    let client = LocalClient::open(&settings.db).await?;
+    match command {
+        MemoryCommands::List {
+            status,
+            agent,
+            channel,
+        } => {
+            let status = match status {
+                Some(status) => Some(status.parse::<MemoryStatus>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "unknown status '{status}' (expected active, pending, or archived)"
+                    )
+                })?),
+                None => None,
+            };
+            let entries = client
+                .list_memory_entries(&MemoryFilter {
+                    status,
+                    agent_id: agent.map(AgentId::new),
+                    channel_id: channel.map(ChannelId::new),
+                })
+                .await?;
+            if entries.is_empty() {
+                println!("No memory entries match.");
+                return Ok(());
+            }
+            println!("Memory entries:");
+            for entry in entries {
+                let scope = match (&entry.agent_id, &entry.channel_id) {
+                    (Some(agent), Some(channel)) => {
+                        format!("agent {} in {}", agent.0, channel.0)
+                    }
+                    (Some(agent), None) => format!("agent {}", agent.0),
+                    (None, Some(channel)) => format!("conversation {}", channel.0),
+                    (None, None) => "workspace".to_string(),
+                };
+                println!(
+                    "  {}  [{}] ({}) {}{} — {}",
+                    entry.id,
+                    entry.status.as_str(),
+                    entry.kind.as_str(),
+                    scope,
+                    if entry.pinned { " · pinned" } else { "" },
+                    entry.content
+                );
+            }
+        }
+        MemoryCommands::Add {
+            content,
+            kind,
+            agent,
+            channel,
+            pinned,
+        } => {
+            let kind = kind.parse::<MemoryKind>().map_err(|_| {
+                anyhow::anyhow!(
+                    "unknown kind '{kind}' (expected fact, preference, decision, summary, or note)"
+                )
+            })?;
+            let new = NewMemory::user(content)
+                .with_kind(kind)
+                .with_scope(agent.map(AgentId::new), channel.map(ChannelId::new))
+                .with_pinned(pinned);
+            let saved = client.add_memory_entry(new).await?;
+            println!(
+                "Added memory entry {}{}.",
+                saved.entry.id,
+                if saved.redacted {
+                    " (credentials redacted)"
+                } else {
+                    ""
+                }
+            );
+        }
+        MemoryCommands::Archive { id } => {
+            let entry = client.archive_memory_entry(&id).await?;
+            println!("Archived memory entry {}.", entry.id);
+        }
+    }
+    Ok(())
+}
+
 /// Run one channel turn for the agents a message mentions.
 async fn reply_to_mentions(
     client: &LocalClient,
@@ -451,12 +587,19 @@ async fn reply_to_mentions(
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
                 platform_context: None,
+                participant_capacity: Vec::new(),
             },
         )
         .await?;
 
     if report.is_empty() {
-        println!("No agent was mentioned; nothing to answer.");
+        match report.route.map(|route| route.as_str()) {
+            Some("silent") => {
+                println!("No participant answered; no default responder is configured.")
+            }
+            Some("unmatched") => println!("No participant matched the mentioned names."),
+            _ => println!("No agent was mentioned; nothing to answer."),
+        }
         return Ok(());
     }
     println!(
@@ -464,6 +607,15 @@ async fn reply_to_mentions(
         report.agents.len(),
         message.channel_id
     );
+    if let Some(route) = report.route {
+        println!(
+            "  route: {} · {} replied, {} failed, {} skipped",
+            route.as_str(),
+            report.replied.len(),
+            report.failed.len(),
+            report.skipped.len()
+        );
+    }
     for name in &report.unknown_mentions {
         println!("  no agent matched @{name}");
     }

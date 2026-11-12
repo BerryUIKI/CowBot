@@ -3,10 +3,12 @@ use cowbot_core::channel::Channel;
 use cowbot_core::channel::ChannelId;
 use cowbot_core::conversation::{
     ChannelParticipant, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
-    ContextRole, ContextToolCall, ConversationMode, ConversationSettings,
+    ContextRole, ContextToolCall, ConversationMode, ConversationSettings, ConversationTurn,
+    RouteSource, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::task::TaskId;
 
 use crate::error::{db, parse_datetime, parse_json};
 use crate::store::Store;
@@ -15,6 +17,7 @@ use crate::store::Store;
 struct ParticipantRow {
     channel_id: String,
     agent_id: String,
+    position: i64,
     joined_at: String,
 }
 
@@ -23,6 +26,7 @@ impl ParticipantRow {
         Ok(ChannelParticipant {
             channel_id: ChannelId(self.channel_id),
             agent_id: AgentId(self.agent_id),
+            position: self.position.clamp(0, u32::MAX as i64) as u32,
             joined_at: parse_datetime(&self.joined_at)?,
         })
     }
@@ -34,6 +38,7 @@ struct SettingsRow {
     mode: String,
     provider_id: Option<String>,
     model: String,
+    default_responder: Option<String>,
     router_enabled: i64,
     auto_compact: i64,
     compact_threshold: i64,
@@ -52,6 +57,7 @@ impl SettingsRow {
             mode,
             provider_id: self.provider_id,
             model: self.model,
+            default_responder: self.default_responder.map(AgentId),
             router_enabled: self.router_enabled != 0,
             auto_compact: self.auto_compact != 0,
             compact_threshold: self.compact_threshold.clamp(1, 100) as u32,
@@ -66,6 +72,7 @@ struct ContextEntryRow {
     id: String,
     channel_id: String,
     agent_id: String,
+    author_agent_id: Option<String>,
     seq: i64,
     role: String,
     kind: String,
@@ -90,6 +97,7 @@ impl ContextEntryRow {
             id: self.id,
             channel_id: ChannelId(self.channel_id),
             agent_id: AgentId(self.agent_id),
+            author_agent_id: self.author_agent_id.map(AgentId),
             seq: self.seq,
             role,
             kind,
@@ -139,11 +147,14 @@ impl ContextEventRow {
     }
 }
 
-const ENTRY_COLUMNS: &str = "id, channel_id, agent_id, seq, role, kind, content, tool_calls,
-     tool_call_id, excluded, tokens, created_at";
+const ENTRY_COLUMNS: &str = "id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
+     tool_calls, tool_call_id, excluded, tokens, created_at";
 
 const EVENT_COLUMNS: &str = "id, channel_id, agent_id, kind, detail, tokens_before,
      tokens_after, created_at";
+
+const TURN_COLUMNS: &str = "id, channel_id, message_id, source, selected_agents,
+     unknown_mentions, reason, router_call_id, task_ids, mirrored_at, created_at";
 
 fn serialize_tool_calls(entry: &ContextEntry) -> CowResult<Option<String>> {
     entry
@@ -152,6 +163,77 @@ fn serialize_tool_calls(entry: &ContextEntry) -> CowResult<Option<String>> {
         .map(serde_json::to_string)
         .transpose()
         .map_err(CowError::from)
+}
+
+fn serialize_agent_ids(agents: &[AgentId]) -> CowResult<String> {
+    let ids: Vec<&str> = agents.iter().map(|agent| agent.0.as_str()).collect();
+    serde_json::to_string(&ids).map_err(CowError::from)
+}
+
+fn serialize_task_ids(tasks: &[TaskId]) -> CowResult<String> {
+    let ids: Vec<&str> = tasks.iter().map(|task| task.0.as_str()).collect();
+    serde_json::to_string(&ids).map_err(CowError::from)
+}
+
+fn parse_agent_ids(value: &str, field: &str) -> CowResult<Vec<AgentId>> {
+    Ok(parse_json::<Vec<String>>(value, field)?
+        .into_iter()
+        .map(AgentId)
+        .collect())
+}
+
+fn parse_task_ids(value: &str, field: &str) -> CowResult<Vec<TaskId>> {
+    Ok(parse_json::<Vec<String>>(value, field)?
+        .into_iter()
+        .map(TaskId)
+        .collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct ConversationTurnRow {
+    id: String,
+    channel_id: String,
+    message_id: String,
+    source: String,
+    selected_agents: String,
+    unknown_mentions: String,
+    reason: Option<String>,
+    router_call_id: Option<String>,
+    task_ids: String,
+    mirrored_at: Option<String>,
+    created_at: String,
+}
+
+impl ConversationTurnRow {
+    fn into_domain(self) -> CowResult<ConversationTurn> {
+        let source = self
+            .source
+            .parse::<RouteSource>()
+            .map_err(|_| CowError::Storage(format!("unknown route source '{}'", self.source)))?;
+        Ok(ConversationTurn {
+            id: TurnId(self.id),
+            channel_id: ChannelId(self.channel_id),
+            message_id: self.message_id,
+            source,
+            selected_agents: parse_agent_ids(
+                &self.selected_agents,
+                "conversation_turns.selected_agents",
+            )?,
+            unknown_mentions: parse_json(
+                &self.unknown_mentions,
+                "conversation_turns.unknown_mentions",
+            )?,
+            reason: self.reason,
+            router_call_id: self.router_call_id,
+            task_ids: parse_task_ids(&self.task_ids, "conversation_turns.task_ids")?,
+            mirrored_at: self
+                .mirrored_at
+                .as_deref()
+                .map(parse_datetime)
+                .transpose()?,
+            created_at: parse_datetime(&self.created_at)?,
+        })
+    }
 }
 
 impl Store {
@@ -182,14 +264,15 @@ impl Store {
 
         sqlx::query(
             "INSERT INTO conversation_settings
-                (channel_id, mode, provider_id, model, router_enabled, auto_compact,
-                 compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                 auto_compact, compact_threshold, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
@@ -199,13 +282,14 @@ impl Store {
         .await
         .map_err(db)?;
 
-        for agent_id in participants {
+        for (position, agent_id) in participants.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO channel_participants (channel_id, agent_id, joined_at)
-                 VALUES (?, ?, ?)",
+                "INSERT INTO channel_participants (channel_id, agent_id, position, joined_at)
+                 VALUES (?, ?, ?, ?)",
             )
             .bind(&channel.id.0)
             .bind(&agent_id.0)
+            .bind(position as i64)
             .bind(channel.created_at.to_rfc3339())
             .execute(&mut *transaction)
             .await
@@ -221,8 +305,8 @@ impl Store {
         channel_id: &ChannelId,
     ) -> CowResult<Vec<ChannelParticipant>> {
         let rows = sqlx::query_as::<_, ParticipantRow>(
-            "SELECT channel_id, agent_id, joined_at FROM channel_participants
-             WHERE channel_id = ? ORDER BY joined_at, agent_id",
+            "SELECT channel_id, agent_id, position, joined_at FROM channel_participants
+             WHERE channel_id = ? ORDER BY position, joined_at, agent_id",
         )
         .bind(&channel_id.0)
         .fetch_all(self.pool())
@@ -236,11 +320,11 @@ impl Store {
         workspace_id: &WorkspaceId,
     ) -> CowResult<Vec<ChannelParticipant>> {
         let rows = sqlx::query_as::<_, ParticipantRow>(
-            "SELECT p.channel_id, p.agent_id, p.joined_at
+            "SELECT p.channel_id, p.agent_id, p.position, p.joined_at
              FROM channel_participants p
              JOIN channels c ON c.id = p.channel_id
              WHERE c.workspace_id = ?
-             ORDER BY p.channel_id, p.joined_at, p.agent_id",
+             ORDER BY p.channel_id, p.position, p.joined_at, p.agent_id",
         )
         .bind(&workspace_id.0)
         .fetch_all(self.pool())
@@ -255,11 +339,12 @@ impl Store {
         participant: &ChannelParticipant,
     ) -> CowResult<()> {
         sqlx::query(
-            "INSERT OR IGNORE INTO channel_participants (channel_id, agent_id, joined_at)
-             VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO channel_participants (channel_id, agent_id, position, joined_at)
+             VALUES (?, ?, ?, ?)",
         )
         .bind(&participant.channel_id.0)
         .bind(&participant.agent_id.0)
+        .bind(i64::from(participant.position))
         .bind(participant.joined_at.to_rfc3339())
         .execute(self.pool())
         .await
@@ -272,8 +357,8 @@ impl Store {
         channel_id: &ChannelId,
     ) -> CowResult<Option<ConversationSettings>> {
         let row = sqlx::query_as::<_, SettingsRow>(
-            "SELECT channel_id, mode, provider_id, model, router_enabled, auto_compact,
-                    compact_threshold, created_at, updated_at
+            "SELECT channel_id, mode, provider_id, model, default_responder, router_enabled,
+                    auto_compact, compact_threshold, created_at, updated_at
              FROM conversation_settings WHERE channel_id = ?",
         )
         .bind(&channel_id.0)
@@ -288,8 +373,9 @@ impl Store {
         workspace_id: &WorkspaceId,
     ) -> CowResult<Vec<ConversationSettings>> {
         let rows = sqlx::query_as::<_, SettingsRow>(
-            "SELECT s.channel_id, s.mode, s.provider_id, s.model, s.router_enabled,
-                    s.auto_compact, s.compact_threshold, s.created_at, s.updated_at
+            "SELECT s.channel_id, s.mode, s.provider_id, s.model, s.default_responder,
+                    s.router_enabled, s.auto_compact, s.compact_threshold, s.created_at,
+                    s.updated_at
              FROM conversation_settings s
              JOIN channels c ON c.id = s.channel_id
              WHERE c.workspace_id = ?
@@ -308,13 +394,14 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "UPDATE conversation_settings
-             SET mode = ?, provider_id = ?, model = ?, router_enabled = ?,
-                 auto_compact = ?, compact_threshold = ?, updated_at = ?
+             SET mode = ?, provider_id = ?, model = ?, default_responder = ?,
+                 router_enabled = ?, auto_compact = ?, compact_threshold = ?, updated_at = ?
              WHERE channel_id = ?",
         )
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
@@ -333,14 +420,15 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO conversation_settings
-                (channel_id, mode, provider_id, model, router_enabled, auto_compact,
-                 compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                 auto_compact, compact_threshold, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
@@ -357,15 +445,16 @@ impl Store {
         let tool_calls = serialize_tool_calls(entry)?;
         let seq: i64 = sqlx::query_scalar(
             "INSERT INTO context_entries
-                (id, channel_id, agent_id, seq, role, kind, content, tool_calls,
-                 tool_call_id, excluded, tokens, created_at)
-             SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
+                (id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
+                 tool_calls, tool_call_id, excluded, tokens, created_at)
+             SELECT ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
              FROM context_entries WHERE channel_id = ? AND agent_id = ?
              RETURNING seq",
         )
         .bind(&entry.id)
         .bind(&entry.channel_id.0)
         .bind(&entry.agent_id.0)
+        .bind(entry.author_agent_id.as_ref().map(|agent| &agent.0))
         .bind(entry.role.as_str())
         .bind(entry.kind.as_str())
         .bind(&entry.content)
@@ -392,14 +481,15 @@ impl Store {
             let tool_calls = serialize_tool_calls(entry)?;
             sqlx::query(
                 "INSERT INTO context_entries
-                    (id, channel_id, agent_id, seq, role, kind, content, tool_calls,
-                     tool_call_id, excluded, tokens, created_at)
-                 SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
+                    (id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
+                     tool_calls, tool_call_id, excluded, tokens, created_at)
+                 SELECT ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
                  FROM context_entries WHERE channel_id = ? AND agent_id = ?",
             )
             .bind(&entry.id)
             .bind(&entry.channel_id.0)
             .bind(&entry.agent_id.0)
+            .bind(entry.author_agent_id.as_ref().map(|agent| &agent.0))
             .bind(entry.role.as_str())
             .bind(entry.kind.as_str())
             .bind(&entry.content)
@@ -423,13 +513,14 @@ impl Store {
         let tool_calls = serialize_tool_calls(entry)?;
         sqlx::query(
             "INSERT OR IGNORE INTO context_entries
-                (id, channel_id, agent_id, seq, role, kind, content, tool_calls,
-                 tool_call_id, excluded, tokens, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
+                 tool_calls, tool_call_id, excluded, tokens, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&entry.id)
         .bind(&entry.channel_id.0)
         .bind(&entry.agent_id.0)
+        .bind(entry.author_agent_id.as_ref().map(|agent| &agent.0))
         .bind(entry.seq)
         .bind(entry.role.as_str())
         .bind(entry.kind.as_str())
@@ -467,8 +558,8 @@ impl Store {
         workspace_id: &WorkspaceId,
     ) -> CowResult<Vec<ContextEntry>> {
         let rows = sqlx::query_as::<_, ContextEntryRow>(
-            "SELECT e.id, e.channel_id, e.agent_id, e.seq, e.role, e.kind, e.content,
-                    e.tool_calls, e.tool_call_id, e.excluded, e.tokens, e.created_at
+            "SELECT e.id, e.channel_id, e.agent_id, e.author_agent_id, e.seq, e.role, e.kind,
+                    e.content, e.tool_calls, e.tool_call_id, e.excluded, e.tokens, e.created_at
              FROM context_entries e
              JOIN channels c ON c.id = e.channel_id
              WHERE c.workspace_id = ?
@@ -516,14 +607,15 @@ impl Store {
         }
         sqlx::query(
             "INSERT INTO context_entries
-                (id, channel_id, agent_id, seq, role, kind, content, tool_calls,
-                 tool_call_id, excluded, tokens, created_at)
-             SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
+                (id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
+                 tool_calls, tool_call_id, excluded, tokens, created_at)
+             SELECT ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
              FROM context_entries WHERE channel_id = ? AND agent_id = ?",
         )
         .bind(&summary.id)
         .bind(&summary.channel_id.0)
         .bind(&summary.agent_id.0)
+        .bind(summary.author_agent_id.as_ref().map(|agent| &agent.0))
         .bind(summary.role.as_str())
         .bind(summary.kind.as_str())
         .bind(&summary.content)
@@ -658,5 +750,92 @@ impl Store {
         .await
         .map_err(db)?;
         rows.into_iter().map(ContextEventRow::into_domain).collect()
+    }
+
+    /// Persist a group routing decision.
+    ///
+    /// A second insert for the same message is a no-op so a retried turn cannot
+    /// duplicate the audit row.
+    pub async fn insert_conversation_turn(&self, turn: &ConversationTurn) -> CowResult<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO conversation_turns
+                (id, channel_id, message_id, source, selected_agents, unknown_mentions,
+                 reason, router_call_id, task_ids, mirrored_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&turn.id.0)
+        .bind(&turn.channel_id.0)
+        .bind(&turn.message_id)
+        .bind(turn.source.as_str())
+        .bind(serialize_agent_ids(&turn.selected_agents)?)
+        .bind(serde_json::to_string(&turn.unknown_mentions).map_err(CowError::from)?)
+        .bind(&turn.reason)
+        .bind(&turn.router_call_id)
+        .bind(serialize_task_ids(&turn.task_ids)?)
+        .bind(turn.mirrored_at.map(|at| at.to_rfc3339()))
+        .bind(turn.created_at.to_rfc3339())
+        .execute(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    /// Update the decision and settlement parts of a persisted turn.
+    pub async fn update_conversation_turn(&self, turn: &ConversationTurn) -> CowResult<()> {
+        sqlx::query(
+            "UPDATE conversation_turns
+             SET selected_agents = ?, unknown_mentions = ?, reason = ?, router_call_id = ?,
+                 task_ids = ?, mirrored_at = ?
+             WHERE id = ?",
+        )
+        .bind(serialize_agent_ids(&turn.selected_agents)?)
+        .bind(serde_json::to_string(&turn.unknown_mentions).map_err(CowError::from)?)
+        .bind(&turn.reason)
+        .bind(&turn.router_call_id)
+        .bind(serialize_task_ids(&turn.task_ids)?)
+        .bind(turn.mirrored_at.map(|at| at.to_rfc3339()))
+        .bind(&turn.id.0)
+        .execute(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    /// Read the routing decision of one user message, if it was recorded.
+    pub async fn get_conversation_turn(
+        &self,
+        channel_id: &ChannelId,
+        message_id: &str,
+    ) -> CowResult<Option<ConversationTurn>> {
+        let row = sqlx::query_as::<_, ConversationTurnRow>(&format!(
+            "SELECT {TURN_COLUMNS} FROM conversation_turns
+             WHERE channel_id = ? AND message_id = ?"
+        ))
+        .bind(&channel_id.0)
+        .bind(message_id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        row.map(ConversationTurnRow::into_domain).transpose()
+    }
+
+    /// List a channel's routing decisions, most recent first.
+    pub async fn list_conversation_turns(
+        &self,
+        channel_id: &ChannelId,
+        limit: u32,
+    ) -> CowResult<Vec<ConversationTurn>> {
+        let rows = sqlx::query_as::<_, ConversationTurnRow>(&format!(
+            "SELECT {TURN_COLUMNS} FROM conversation_turns
+             WHERE channel_id = ? ORDER BY created_at DESC, id DESC LIMIT ?"
+        ))
+        .bind(&channel_id.0)
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter()
+            .map(ConversationTurnRow::into_domain)
+            .collect()
     }
 }

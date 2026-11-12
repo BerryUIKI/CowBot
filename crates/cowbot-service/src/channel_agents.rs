@@ -6,6 +6,7 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::approval::ApprovalStatus;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
+use cowbot_core::conversation::{RouteSource, TurnId};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
@@ -16,11 +17,25 @@ use cowbot_tools::ToolRegistry;
 
 use crate::channels::ChannelService;
 use crate::conversations::ConversationService;
+use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
 /// How many channel messages are used as conversation context for one turn.
 const HISTORY_LIMIT: u32 = 20;
+
+/// Usable context window and tool-schema cost the caller knows for one agent.
+///
+/// The service does not own model metadata or the tool registry, so the
+/// desktop supplies these values for the group post-routing capacity check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParticipantCapacity {
+    pub agent_id: AgentId,
+    /// Window left after the model's maximum output and the safety buffer.
+    pub usable_window: u32,
+    /// Tokens the agent's tool schemas take in every request.
+    pub tool_tokens: u32,
+}
 
 /// Options for one channel turn.
 #[derive(Debug, Clone)]
@@ -34,6 +49,11 @@ pub struct ChannelTurnOptions {
     /// Extra environment text appended to the platform context, for example
     /// registered projects the desktop can target with workspace tools.
     pub platform_context: Option<String>,
+    /// Per-participant windows used by the group post-routing capacity check.
+    ///
+    /// Callers without model metadata (the CLI) pass nothing; the service then
+    /// skips the percentage-based group gate.
+    pub participant_capacity: Vec<ParticipantCapacity>,
 }
 
 impl Default for ChannelTurnOptions {
@@ -43,6 +63,7 @@ impl Default for ChannelTurnOptions {
             max_concurrency: 4,
             use_model_permissions: false,
             platform_context: None,
+            participant_capacity: Vec::new(),
         }
     }
 }
@@ -56,6 +77,16 @@ pub struct ChannelTurnReport {
     pub unknown_mentions: Vec<String>,
     /// Tasks created for the turn.
     pub tasks: Vec<TaskId>,
+    /// Group responders whose answer was posted.
+    pub replied: Vec<AgentId>,
+    /// Group responders whose task failed.
+    pub failed: Vec<AgentId>,
+    /// Group responders skipped because their context branch was full.
+    pub skipped: Vec<AgentId>,
+    /// How a group message selected its responders.
+    pub route: Option<RouteSource>,
+    /// Persisted group turn row.
+    pub turn_id: Option<TurnId>,
 }
 
 impl ChannelTurnReport {
@@ -77,6 +108,7 @@ pub struct ChannelAgentService {
     workspace_id: WorkspaceId,
     channels: ChannelService,
     conversations: ConversationService,
+    memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
 }
 
@@ -88,6 +120,7 @@ impl ChannelAgentService {
                 bus.clone(),
                 workspace_id.clone(),
             ),
+            memory: MemoryService::new(store.clone(), workspace_id.clone()),
             channels: ChannelService::new(store.clone(), bus),
             store,
             workspace_id,
@@ -234,7 +267,22 @@ impl ChannelAgentService {
         let platform = Self::platform_context(&agents, options.platform_context.as_deref());
         for agent in &addressees {
             scheduler.register_agent(agent.clone(), llm.clone(), tools.clone(), model);
-            let task = Self::turn_task(agent, &channel, message, &history, direct, &platform);
+            let memory = if direct {
+                self.memory
+                    .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+                    .await
+            } else {
+                None
+            };
+            let task = Self::turn_task(
+                agent,
+                &channel,
+                message,
+                &history,
+                direct,
+                &platform,
+                memory.as_deref(),
+            );
             let mut task_options = run_options.clone();
             if options.approval_level == ApprovalLevel::PlanOnly {
                 task_options.capture_plan_task = Some(task.id.clone());
@@ -254,15 +302,36 @@ impl ChannelAgentService {
         // every root and the per-task status decides what gets posted.
         let outcome = scheduler.run_until_idle().await;
 
+        let mut posted = Vec::new();
         for task_id in &tasks {
-            self.post_outcome(&channel, task_id).await?;
+            if let Some(reply) = self.post_outcome(&channel, task_id).await? {
+                posted.push(reply);
+            }
         }
 
         outcome?;
+
+        // Direct conversations extract one aggregate candidate set per settled
+        // turn; plain channel mention turns keep their current behavior.
+        if direct && !posted.is_empty() {
+            self.memory
+                .extract_after_turn(
+                    &channel,
+                    llm,
+                    model,
+                    message.content.trim(),
+                    &posted.join("\n\n"),
+                    channel.agent_id.as_ref(),
+                    &message.id,
+                )
+                .await;
+        }
+
         Ok(ChannelTurnReport {
             agents: addressees.iter().map(|agent| agent.id.clone()).collect(),
             unknown_mentions: Vec::new(),
             tasks,
+            ..ChannelTurnReport::default()
         })
     }
 
@@ -311,29 +380,34 @@ impl ChannelAgentService {
         history: &str,
         direct: bool,
         platform: &str,
+        memory: Option<&str>,
     ) -> Task {
         let author = match &message.sender {
             Sender::User(_) => "the user".to_string(),
             Sender::Agent(id) => format!("agent '{}'", id.0),
             Sender::System => "the system".to_string(),
         };
+        let memory = memory
+            .map(|memory| format!("\n\n{memory}"))
+            .unwrap_or_default();
 
         let description = if direct {
             format!(
-                "{platform}\n\n\
+                "{platform}{memory}\n\n\
                  You are the agent in a direct conversation with {author}.\n\n\
                  Recent messages in this conversation:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
                  Reply as yourself. Be concise, answer what was asked, and do not \
                  repeat the conversation history back to the user.",
                 platform = platform,
+                memory = memory,
                 history = history,
                 author = author,
                 content = message.content.trim(),
             )
         } else {
             format!(
-                "{platform}\n\n\
+                "{platform}{memory}\n\n\
                  You were mentioned in the channel #{channel_name}.\n\n\
                  Recent channel messages:\n{history}\n\n\
                  Latest message from {author}:\n{content}\n\n\
@@ -341,6 +415,7 @@ impl ChannelAgentService {
                  Be concise, answer what was asked, and do not repeat the channel \
                  history back to the user.",
                 platform = platform,
+                memory = memory,
                 channel_name = channel.name,
                 history = history,
                 author = author,
@@ -357,12 +432,12 @@ impl ChannelAgentService {
         .assign_to(agent.id.clone())
     }
 
-    async fn post_outcome(&self, channel: &Channel, task_id: &TaskId) -> CowResult<()> {
+    async fn post_outcome(&self, channel: &Channel, task_id: &TaskId) -> CowResult<Option<String>> {
         let Some(task) = self.store.get_task(task_id).await? else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(assignee) = task.assigned_agent.clone() else {
-            return Ok(());
+            return Ok(None);
         };
         let name = self
             .store
@@ -391,19 +466,21 @@ impl ChannelAgentService {
                         self.post_notice(channel, &format!("{name} finished without a reply."))
                             .await?;
                     }
+                    Ok(None)
                 } else {
                     self.channels
                         .post_message(&channel.id, Sender::Agent(assignee), content.to_string())
                         .await?;
+                    Ok(Some(content.to_string()))
                 }
             }
             TaskStatus::Failed { error } => {
                 self.post_notice(channel, &format!("{name} could not answer: {error}"))
                     .await?;
+                Ok(None)
             }
-            _ => {}
+            _ => Ok(None),
         }
-        Ok(())
     }
 
     async fn render_history(

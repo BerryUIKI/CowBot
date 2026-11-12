@@ -49,6 +49,11 @@ impl StaticRiskClassifier {
                 rule_id: "workspace.delete_channel".to_string(),
                 reason: "delete_channel destroys a group channel and its messages".to_string(),
             },
+            "remember" => RiskAssessment {
+                level: RiskLevel::Medium,
+                rule_id: "memory.remember".to_string(),
+                reason: "remember writes a durable memory entry".to_string(),
+            },
             other => RiskAssessment {
                 level: RiskLevel::High,
                 rule_id: "unknown_tool".to_string(),
@@ -384,6 +389,14 @@ mod tests {
                 .level,
             RiskLevel::High
         );
+    }
+
+    #[test]
+    fn remember_is_medium_risk() {
+        let assessment = StaticRiskClassifier
+            .classify(&call("remember", json!({ "content": "x", "kind": "fact" })));
+        assert_eq!(assessment.level, RiskLevel::Medium);
+        assert_eq!(assessment.rule_id, "memory.remember");
     }
 
     #[test]

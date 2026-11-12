@@ -12,11 +12,13 @@ use cowbot_core::assignment::{Assignment, AssignmentEvent, AssignmentId};
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
-    ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+    ChannelParticipant, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+    ConversationTurn,
 };
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::memory::{MemoryEntry, MemorySettings, Note};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -27,7 +29,10 @@ use tokio::sync::mpsc;
 mod local;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
-pub use cowbot_service::AgentUpdate;
+pub use cowbot_service::{
+    AgentUpdate, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewMemory, NoteSave,
+    RecalledMemory,
+};
 pub use local::LocalClient;
 
 /// User identity as seen by the client.
@@ -104,11 +109,60 @@ impl NewTask {
     }
 }
 
+/// Parameters for creating a user-created conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewConversation {
+    pub title: Option<String>,
+    /// Participants in selection order; one makes a single conversation.
+    pub agent_ids: Vec<AgentId>,
+    pub provider_id: Option<String>,
+    pub model: String,
+    /// Route unaddressed group messages with the model; single ignores it.
+    #[serde(default)]
+    pub router_enabled: bool,
+    /// Participant that answers unaddressed group messages.
+    #[serde(default)]
+    pub default_responder: Option<AgentId>,
+}
+
+impl NewConversation {
+    /// A single-agent conversation.
+    pub fn single(
+        title: Option<String>,
+        agent_id: AgentId,
+        provider_id: Option<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            title,
+            agent_ids: vec![agent_id],
+            provider_id,
+            model: model.into(),
+            router_enabled: false,
+            default_responder: None,
+        }
+    }
+}
+
+/// A conversation channel with its fixed settings and participant profiles.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSummary {
+    pub channel: Channel,
+    pub settings: ConversationSettings,
+    pub participants: Vec<AgentProfile>,
+}
+
+/// The workspace note and, when one conversation is selected, its note.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryNotes {
+    pub workspace: Option<Note>,
+    pub conversation: Option<Note>,
+}
+
 /// A live stream of platform events for the UI.
 pub struct EventStream {
     receiver: mpsc::Receiver<Event>,
 }
-
 impl EventStream {
     pub(crate) fn new(receiver: mpsc::Receiver<Event>) -> Self {
         Self { receiver }
@@ -164,17 +218,26 @@ pub trait Client: Send + Sync {
         limit: u32,
     ) -> CowResult<Vec<ChannelMessage>>;
 
-    /// Create a user-created single-agent conversation.
+    /// Create a user-created conversation with one to eight participants.
     ///
-    /// `provider_id` is the configured provider that supplies `model`; the pair
-    /// stays fixed for the conversation.
-    async fn create_conversation(
+    /// One participant creates a single conversation; two or more create a
+    /// group whose membership is fixed. `provider_id` is the configured
+    /// provider that supplies `model`; the pair stays fixed for the
+    /// conversation.
+    async fn create_conversation(&self, conversation: &NewConversation) -> CowResult<Channel>;
+    /// Conversations with their fixed settings and participant profiles.
+    async fn list_conversation_summaries(&self) -> CowResult<Vec<ConversationSummary>>;
+    /// Persisted participants of a conversation, in participant order.
+    async fn list_conversation_participants(
         &self,
-        title: Option<&str>,
-        agent_id: &AgentId,
-        provider_id: Option<String>,
-        model: &str,
-    ) -> CowResult<Channel>;
+        channel_id: &ChannelId,
+    ) -> CowResult<Vec<ChannelParticipant>>;
+    /// Persisted routing decisions of a conversation, most recent first.
+    async fn list_conversation_turns(
+        &self,
+        channel_id: &ChannelId,
+        limit: u32,
+    ) -> CowResult<Vec<ConversationTurn>>;
     async fn conversation_settings(
         &self,
         channel_id: &ChannelId,
@@ -188,6 +251,48 @@ pub trait Client: Send + Sync {
     async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext>;
     /// Exclude every active context entry; display messages are kept.
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64>;
+    /// Exclude one participant's active context entries.
+    async fn clear_conversation_participant_context(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<u64>;
+
+    /// The workspace note and, when a conversation is selected, its note.
+    async fn memory_notes(&self, channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes>;
+    /// Save the workspace note, redacting credential-shaped content.
+    async fn save_workspace_note(&self, content: &str) -> CowResult<NoteSave>;
+    /// Save a conversation note; only user-created conversations accept one.
+    async fn save_conversation_note(
+        &self,
+        channel_id: &ChannelId,
+        content: &str,
+    ) -> CowResult<NoteSave>;
+    async fn delete_conversation_note(&self, channel_id: &ChannelId) -> CowResult<u64>;
+    async fn memory_settings(&self) -> CowResult<MemorySettings>;
+    async fn update_memory_settings(
+        &self,
+        update: &MemorySettingsUpdate,
+    ) -> CowResult<MemorySettings>;
+    /// Entries matching the optional status and exact scope filters.
+    async fn list_memory_entries(&self, filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>>;
+    /// Create an entry after validating its content and scope.
+    async fn add_memory_entry(&self, new: NewMemory) -> CowResult<MemorySave>;
+    /// Edit the content, kind, or pinning of an entry.
+    async fn update_memory_entry(&self, id: &str, update: &MemoryUpdate) -> CowResult<MemorySave>;
+    /// Approve a pending extraction candidate.
+    async fn approve_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    /// Dismiss a pending candidate, keeping it visible as archived.
+    async fn dismiss_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    async fn archive_memory_entry(&self, id: &str) -> CowResult<MemoryEntry>;
+    async fn delete_memory_entry(&self, id: &str) -> CowResult<u64>;
+    /// What the next turn would inject, without touching recall statistics.
+    async fn preview_memory_recall(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<Option<RecalledMemory>>;
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task>;
     async fn list_tasks(&self) -> CowResult<Vec<Task>>;

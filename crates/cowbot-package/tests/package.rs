@@ -2,9 +2,13 @@ use cowbot_core::agent::AgentProfile;
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationSettings,
+    ContextEntry, ContextEvent, ContextEventKind, ContextRole, ConversationMode,
+    ConversationSettings, ConversationTurn, RouteSource,
 };
 use cowbot_core::identity::{Membership, Role, User, Workspace};
+use cowbot_core::memory::{
+    MemoryEntry, MemoryKind, MemorySettings, MemorySource, MemoryStatus, Note,
+};
 use cowbot_core::permission::{PermissionRule, RuleDecision, RuleSource};
 use cowbot_core::task::{Task, TaskStatus};
 use cowbot_package::{
@@ -105,6 +109,109 @@ async fn export_then_import_round_trip() {
     let tasks = target.list_tasks(&summary.workspace_id).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(matches!(tasks[0].status, TaskStatus::Pending));
+}
+
+#[tokio::test]
+async fn memory_notes_and_settings_round_trip_with_redaction() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let mut agents = source.list_agents(&workspace.id).await.unwrap();
+    let agent = agents.remove(0);
+    let mut channels = source.list_channels(&workspace.id).await.unwrap();
+    let channel = channels.remove(0);
+
+    source
+        .save_note(&Note::workspace(
+            workspace.id.clone(),
+            "Workspace policy: be brief.",
+        ))
+        .await
+        .unwrap();
+    source
+        .save_note(&Note::conversation(
+            workspace.id.clone(),
+            channel.id.clone(),
+            "Use the design doc. api_key = sk-live-123456",
+        ))
+        .await
+        .unwrap();
+
+    let mut entry = MemoryEntry::new(
+        workspace.id.clone(),
+        Some(agent.id.clone()),
+        Some(channel.id.clone()),
+        MemoryKind::Preference,
+        "The user prefers Rust. password: hunter2",
+        MemorySource::User,
+    );
+    entry.pinned = true;
+    entry.recount();
+    source.insert_memory_entry(&entry).await.unwrap();
+    let mut pending = MemoryEntry::candidate(
+        workspace.id.clone(),
+        None,
+        Some(channel.id.clone()),
+        MemoryKind::Fact,
+        "Pending candidate.",
+    );
+    pending.recount();
+    source.insert_memory_entry(&pending).await.unwrap();
+    source
+        .update_memory_settings(&MemorySettings::new(workspace.id.clone()).with_budgets(500, 900))
+        .await
+        .unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let target = test_store().await;
+    let summary = import_workspace(&target, &bytes).await.unwrap();
+    assert_eq!(summary.memory_notes, 2);
+    assert_eq!(summary.memory_entries, 2);
+
+    let notes = target.list_all_notes(&summary.workspace_id).await.unwrap();
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().all(|note| !note.content.contains("sk-live")));
+    let workspace_note = target
+        .get_note(&summary.workspace_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(workspace_note.content, "Workspace policy: be brief.");
+    let conversation_note = target
+        .get_note(&summary.workspace_id, Some(&channel.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conversation_note.content.contains("[redacted]"));
+    assert_eq!(conversation_note.workspace_id, summary.workspace_id);
+
+    let entries = target
+        .list_all_memory_entries(&summary.workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    let imported = entries
+        .iter()
+        .find(|entry| entry.kind == MemoryKind::Preference)
+        .expect("the active preference is imported");
+    assert_eq!(imported.agent_id.as_ref(), Some(&agent.id));
+    assert_eq!(imported.channel_id.as_ref(), Some(&channel.id));
+    assert!(imported.pinned);
+    assert!(imported.content.contains("[redacted]"));
+    assert!(!imported.content.contains("hunter2"));
+    assert_ne!(imported.id, entry.id);
+    assert_eq!(imported.status, MemoryStatus::Active);
+    let imported_pending = entries
+        .iter()
+        .find(|entry| entry.status == MemoryStatus::Pending)
+        .expect("the pending candidate is imported");
+    assert!(imported_pending.agent_id.is_none());
+
+    let settings = target
+        .get_memory_settings(&summary.workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(settings.notes_budget_tokens, 500);
+    assert_eq!(settings.recall_budget_tokens, 900);
 }
 
 #[tokio::test]
@@ -275,6 +382,116 @@ async fn conversation_context_round_trips() {
         .await
         .unwrap();
     assert_eq!(events.len(), 1);
+}
+
+#[tokio::test]
+async fn group_conversation_round_trips_positions_and_authored_entries() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let seeded = source
+        .list_agents(&workspace.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.name == "Cow-Coder")
+        .unwrap();
+    let planner = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    let reviewer = AgentProfile::new("Reviewer", "Reviewer", "Review", "Careful");
+    for agent in [&planner, &reviewer] {
+        source.upsert_agent(&workspace.id, agent).await.unwrap();
+    }
+    let participants = vec![seeded.id.clone(), planner.id.clone(), reviewer.id.clone()];
+
+    let channel = Channel::conversation("Crew", "Group conversation");
+    let settings = ConversationSettings::group(
+        channel.id.clone(),
+        Some("provider-1".to_string()),
+        "mock-model",
+        Some(planner.id.clone()),
+    );
+    source
+        .create_conversation(&workspace.id, &channel, &settings, &participants)
+        .await
+        .unwrap();
+
+    let mut peer = ContextEntry::peer(
+        channel.id.clone(),
+        seeded.id.clone(),
+        planner.id.clone(),
+        "Planner",
+        "The draft is ready.",
+    );
+    peer.recount();
+    source.append_context_entry(&peer).await.unwrap();
+
+    // Turn rows stay device-local and must never enter a package.
+    let message = ChannelMessage::new(
+        channel.id.clone(),
+        Sender::User("owner".to_string()),
+        "@team status",
+    );
+    source.append_message(&message).await.unwrap();
+    let mut turn =
+        ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Mention);
+    turn.selected_agents = participants.clone();
+    source.insert_conversation_turn(&turn).await.unwrap();
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let manifest = inspect(&bytes).unwrap();
+    assert!(
+        !manifest
+            .checksums
+            .keys()
+            .any(|path| path.contains("conversation_turns")),
+        "turn rows are device-local and must not be packaged"
+    );
+
+    let target = test_store().await;
+    import_workspace(&target, &bytes).await.unwrap();
+
+    let stored = target.list_channel_participants(&channel.id).await.unwrap();
+    assert_eq!(
+        stored
+            .iter()
+            .map(|participant| participant.agent_id.clone())
+            .collect::<Vec<_>>(),
+        participants
+    );
+    assert_eq!(
+        stored
+            .iter()
+            .map(|participant| participant.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    let stored_settings = target
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_settings.mode, ConversationMode::Group);
+    assert_eq!(
+        stored_settings.default_responder.as_ref(),
+        Some(&planner.id)
+    );
+
+    let entries = target
+        .list_context_entries(&channel.id, &seeded.id)
+        .await
+        .unwrap();
+    let authored = entries
+        .iter()
+        .find(|entry| entry.author_agent_id.is_some())
+        .expect("authored peer entry should round trip");
+    assert_eq!(authored.author_agent_id.as_ref(), Some(&planner.id));
+    assert_eq!(authored.content, "[Planner] The draft is ready.");
+
+    assert!(target
+        .list_conversation_turns(&channel.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

@@ -16,9 +16,11 @@ use cowbot_core::assignment::{
 use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    CompactionOutcome, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
+    ChannelParticipant, CompactionOutcome, ConversationContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
@@ -28,8 +30,8 @@ use cowbot_llm::LlmProvider;
 use cowbot_service::{
     bootstrap_local, bootstrap_local_named, AgentService, ApprovalService, AssignmentScheduler,
     AssignmentService, ChannelAgentService, ChannelService, ChannelTurnOptions, ChannelTurnReport,
-    ConversationService, CrewRunOptions, CrewRunner, LocalContext, PermissionService,
-    SessionDecisions, TaskService, TemplateService, WorktreeService,
+    ConversationService, CrewRunOptions, CrewRunner, LocalContext, MemoryService,
+    PermissionService, SessionDecisions, TaskService, TemplateService, WorktreeService,
 };
 use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
@@ -37,8 +39,9 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, EventStream, NewTask, SessionDecisionView,
-    WorkspaceImport,
+    AgentUpdate, Client, ClientSession, ClientUser, ConversationSummary, EventStream, MemoryFilter,
+    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
+    NewTask, NoteSave, RecalledMemory, SessionDecisionView, WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -55,6 +58,7 @@ pub struct LocalClient {
     approvals: ApprovalService,
     agents: AgentService,
     permissions: PermissionService,
+    memory: MemoryService,
     session_decisions: Arc<SessionDecisions>,
     worktrees: WorktreeService,
 }
@@ -98,6 +102,7 @@ impl LocalClient {
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
+        let memory = MemoryService::new(store.clone(), context.workspace.id.clone());
         let worktrees = WorktreeService::new(store.clone(), bus.clone());
         worktrees.reconcile().await?;
         let session = ClientSession {
@@ -122,6 +127,7 @@ impl LocalClient {
             approvals,
             agents,
             permissions,
+            memory,
             session_decisions,
             worktrees,
         })
@@ -278,7 +284,8 @@ impl LocalClient {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(Some(self.session_decisions.clone()));
+        .with_session_decisions(Some(self.session_decisions.clone()))
+        .with_task_memory();
         scheduler.register_instance(&agent);
         scheduler
             .enqueue(
@@ -339,6 +346,19 @@ impl LocalClient {
         model: &str,
     ) -> CowResult<CompactionOutcome> {
         self.conversations.compact(channel_id, llm, model).await
+    }
+
+    /// Compact one participant's branch with the caller's fixed model client.
+    pub async fn compact_conversation_agent(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        llm: Arc<dyn LlmProvider>,
+        model: &str,
+    ) -> CowResult<CompactionOutcome> {
+        self.conversations
+            .compact_participant(channel_id, agent_id, llm, model)
+            .await
     }
 
     /// Record that a task wants a git worktree.
@@ -552,16 +572,73 @@ impl Client for LocalClient {
         self.channels.list_messages(channel_id, limit).await
     }
 
-    async fn create_conversation(
+    async fn create_conversation(&self, conversation: &NewConversation) -> CowResult<Channel> {
+        match conversation.agent_ids.as_slice() {
+            [agent_id] => {
+                self.conversations
+                    .create(
+                        conversation.title.as_deref(),
+                        agent_id,
+                        conversation.provider_id.clone(),
+                        &conversation.model,
+                    )
+                    .await
+            }
+            _ => {
+                self.conversations
+                    .create_group(
+                        conversation.title.as_deref(),
+                        &conversation.agent_ids,
+                        conversation.provider_id.clone(),
+                        &conversation.model,
+                        conversation.default_responder.clone(),
+                    )
+                    .await
+            }
+        }
+    }
+
+    async fn list_conversation_summaries(&self) -> CowResult<Vec<ConversationSummary>> {
+        let channels = self
+            .channels
+            .list_channels(&self.session.workspace.id)
+            .await?;
+        let mut summaries = Vec::new();
+        for channel in channels
+            .into_iter()
+            .filter(|channel| channel.is_conversation())
+        {
+            let Some(settings) = self.store.get_conversation_settings(&channel.id).await? else {
+                continue;
+            };
+            let mut participants = Vec::new();
+            for link in self.store.list_channel_participants(&channel.id).await? {
+                if let Some(agent) = self.store.get_agent(&link.agent_id).await? {
+                    participants.push(agent);
+                }
+            }
+            summaries.push(ConversationSummary {
+                channel,
+                settings,
+                participants,
+            });
+        }
+        Ok(summaries)
+    }
+
+    async fn list_conversation_participants(
         &self,
-        title: Option<&str>,
-        agent_id: &AgentId,
-        provider_id: Option<String>,
-        model: &str,
-    ) -> CowResult<Channel> {
-        self.conversations
-            .create(title, agent_id, provider_id, model)
-            .await
+        channel_id: &ChannelId,
+    ) -> CowResult<Vec<ChannelParticipant>> {
+        self.store.list_channel_participants(channel_id).await
+    }
+
+    async fn list_conversation_turns(
+        &self,
+        channel_id: &ChannelId,
+        limit: u32,
+    ) -> CowResult<Vec<ConversationTurn>> {
+        self.store.list_conversation_turns(channel_id, limit).await
     }
 
     async fn conversation_settings(
@@ -585,6 +662,92 @@ impl Client for LocalClient {
 
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
         self.conversations.clear_context(channel_id).await
+    }
+
+    async fn clear_conversation_participant_context(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<u64> {
+        self.conversations
+            .clear_participant_context(channel_id, agent_id)
+            .await
+    }
+
+    async fn memory_notes(&self, channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes> {
+        let (workspace, conversation) = self.memory.notes(channel_id).await?;
+        Ok(MemoryNotes {
+            workspace,
+            conversation,
+        })
+    }
+
+    async fn save_workspace_note(&self, content: &str) -> CowResult<NoteSave> {
+        self.memory.save_workspace_note(content).await
+    }
+
+    async fn save_conversation_note(
+        &self,
+        channel_id: &ChannelId,
+        content: &str,
+    ) -> CowResult<NoteSave> {
+        self.memory
+            .save_conversation_note(channel_id, content)
+            .await
+    }
+
+    async fn delete_conversation_note(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        self.memory.delete_conversation_note(channel_id).await
+    }
+
+    async fn memory_settings(&self) -> CowResult<MemorySettings> {
+        self.memory.settings().await
+    }
+
+    async fn update_memory_settings(
+        &self,
+        update: &MemorySettingsUpdate,
+    ) -> CowResult<MemorySettings> {
+        self.memory.update_settings(update).await
+    }
+
+    async fn list_memory_entries(&self, filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>> {
+        self.memory.list_entries(filter).await
+    }
+
+    async fn add_memory_entry(&self, new: NewMemory) -> CowResult<MemorySave> {
+        self.memory.add_entry(new).await
+    }
+
+    async fn update_memory_entry(&self, id: &str, update: &MemoryUpdate) -> CowResult<MemorySave> {
+        self.memory.update_entry(id, update).await
+    }
+
+    async fn approve_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.approve_entry(id).await
+    }
+
+    async fn dismiss_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.dismiss_entry(id).await
+    }
+
+    async fn archive_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.memory.archive_entry(id).await
+    }
+
+    async fn delete_memory_entry(&self, id: &str) -> CowResult<u64> {
+        self.memory.delete_entry(id).await
+    }
+
+    async fn preview_memory_recall(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> CowResult<Option<RecalledMemory>> {
+        self.memory
+            .preview_recall(channel_id, agent_id, query)
+            .await
     }
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
@@ -807,6 +970,7 @@ mod tests {
     use cowbot_core::assignment::{
         AssignmentEventKind, AssignmentMode, AssignmentOrigin, ReplyMode,
     };
+    use cowbot_core::conversation::{ConversationMode, RouteSource};
     use cowbot_core::run::RunStatus;
     use cowbot_core::task::{Task, TaskStatus};
     use cowbot_llm::MockLlmProvider;
@@ -1128,12 +1292,12 @@ mod tests {
         let agent = added.first().unwrap();
 
         let channel = client
-            .create_conversation(
-                Some("Design review"),
-                &agent.id,
+            .create_conversation(&NewConversation::single(
+                Some("Design review".to_string()),
+                agent.id.clone(),
                 Some("provider-1".to_string()),
                 "mock-model",
-            )
+            ))
             .await
             .unwrap();
         assert_eq!(
@@ -1156,6 +1320,8 @@ mod tests {
                 &cowbot_core::conversation::ConversationSettingsUpdate {
                     auto_compact: Some(true),
                     compact_threshold: Some(70),
+                    router_enabled: None,
+                    default_responder: None,
                 },
             )
             .await
@@ -1192,6 +1358,108 @@ mod tests {
         assert!(cleared >= 2);
         let context = client.conversation_context(&channel.id).await.unwrap();
         assert_eq!(context.projection.active_entries, 0);
+    }
+
+    #[tokio::test]
+    async fn group_conversations_roundtrip_through_the_client() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+        let agents = client
+            .instantiate_agents("builtin-software-team")
+            .await
+            .unwrap();
+        assert!(
+            agents.len() >= 2,
+            "the software team template needs two agents"
+        );
+        let participants = vec![agents[0].id.clone(), agents[1].id.clone()];
+
+        let channel = client
+            .create_conversation(&NewConversation {
+                title: Some("Build crew".to_string()),
+                agent_ids: participants.clone(),
+                provider_id: Some("provider-1".to_string()),
+                model: "mock-model".to_string(),
+                router_enabled: false,
+                default_responder: Some(participants[1].clone()),
+            })
+            .await
+            .unwrap();
+        assert!(channel.is_conversation());
+
+        let settings = client.conversation_settings(&channel.id).await.unwrap();
+        assert_eq!(settings.mode, ConversationMode::Group);
+        assert_eq!(settings.default_responder.as_ref(), Some(&participants[1]));
+
+        let stored = client
+            .list_conversation_participants(&channel.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored
+                .iter()
+                .map(|participant| participant.agent_id.clone())
+                .collect::<Vec<_>>(),
+            participants
+        );
+        assert_eq!(
+            stored
+                .iter()
+                .map(|participant| participant.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let summaries = client.list_conversation_summaries().await.unwrap();
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.channel.id == channel.id)
+            .expect("the group conversation is summarized");
+        assert_eq!(summary.participants.len(), 2);
+        assert_eq!(summary.settings.mode, ConversationMode::Group);
+
+        let message = client
+            .post_message(&channel.id, "@team status")
+            .await
+            .unwrap();
+        let report = client
+            .reply_to_mentions(
+                &channel.id,
+                &message,
+                Arc::new(MockLlmProvider::echo()),
+                ToolRegistry::new(),
+                "mock-model",
+                ChannelTurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.agents.len(), 2);
+        assert_eq!(report.route, Some(RouteSource::Mention));
+
+        let turns = client
+            .list_conversation_turns(&channel.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].message_id, message.id);
+        assert_eq!(turns[0].source, RouteSource::Mention);
+
+        let cleared = client
+            .clear_conversation_participant_context(&channel.id, &participants[0])
+            .await
+            .unwrap();
+        assert!(cleared > 0);
+        let cleared_branch = client
+            .store
+            .list_context_entries(&channel.id, &participants[0])
+            .await
+            .unwrap();
+        assert!(cleared_branch.iter().all(|entry| entry.excluded));
+        let other_branch = client
+            .store
+            .list_context_entries(&channel.id, &participants[1])
+            .await
+            .unwrap();
+        assert!(other_branch.iter().any(|entry| !entry.excluded));
     }
 
     #[tokio::test]

@@ -27,7 +27,9 @@ use tokio::task::JoinSet;
 
 use crate::approvals::{ApprovalService, ScopedApprovalGate};
 use crate::assignments::AssignmentService;
+use crate::memory::MemoryService;
 use crate::permissions::ModelPermissionEvaluator;
+use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
@@ -98,6 +100,7 @@ impl AgentExecution {
         usage_recorder: Arc<dyn LlmUsageRecorder>,
         conversation: Option<Vec<ChatMessage>>,
         plan_mode: bool,
+        memory: Option<String>,
     ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
         let mut agent = AgentInstance::new(
             self.profile.clone(),
@@ -108,6 +111,7 @@ impl AgentExecution {
         agent.set_tool_gate(Some(gate));
         agent.set_tool_recorder(Some(recorder));
         agent.set_usage_recorder(Some(usage_recorder));
+        agent.set_memory_block(memory);
         if plan_mode {
             agent.set_mode_instruction(Some(PLAN_MODE_INSTRUCTION.to_string()));
         }
@@ -161,6 +165,9 @@ impl cowbot_agent::ConversationRecorder for CollectingConversation {
     }
 }
 
+/// One finished root: its root assignment, its task, and the execution result.
+type SettledRoot = (AssignmentId, TaskId, CowResult<(TaskId, String)>);
+
 /// Dispatches queued and resumed assignments until no work is left.
 ///
 /// The scheduler is the single wake path described by ADR-0006: it picks up
@@ -171,8 +178,11 @@ pub struct AssignmentScheduler {
     assignments: AssignmentService,
     approvals: ApprovalService,
     workspace_id: WorkspaceId,
+    memory: MemoryService,
     executions: HashMap<AgentId, AgentExecution>,
     max_concurrency: usize,
+    /// Inject notes and recalled memory into task executions.
+    task_memory: bool,
     /// When set, only assignments rooted in a task enqueued here are claimed.
     scope: Option<Arc<StdMutex<HashSet<AssignmentId>>>>,
     /// Ask the active model for Auto-mode permission decisions.
@@ -205,12 +215,15 @@ impl AssignmentScheduler {
     ) -> Self {
         let assignments = AssignmentService::new(store.clone(), bus.clone());
         let approvals = ApprovalService::new(store, bus, workspace_id.clone());
+        let memory = MemoryService::new(assignments.store().clone(), workspace_id.clone());
         Self {
             assignments,
             approvals,
+            memory,
             workspace_id,
             executions: HashMap::new(),
             max_concurrency,
+            task_memory: false,
             scope: None,
             use_model_permissions: false,
             session_decisions: None,
@@ -222,6 +235,17 @@ impl AssignmentScheduler {
     /// Enable model-decided Auto mode for assignments run by this scheduler.
     pub fn with_model_permissions(mut self, enabled: bool) -> Self {
         self.use_model_permissions = enabled;
+        self
+    }
+
+    /// Inject notes and recalled memory into every task execution.
+    ///
+    /// The block uses the assignee and the task description as the query, and
+    /// the task channel scopes the conversation note and its entries.
+    /// Conversation turns assemble memory into their own request, so the
+    /// schedulers that run them leave this off.
+    pub fn with_task_memory(mut self) -> Self {
+        self.task_memory = true;
         self
     }
 
@@ -379,8 +403,29 @@ impl AssignmentScheduler {
 
     /// Dispatch assignments until no queued or resumed work remains.
     pub async fn run_until_idle(&self) -> CowResult<HashMap<TaskId, String>> {
+        self.run_until_idle_inner(None).await
+    }
+
+    /// Dispatch until idle, reporting each settled task as it settles.
+    ///
+    /// [`Self::run_until_idle`] waits for every root before returning. This
+    /// variant sends each task id to `settled` once its assignment is terminal
+    /// (completed or failed), so a caller can post replies while slower
+    /// participants are still running. The returned map and error behavior are
+    /// unchanged.
+    pub async fn run_until_idle_observed(
+        &self,
+        settled: tokio::sync::mpsc::UnboundedSender<TaskId>,
+    ) -> CowResult<HashMap<TaskId, String>> {
+        self.run_until_idle_inner(Some(settled)).await
+    }
+
+    async fn run_until_idle_inner(
+        &self,
+        settled: Option<tokio::sync::mpsc::UnboundedSender<TaskId>>,
+    ) -> CowResult<HashMap<TaskId, String>> {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrency.max(1)));
-        let mut running: JoinSet<(AssignmentId, CowResult<(TaskId, String)>)> = JoinSet::new();
+        let mut running: JoinSet<SettledRoot> = JoinSet::new();
         let mut active_roots: HashSet<AssignmentId> = HashSet::new();
         let mut completed: HashMap<TaskId, String> = HashMap::new();
         let mut first_error: Option<CowError> = None;
@@ -394,12 +439,13 @@ impl AssignmentScheduler {
                             break;
                         };
                         let root_id = assignment.root_id.clone();
+                        let task_id = assignment.task_id.clone();
                         active_roots.insert(root_id.clone());
                         let scheduler = self.clone();
                         running.spawn(async move {
                             let result = scheduler.execute_assignment(assignment).await;
                             drop(permit);
-                            (root_id, result)
+                            (root_id, task_id, result)
                         });
                         progressed = true;
                     }
@@ -407,8 +453,14 @@ impl AssignmentScheduler {
                         if first_error.is_none() {
                             first_error = Some(CowError::Task(reason.clone()));
                         }
+                        let task_id = assignment.task_id.clone();
                         match self.assignments.fail(&assignment.id, reason).await {
-                            Ok(_) => progressed = true,
+                            Ok(_) => {
+                                progressed = true;
+                                if let Some(sender) = &settled {
+                                    let _ = sender.send(task_id);
+                                }
+                            }
                             Err(error) => {
                                 if first_error.is_none() {
                                     first_error = Some(error);
@@ -432,7 +484,7 @@ impl AssignmentScheduler {
                 break;
             };
             match joined {
-                Ok((root_id, result)) => {
+                Ok((root_id, task_id, result)) => {
                     active_roots.remove(&root_id);
                     match result {
                         Ok((task_id, output)) => {
@@ -443,6 +495,9 @@ impl AssignmentScheduler {
                                 first_error = Some(error);
                             }
                         }
+                    }
+                    if let Some(sender) = &settled {
+                        let _ = sender.send(task_id);
                     }
                 }
                 Err(error) => {
@@ -576,19 +631,50 @@ impl AssignmentScheduler {
                 .await?;
             return Err(CowError::Task(reason));
         };
-        let Some(executor) = self.executions.get(&assignment.assignee).cloned() else {
+        let Some(mut executor) = self.executions.get(&assignment.assignee).cloned() else {
             let reason = format!("no executor registered for agent '{}'", assignment.assignee);
             self.assignments
                 .fail(&assignment.id, reason.clone())
                 .await?;
             return Err(CowError::Agent(reason));
         };
+        // `remember` is scoped to this assignment: the entry belongs to the
+        // calling agent and to the task's channel. Agents that do not list the
+        // tool never see it because definitions follow the profile's tools.
+        if executor
+            .profile
+            .tools
+            .iter()
+            .any(|tool| tool == REMEMBER_TOOL_NAME)
+        {
+            executor.tools.register(Arc::new(RememberTool::new(
+                self.assignments.store().clone(),
+                self.workspace_id.clone(),
+                assignment.assignee.clone(),
+                task.channel_id.clone(),
+            )));
+        }
         let context = self.context_for(&assignment, &task).await?;
         let prepared = self
             .prepared
             .lock()
             .ok()
             .and_then(|mut prepared| prepared.remove(&task.id));
+
+        // Task executions get their own memory block as a system message before
+        // the task instructions. Prepared conversation turns already assembled
+        // memory into their request, so they are skipped here.
+        let memory = if self.task_memory && prepared.is_none() {
+            self.memory
+                .recall_for_prompt(
+                    task.channel_id.as_ref(),
+                    &assignment.assignee,
+                    &task.description,
+                )
+                .await
+        } else {
+            None
+        };
 
         self.assignments.start(&assignment.id).await?;
 
@@ -630,6 +716,7 @@ impl AssignmentScheduler {
                 usage_recorder,
                 messages,
                 plan_mode,
+                memory,
             )
             .await
         {

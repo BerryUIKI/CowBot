@@ -84,7 +84,8 @@ impl CrewRunner {
             options.max_concurrency,
         )
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_task_memory();
         for agent in crew.agents.values() {
             scheduler.register_instance(agent);
         }

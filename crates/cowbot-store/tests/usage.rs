@@ -1,5 +1,6 @@
 use chrono::{Duration, Utc};
 use cowbot_core::agent::AgentId;
+use cowbot_core::channel::Channel;
 use cowbot_core::identity::{User, Workspace};
 use cowbot_core::run::Run;
 use cowbot_core::task::Task;
@@ -81,6 +82,16 @@ async fn usage_rows_round_trip_and_sum() {
 
     let by_task = store.list_llm_calls_for_task(&task.id).await.unwrap();
     assert_eq!(by_task.len(), 2);
+
+    let channel = Channel::new("usage", "Usage");
+    store.create_channel(&workspace.id, &channel).await.unwrap();
+    let mut channel_record = record(None, None, &agent_id, None, Utc::now());
+    channel_record.channel_id = Some(channel.id.clone());
+    store.record_llm_call(&channel_record).await.unwrap();
+    let by_channel = store.list_llm_calls_for_channel(&channel.id).await.unwrap();
+    assert_eq!(by_channel.len(), 1);
+    assert_eq!(by_channel[0].id, channel_record.id);
+    assert_eq!(by_channel[0].channel_id.as_ref(), Some(&channel.id));
 
     let totals = store.sum_llm_usage_for_task(&task.id).await.unwrap();
     assert_eq!(totals.calls, 2);

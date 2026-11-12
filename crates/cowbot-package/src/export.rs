@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use cowbot_core::identity::{Workspace, WorkspaceId};
+use cowbot_core::memory::redact_secrets;
 use cowbot_core::template::TemplateDocument;
 use cowbot_store::Store;
 use sha2::{Digest, Sha256};
@@ -10,8 +11,9 @@ use zip::write::SimpleFileOptions;
 use crate::manifest::{
     ExportedBy, Manifest, PackageError, PackageKind, WorkspaceHeader, AGENTS_PATH, AUDIT_PATH,
     CHANNELS_PATH, CONTEXT_ENTRIES_PATH, CONTEXT_EVENTS_PATH, CONVERSATION_SETTINGS_PATH,
-    MANIFEST_PATH, MESSAGES_PATH, PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH,
-    TEMPLATES_PATH, WORKSPACE_PATH,
+    MANIFEST_PATH, MEMORY_ENTRIES_PATH, MEMORY_NOTES_PATH, MEMORY_SETTINGS_PATH, MESSAGES_PATH,
+    PARTICIPANTS_PATH, PERMISSION_RULES_PATH, RUNS_PATH, TASKS_PATH, TEMPLATES_PATH,
+    WORKSPACE_PATH,
 };
 
 /// Upper bound for a package produced or read in one go.
@@ -74,6 +76,19 @@ pub async fn export_workspace(
         .await?;
     let permission_rules = store.list_permission_rules(workspace_id).await?;
 
+    // Notes and memory leave the device with credential-shaped text replaced,
+    // even though writes already redact.
+    let mut notes = store.list_all_notes(workspace_id).await?;
+    for note in &mut notes {
+        note.content = redact_secrets(&note.content).content;
+    }
+    let mut memory_entries = store.list_all_memory_entries(workspace_id).await?;
+    for entry in &mut memory_entries {
+        entry.content = redact_secrets(&entry.content).content;
+        entry.recount();
+    }
+    let memory_settings = store.get_memory_settings(workspace_id).await?;
+
     let mut entries: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
     entries.insert(
         WORKSPACE_PATH,
@@ -94,6 +109,12 @@ pub async fn export_workspace(
     entries.insert(RUNS_PATH, to_jsonl(&runs)?);
     entries.insert(AUDIT_PATH, to_jsonl(&audit)?);
     entries.insert(PERMISSION_RULES_PATH, to_jsonl(&permission_rules)?);
+    entries.insert(MEMORY_NOTES_PATH, to_jsonl(&notes)?);
+    entries.insert(MEMORY_ENTRIES_PATH, to_jsonl(&memory_entries)?);
+    entries.insert(
+        MEMORY_SETTINGS_PATH,
+        to_jsonl(std::slice::from_ref(&memory_settings))?,
+    );
 
     let mut manifest = Manifest::new(
         PackageKind::Workspace,

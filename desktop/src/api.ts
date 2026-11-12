@@ -14,14 +14,27 @@ import type {
   ClientSession,
   CompactionOutcome,
   ConversationContext,
+  ConversationParticipant,
+  ConversationSummary,
+  ConversationTurn,
   CowEvent,
+  MemoryEntry,
+  MemoryEntryUpdate,
+  MemoryFilter,
+  MemoryKind,
+  MemoryNotes,
+  MemorySave,
+  MemorySettings,
+  MemorySettingsUpdate,
   ModelMetadata,
   ModelSettings,
+  NoteSave,
   OnboardingState,
   PermissionRule,
   Project,
   ProjectBranches,
   ProviderProtocol,
+  RecalledMemory,
   RuleDecision,
   Run,
   SessionDecisionEntry,
@@ -90,6 +103,40 @@ export function createConversation(
   return invoke<Channel>("create_conversation", { title, agentId });
 }
 
+/** Create a group conversation with an ordered participant list. */
+export function createGroupConversation(
+  title: string | null,
+  agentIds: string[],
+  routerEnabled: boolean,
+  defaultResponder: string | null,
+): Promise<Channel> {
+  return invoke<Channel>("create_conversation", {
+    title,
+    agentIds,
+    routerEnabled,
+    defaultResponder,
+  });
+}
+
+export function listConversationSummaries(): Promise<ConversationSummary[]> {
+  return invoke<ConversationSummary[]>("list_conversation_summaries");
+}
+
+export function listConversationParticipants(
+  channelId: string,
+): Promise<ConversationParticipant[]> {
+  return invoke<ConversationParticipant[]>("list_conversation_participants", {
+    channelId,
+  });
+}
+
+export function listConversationTurns(
+  channelId: string,
+  limit = 50,
+): Promise<ConversationTurn[]> {
+  return invoke<ConversationTurn[]>("list_conversation_turns", { channelId, limit });
+}
+
 export function getConversationContext(channelId: string): Promise<ConversationContext> {
   return invoke<ConversationContext>("get_conversation_context", { channelId });
 }
@@ -98,20 +145,108 @@ export function updateConversationSettings(
   channelId: string,
   autoCompact: boolean,
   compactThreshold: number,
+  routerEnabled?: boolean,
+  defaultResponder?: string | null,
 ): Promise<ConversationContext> {
   return invoke<ConversationContext>("update_conversation_settings", {
     channelId,
     autoCompact,
     compactThreshold,
+    routerEnabled,
+    defaultResponder,
   });
 }
 
-export function compactConversation(channelId: string): Promise<CompactionOutcome> {
-  return invoke<CompactionOutcome>("compact_conversation", { channelId });
+export function compactConversation(
+  channelId: string,
+  agentId?: string,
+): Promise<CompactionOutcome> {
+  return invoke<CompactionOutcome>("compact_conversation", { channelId, agentId });
 }
 
-export function clearConversationContext(channelId: string): Promise<number> {
-  return invoke<number>("clear_conversation_context", { channelId });
+export function clearConversationContext(
+  channelId: string,
+  agentId?: string,
+): Promise<number> {
+  return invoke<number>("clear_conversation_context", { channelId, agentId });
+}
+
+export function getMemoryNotes(channelId?: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("get_memory_notes", { channelId });
+}
+
+export function saveMemoryNote(content: string, channelId?: string): Promise<NoteSave> {
+  return invoke<NoteSave>("save_memory_note", { channelId, content });
+}
+
+export function deleteMemoryNote(channelId: string): Promise<number> {
+  return invoke<number>("delete_memory_note", { channelId });
+}
+
+export function getMemorySettings(): Promise<MemorySettings> {
+  return invoke<MemorySettings>("get_memory_settings");
+}
+
+export function updateMemorySettings(
+  update: MemorySettingsUpdate,
+): Promise<MemorySettings> {
+  return invoke<MemorySettings>("update_memory_settings", {
+    extractionEnabled: update.extractionEnabled,
+    recallEnabled: update.recallEnabled,
+    notesBudgetTokens: update.notesBudgetTokens,
+    recallBudgetTokens: update.recallBudgetTokens,
+  });
+}
+
+export function listMemoryEntries(filter: MemoryFilter = {}): Promise<MemoryEntry[]> {
+  return invoke<MemoryEntry[]>("list_memory_entries", {
+    status: filter.status,
+    agentId: filter.agentId,
+    channelId: filter.channelId,
+  });
+}
+
+export function addMemoryEntry(
+  content: string,
+  kind: MemoryKind,
+  options: { agentId?: string; channelId?: string; pinned?: boolean } = {},
+): Promise<MemorySave> {
+  return invoke<MemorySave>("add_memory_entry", { content, kind, ...options });
+}
+
+export function updateMemoryEntry(
+  entryId: string,
+  update: MemoryEntryUpdate,
+): Promise<MemorySave> {
+  return invoke<MemorySave>("update_memory_entry", { entryId, ...update });
+}
+
+export function approveMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("approve_memory_entry", { entryId });
+}
+
+export function dismissMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("dismiss_memory_entry", { entryId });
+}
+
+export function archiveMemoryEntry(entryId: string): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("archive_memory_entry", { entryId });
+}
+
+export function deleteMemoryEntry(entryId: string): Promise<number> {
+  return invoke<number>("delete_memory_entry", { entryId });
+}
+
+export function previewMemoryRecall(
+  agentId: string,
+  query: string,
+  channelId?: string,
+): Promise<RecalledMemory | null> {
+  return invoke<RecalledMemory | null>("preview_memory_recall", {
+    channelId,
+    agentId,
+    query,
+  });
 }
 
 export function postMessage(
@@ -211,6 +346,12 @@ export interface ChannelReplyFinished {
   message_id: string;
   reply_count: number;
   error: string | null;
+  replied: string[];
+  failed: string[];
+  skipped: string[];
+  selected: string[];
+  route: string | null;
+  turn_id: string | null;
 }
 
 export function onChannelReply(handler: (event: ChannelReplyFinished) => void): Promise<UnlistenFn> {

@@ -140,11 +140,12 @@ CowBot follows a "single core, two forms" model:
 | Agent template library | Built-in JSON role/team templates compiled into the app; custom templates and `.cowtemplate` import/export |
 | Collaboration space | Workspaces, channels, threads, message timeline; @Agent assignment; task cards and approval cards |
 | Agent management | Create/edit agents (role, goal, backstory, model, tools, iteration limit) |
+| Memory and notes | One workspace note and one note per conversation; durable entries scoped to the workspace, an agent, a conversation, or one agent in one conversation; deterministic budgeted recall; the approval-gated `remember` tool; opt-in reviewed extraction (ADR-0033) |
 | Tasks and orchestration | Task creation, assignment runtime (lifecycle, event log, budgets, restart reconciliation), sequential crew execution, deliverables, run and tool-call history, and status transitions |
 | Tools and sandbox | Code execution, file read/write; timeouts, output truncation, working-directory limits |
 | Approval policy | Five modes (Auto / Manual / Accept edits / Plan / Bypass permissions); static risk levels (ReadOnly–Critical); optional LLM classifier that can only raise risk; workspace allow / ask / deny rules per tool and command pattern; session decisions; Plan artifacts with approve-to-continue; a Bypass Critical tri-state; source-attributed audit |
 | Model configuration | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints (cloud APIs and local models), protocol selection, connection test |
-| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, approval records, conversation context, per-call token usage, permission rules, and task worktrees |
+| Persistence | SQLite (WAL) for workspaces, channels, messages, tasks, agent configuration, approval records, conversation context, notes, memory entries and settings, per-call token usage, permission rules, and task worktrees |
 | CLI | `cowbot` retained for initialization, diagnostics, headless runs, and debugging |
 
 ### 5.2 P1 (Enhancements)
@@ -155,7 +156,7 @@ CowBot follows a "single core, two forms" model:
 - Optional browser access.
 - Docker sandbox backend.
 - Webhooks and Mattermost / Slack / Feishu integrations.
-- Long-term agent memory and knowledge base.
+- Project-level knowledge base and retrieval-augmented context; embeddings and hybrid retrieval.
 - Streaming responses, retries, rate limiting, and cost/billing views (per-call token usage is recorded, ADR-0029).
 - Operation replay built on the existing audit log.
 
@@ -190,7 +191,7 @@ CowBot follows a "single core, two forms" model:
 5. Approvals offer five modes (Manual by default, auto, accept edits, plan, bypass) with fine-grained rules.
 6. Built-in agent and team template library.
 7. v1 orchestration scope: single agent + sequential crew; hierarchical manager and DAG are P1.
-8. v1 memory scope: session plus channel/task history; project-level long-term memory is P1.
+8. v1 memory scope: session plus channel/task history, extended by workspace, agent, and conversation memory with deterministic recall (ADR-0033); project-level knowledge bases are P1.
 9. Desktop frontend stack: React + TypeScript.
 10. Local and team modes keep separate data; migration is import/export only, with no bidirectional sync.
 11. Templates are JSON, with built-in templates compiled into the app; user templates import/export as `.cowtemplate`; no online marketplace in v1.
@@ -210,6 +211,8 @@ CowBot follows a "single core, two forms" model:
 7. Branded editions are deferred. There is no runtime edition switching; separate installers, if ever needed, are built from the same codebase.
 8. The project model is planned for internal M6 and is not implemented. See the [M6 plan](plans/M6-projects-and-product-structure.md).
 9. The existing device-local git repository registry keeps its behavior but is renamed Repositories; Project means the unit of work described here. A Code project may bind one repository.
+10. Group conversations with several agent participants, mention-scoped routing, opt-in automatic routing, and a default responder are implemented as M3 (ADR-0032). Single-agent conversations remain the default; group channels keep their mention-only behavior. See the [M3 plan](plans/M3-group-conversations-and-routing.md).
+11. Agent memory and shared notes are implemented as M4 (ADR-0033): inspectable, workspace-scoped Markdown notes and memory entries with deterministic FTS5 recall, explicit capture, an approval-gated `remember` tool, opt-in reviewed extraction, and package round-trips with secret redaction. Embeddings, project knowledge bases, and cross-workspace memory remain out of scope. See the [M4 plan](plans/M4-agent-memory-and-shared-notes.md).
 
 ### 7.3 Open Questions
 

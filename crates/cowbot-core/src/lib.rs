@@ -7,6 +7,7 @@ pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod identity;
+pub mod memory;
 pub mod mention;
 pub mod permission;
 pub mod risk;
@@ -32,16 +33,28 @@ pub use conversation::{
     compaction_split, context_usage_state, project_context, usable_window, CacheUsageSummary,
     ChannelKind, ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextProjection, ContextRole, ContextToolCall,
-    ContextUsageState, ConversationContext, ConversationMode, ConversationSettings,
-    ConversationSettingsUpdate, CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS,
-    CONTEXT_WINDOW_BUFFER_TOKENS, DEFAULT_COMPACT_THRESHOLD,
+    ContextUsageState, ConversationContext, ConversationMode, ConversationParticipantContext,
+    ConversationSettings, ConversationSettingsUpdate, ConversationTurn, RouteSource, TurnId,
+    CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
+    DEFAULT_COMPACT_THRESHOLD, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 pub use error::{CowError, CowResult};
 pub use event::{Event, EventPayload};
 pub use identity::{
     ApiToken, Invite, Membership, Role, Session, User, UserId, Workspace, WorkspaceId,
 };
-pub use mention::{parse_mentions, resolve_mentions, MentionResolution};
+pub use memory::{
+    clamp_memory_budget, rank_memories, redact_secrets, render_memory_block, render_memory_entry,
+    render_notes_for_prompt, select_recalled_entries, truncate_to_tokens, MemoryEntry, MemoryKind,
+    MemorySettings, MemorySource, MemoryStatus, Note, RedactionOutcome, ScoredMemory,
+    CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS, DEFAULT_RECALL_BUDGET_TOKENS,
+    MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER, MEMORY_ENTRY_MAX_CHARS,
+    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS, MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER,
+    WORKSPACE_NOTE_TITLE,
+};
+pub use mention::{
+    is_broadcast_mention, parse_mentions, resolve_mentions, MentionResolution, BROADCAST_MENTIONS,
+};
 pub use permission::{
     glob_matches, matching_rule, PermissionRule, PermissionRuleMatch, RuleDecision, RuleSource,
 };

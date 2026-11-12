@@ -51,13 +51,15 @@ serialize.
   conversations, and user-created conversations (ADR-0030).
 - `messages.jsonl`: one channel message per line, sorted by `created_at`.
 - `channel_participants.jsonl`: one participant per line, keyed by channel and
-  agent; used by user-created conversations (ADR-0030).
+  agent, with its ordered `position` in the roster; used by user-created
+  conversations (ADR-0030, ADR-0032).
 - `conversation_settings.jsonl`: one settings row per conversation: mode,
-  fixed provider and model, router flag, automatic-compaction flag, and
-  threshold.
+  fixed provider and model, router flag, default responder, automatic-compaction
+  flag, and threshold.
 - `context_entries.jsonl`: one append-only context entry per line, with its
-  branch sequence, role, kind, content, optional tool calls, exclusion flag,
-  estimated tokens, and timestamp.
+  branch sequence, role, kind, content, optional tool calls, optional
+  `author_agent_id` for mirrored peer replies, exclusion flag, estimated tokens,
+  and timestamp.
 - `context_events.jsonl`: one compaction or clear event per line with token
   counts before and after.
 - `tasks.json`: array of tasks (an optional `channel_id` keeps conversation
@@ -69,6 +71,15 @@ serialize.
 - `permission_rules.jsonl`: one workspace allow / ask / deny rule per line
   (ADR-0003). Rules carry their tool, optional command glob, decision, enabled
   flag, and source.
+- `memory_notes.jsonl`: one note per line. A note without `channel_id` is the
+  workspace note; one with it is that conversation's note. Content is redacted
+  before export (ADR-0033).
+- `memory_entries.jsonl`: one memory entry per line with its scope
+  (`agent_id`, `channel_id`), kind, content, source, status, pinning, token
+  estimate, optional source reference, and recall statistics. Content is
+  redacted before export (ADR-0033).
+- `memory_settings.jsonl`: one workspace memory settings row with the
+  extraction and recall flags and both token budgets (ADR-0033).
 
 ## What is never written
 
@@ -80,6 +91,12 @@ Local project registry entries (repository paths) and task worktree records
 exported either; a task's optional `run_group` link is part of the task record
 and does export. Worktrees are recreated only by running the task on a machine
 where the project is registered.
+
+Group conversation turn rows (`conversation_turns`) are the routing audit of one
+machine and are not exported. Packages carry the participant roster, the default
+responder, and authored peer entries, so an imported conversation keeps its
+routing behavior and history; route chips may be absent until the imported
+workspace produces new turns (ADR-0032).
 
 ## Import semantics (v1)
 
@@ -96,7 +113,18 @@ where the project is registered.
   ADR-0030 do not contain them; their channels import without conversation
   settings or context.
 - Conversation participants, settings, context entries, and events keep their
-  ids, sequence numbers, and timestamps on import.
+  ids, sequence numbers, and timestamps on import. A channel whose imported
+  participants all have position zero was written before group conversations;
+  import re-sequences them in file order, which is the exporting machine's
+  creation order (ADR-0032).
+- Imported group conversations keep their ordered roster, default responder,
+  and authored peer entries. Conversation turn rows are never imported because
+  they are not packaged.
+- The three memory files are optional on import. Notes and entries are re-keyed
+  for the new workspace, redacted again, and dropped when their agent or channel
+  is not part of the package. Unknown kinds normalize to `note` and unknown
+  statuses to `archived`, so a foreign package cannot create active memory with
+  an unrecognized state (ADR-0033).
 - The importing user is created as the owner of the new workspace, with an
   address of the form `<user id>@imported.local` and no password.
 - Existing local workspaces are never modified or merged.
