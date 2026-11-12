@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::agent::AgentId;
 use crate::channel::ChannelId;
 use crate::error::CowResult;
+use crate::prompt_snapshot::LlmPromptSnapshot;
 use crate::run::RunId;
 use crate::task::TaskId;
 
@@ -105,6 +106,14 @@ pub struct LlmCallUsage {
     pub usage: Option<TokenUsage>,
     /// The provider's original usage object, kept for diagnostics.
     pub raw_usage: Option<serde_json::Value>,
+    /// The request that produced this completion, when the caller captured one
+    /// (ADR-0037).
+    ///
+    /// It travels with the usage so a recorder can persist both under one call
+    /// id. The snapshot arrives unsealed: the recorder adds any prompt slots,
+    /// memory selection, and projection it knows, then seals it before
+    /// storage.
+    pub snapshot: Option<LlmPromptSnapshot>,
 }
 
 /// One persisted LLM call.
@@ -170,6 +179,16 @@ impl UsageTotals {
 #[async_trait]
 pub trait LlmUsageRecorder: Send + Sync {
     async fn record_llm_call(&self, call: &LlmCallUsage) -> CowResult<()>;
+
+    /// Whether the caller should pay to capture a prompt snapshot.
+    ///
+    /// The recording path still gates on the workspace switch; this only lets a
+    /// caller skip cloning every message and tool schema for a call whose
+    /// snapshot would be discarded anyway. A recorder that returns `false`
+    /// must accept a [`LlmCallUsage`] with no snapshot.
+    fn records_prompts(&self) -> bool {
+        false
+    }
 }
 
 /// Where a token count came from.

@@ -531,7 +531,7 @@ fn assignment_value_span(line: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-fn bearer_token_span(line: &str) -> Option<(usize, usize)> {
+pub(crate) fn bearer_token_span(line: &str) -> Option<(usize, usize)> {
     let lower = line.to_ascii_lowercase();
     let index = lower.find("bearer")?;
     let before_ok = line[..index]
@@ -569,7 +569,7 @@ fn bearer_token_span(line: &str) -> Option<(usize, usize)> {
 }
 
 /// Byte spans of whitespace-separated words.
-fn word_spans(line: &str) -> Vec<(usize, usize)> {
+pub(crate) fn word_spans(line: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut start = None;
     for (index, character) in line.char_indices() {
@@ -587,7 +587,7 @@ fn word_spans(line: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-fn trim_quotes(word: &str) -> &str {
+pub(crate) fn trim_quotes(word: &str) -> &str {
     word.trim_matches(|character: char| {
         matches!(
             character,
@@ -596,7 +596,7 @@ fn trim_quotes(word: &str) -> &str {
     })
 }
 
-fn is_sensitive_key(key: &str) -> bool {
+pub(crate) fn is_sensitive_key(key: &str) -> bool {
     let normalized = key
         .trim()
         .trim_matches(|character: char| {
@@ -622,9 +622,13 @@ fn is_sensitive_key(key: &str) -> bool {
         || normalized.ends_with("_token")
         || normalized.ends_with("_secret")
         || normalized.ends_with("_password")
+        || normalized.ends_with("-key")
+        || normalized.ends_with("-token")
+        || normalized.ends_with("-secret")
+        || normalized.ends_with("-password")
 }
 
-fn is_secret_token(token: &str) -> bool {
+pub(crate) fn is_secret_token(token: &str) -> bool {
     const PREFIXES: &[&str] = &[
         "sk-",
         "sk_",

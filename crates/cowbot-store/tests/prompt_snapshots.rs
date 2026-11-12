@@ -63,7 +63,7 @@ async fn a_snapshot_round_trips_and_joins_its_call() {
     store.record_llm_call(&call).await.unwrap();
     let sealed = snapshot(LlmCallKind::Agent, "Summarise the task.");
     store
-        .record_prompt_snapshot(&call.id, &sealed)
+        .record_prompt_snapshot(&workspace.id, &call.id, &sealed)
         .await
         .unwrap();
 
@@ -92,10 +92,13 @@ async fn a_snapshot_round_trips_and_joins_its_call() {
         .await
         .unwrap();
     assert_eq!(by_task.len(), 1);
-    let recent = store.list_recent_prompt_snapshots(10).await.unwrap();
+    let recent = store
+        .list_recent_prompt_snapshots(&workspace.id, 10)
+        .await
+        .unwrap();
     assert_eq!(recent.len(), 1);
     assert!(store
-        .list_recent_prompt_snapshots(10)
+        .list_recent_prompt_snapshots(&workspace.id, 10)
         .await
         .unwrap()
         .first()
@@ -118,18 +121,23 @@ async fn a_channel_lists_its_snapshots_newest_first() {
     store.record_llm_call(&second).await.unwrap();
     store
         .record_prompt_snapshot(
+            &workspace.id,
             &first.id,
             &snapshot(LlmCallKind::Router, "Who should answer?"),
         )
         .await
         .unwrap();
     store
-        .record_prompt_snapshot(&second.id, &snapshot(LlmCallKind::Compact, "Summarise."))
+        .record_prompt_snapshot(
+            &workspace.id,
+            &second.id,
+            &snapshot(LlmCallKind::Compact, "Summarise."),
+        )
         .await
         .unwrap();
 
     let listed = store
-        .list_prompt_snapshots_for_channel(&channel.id, 10)
+        .list_prompt_snapshots_for_channel(&workspace.id, &channel.id, 10)
         .await
         .unwrap();
     assert_eq!(listed.len(), 2);
@@ -150,11 +158,19 @@ async fn recording_a_call_twice_replaces_its_snapshot() {
     store.record_llm_call(&call).await.unwrap();
 
     store
-        .record_prompt_snapshot(&call.id, &snapshot(LlmCallKind::Agent, "first"))
+        .record_prompt_snapshot(
+            &workspace.id,
+            &call.id,
+            &snapshot(LlmCallKind::Agent, "first"),
+        )
         .await
         .unwrap();
     store
-        .record_prompt_snapshot(&call.id, &snapshot(LlmCallKind::Agent, "second"))
+        .record_prompt_snapshot(
+            &workspace.id,
+            &call.id,
+            &snapshot(LlmCallKind::Agent, "second"),
+        )
         .await
         .unwrap();
 
@@ -193,16 +209,16 @@ async fn retention_removes_old_snapshots_and_keeps_usage_rows() {
     recent_snapshot.created_at = recent.created_at;
     let recent_snapshot = recent_snapshot.seal(&ESTIMATE_COUNTER);
     store
-        .record_prompt_snapshot(&old.id, &old_snapshot)
+        .record_prompt_snapshot(&workspace.id, &old.id, &old_snapshot)
         .await
         .unwrap();
     store
-        .record_prompt_snapshot(&recent.id, &recent_snapshot)
+        .record_prompt_snapshot(&workspace.id, &recent.id, &recent_snapshot)
         .await
         .unwrap();
 
     let deleted = store
-        .delete_prompt_snapshots_before(Utc::now() - Duration::days(30))
+        .delete_prompt_snapshots_before(&workspace.id, Utc::now() - Duration::days(30))
         .await
         .unwrap();
     assert_eq!(deleted, 1);
@@ -230,7 +246,11 @@ async fn deleting_a_run_cascades_to_its_snapshots() {
     let call = call(&run, &task, &agent_id, Utc::now());
     store.record_llm_call(&call).await.unwrap();
     store
-        .record_prompt_snapshot(&call.id, &snapshot(LlmCallKind::Agent, "hello"))
+        .record_prompt_snapshot(
+            &workspace.id,
+            &call.id,
+            &snapshot(LlmCallKind::Agent, "hello"),
+        )
         .await
         .unwrap();
 
@@ -242,7 +262,7 @@ async fn deleting_a_run_cascades_to_its_snapshots() {
 
     assert!(store.get_prompt_snapshot(&call.id).await.unwrap().is_none());
     assert!(store
-        .list_recent_prompt_snapshots(10)
+        .list_recent_prompt_snapshots(&workspace.id, 10)
         .await
         .unwrap()
         .is_empty());
@@ -256,16 +276,111 @@ async fn deleting_a_run_cascades_to_its_snapshots() {
 #[tokio::test]
 async fn unknown_calls_have_no_snapshot() {
     let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
     assert!(store
         .get_prompt_snapshot("missing-call")
         .await
         .unwrap()
         .is_none());
     assert!(store
-        .list_recent_prompt_snapshots(10)
+        .list_recent_prompt_snapshots(&workspace.id, 10)
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn a_detail_read_carries_the_call_links_and_an_intact_hash() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let agent_id = AgentId::new("agent-coder");
+    let task = Task::new("Write a summary", "Summary").assign_to(agent_id.clone());
+    store.create_task(&workspace.id, None, &task).await.unwrap();
+    let run = Run::new(task.id.clone(), agent_id.clone());
+    store.create_run(&run).await.unwrap();
+    let call = call(&run, &task, &agent_id, Utc::now());
+    store.record_llm_call(&call).await.unwrap();
+    let sealed = snapshot(LlmCallKind::Agent, "hello");
+    store
+        .record_prompt_snapshot(&workspace.id, &call.id, &sealed)
+        .await
+        .unwrap();
+
+    let detail = store
+        .get_prompt_snapshot_detail(&call.id)
+        .await
+        .unwrap()
+        .expect("the detail is stored");
+    assert_eq!(detail.summary.run_id, Some(run.id.clone()));
+    assert_eq!(detail.summary.task_id, Some(task.id.clone()));
+    assert_eq!(detail.summary.agent_id, Some(agent_id.clone()));
+    assert_eq!(detail.summary.call_kind, LlmCallKind::Agent);
+    assert!(!detail.hash_mismatch);
+    assert_eq!(detail.snapshot, sealed);
+}
+
+#[tokio::test]
+async fn deleting_a_channel_removes_only_its_snapshots() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let first_channel = Channel::new("First", "Topic");
+    let second_channel = Channel::new("Second", "Topic");
+    store
+        .create_channel(&workspace.id, &first_channel)
+        .await
+        .unwrap();
+    store
+        .create_channel(&workspace.id, &second_channel)
+        .await
+        .unwrap();
+
+    let mut first_call = LlmCallRecord::new(LlmCallKind::Router, "mock-model");
+    first_call.channel_id = Some(first_channel.id.clone());
+    let mut second_call = LlmCallRecord::new(LlmCallKind::Router, "mock-model");
+    second_call.channel_id = Some(second_channel.id.clone());
+    store.record_llm_call(&first_call).await.unwrap();
+    store.record_llm_call(&second_call).await.unwrap();
+    store
+        .record_prompt_snapshot(
+            &workspace.id,
+            &first_call.id,
+            &snapshot(LlmCallKind::Router, "first"),
+        )
+        .await
+        .unwrap();
+    store
+        .record_prompt_snapshot(
+            &workspace.id,
+            &second_call.id,
+            &snapshot(LlmCallKind::Router, "second"),
+        )
+        .await
+        .unwrap();
+
+    let removed = store
+        .delete_prompt_snapshots_for_channel(&first_channel.id)
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    assert!(store
+        .get_prompt_snapshot(&first_call.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .get_prompt_snapshot(&second_call.id)
+        .await
+        .unwrap()
+        .is_some());
+    // The channel's usage rows stay.
+    assert_eq!(
+        store
+            .list_llm_calls_for_channel(&first_channel.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

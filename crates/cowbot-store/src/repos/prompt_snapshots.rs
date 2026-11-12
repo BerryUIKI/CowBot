@@ -3,7 +3,9 @@
 //!
 //! A snapshot is keyed by the LLM call it belongs to. The call row already
 //! carries the run, task, channel, and agent, so the summary join is the only
-//! place those links are needed.
+//! place those links are needed. `workspace_id` is denormalized on the snapshot
+//! row so retention and channel purges stay scoped even if a later build serves
+//! several workspaces from one database.
 
 use chrono::Utc;
 use cowbot_core::agent::AgentId;
@@ -11,7 +13,8 @@ use cowbot_core::channel::ChannelId;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::prompt_snapshot::{
-    clamp_retention_days, LlmPromptSnapshot, PromptSnapshotSettings, PromptSnapshotSummary,
+    clamp_retention_days, LlmPromptSnapshot, PromptSnapshotDetail, PromptSnapshotSettings,
+    PromptSnapshotSummary,
 };
 use cowbot_core::run::RunId;
 use cowbot_core::task::TaskId;
@@ -82,16 +85,18 @@ impl Store {
     /// reuses its call id and must not accumulate snapshots.
     pub async fn record_prompt_snapshot(
         &self,
+        workspace_id: &WorkspaceId,
         llm_call_id: &str,
         snapshot: &LlmPromptSnapshot,
     ) -> CowResult<()> {
         let payload = snapshot.payload();
         sqlx::query(
             "INSERT INTO llm_prompt_snapshots
-                (llm_call_id, schema_version, content_hash, token_count, byte_size,
-                 truncated, redacted, created_at, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (llm_call_id, workspace_id, schema_version, content_hash, token_count,
+                 byte_size, truncated, redacted, created_at, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(llm_call_id) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
                 schema_version = excluded.schema_version,
                 content_hash = excluded.content_hash,
                 token_count = excluded.token_count,
@@ -102,6 +107,7 @@ impl Store {
                 payload = excluded.payload",
         )
         .bind(llm_call_id)
+        .bind(&workspace_id.0)
         .bind(i64::from(snapshot.schema_version))
         .bind(&snapshot.content_hash)
         .bind(i64::from(snapshot.token_count))
@@ -119,29 +125,43 @@ impl Store {
     /// Read one stored snapshot, verifying it against its recorded hash.
     ///
     /// A payload that no longer matches its hash is reported as a storage
-    /// error rather than returned as evidence.
+    /// error rather than returned as evidence; the detail read reports the
+    /// same condition as a flag so a viewer can label it.
     pub async fn get_prompt_snapshot(
         &self,
         llm_call_id: &str,
     ) -> CowResult<Option<LlmPromptSnapshot>> {
-        let row = sqlx::query_as::<_, PromptSnapshotRow>(
-            "SELECT payload FROM llm_prompt_snapshots WHERE llm_call_id = ?",
-        )
-        .bind(llm_call_id)
-        .fetch_optional(self.pool())
-        .await
-        .map_err(db)?;
-        let Some(row) = row else {
+        let Some(snapshot) = self.read_prompt_snapshot(llm_call_id).await? else {
             return Ok(None);
         };
-        let snapshot = LlmPromptSnapshot::from_payload(&row.payload)
-            .map_err(|error| CowError::Storage(format!("invalid prompt snapshot: {error}")))?;
         if !snapshot.hash_matches() {
             return Err(CowError::Storage(format!(
                 "prompt snapshot '{llm_call_id}' does not match its content hash"
             )));
         }
         Ok(Some(snapshot))
+    }
+
+    /// Read one stored snapshot with the call context it belongs to.
+    ///
+    /// The document is returned even when its hash no longer matches;
+    /// `hash_mismatch` marks it so the caller can label instead of trust it.
+    pub async fn get_prompt_snapshot_detail(
+        &self,
+        llm_call_id: &str,
+    ) -> CowResult<Option<PromptSnapshotDetail>> {
+        let Some(snapshot) = self.read_prompt_snapshot(llm_call_id).await? else {
+            return Ok(None);
+        };
+        let summary = self
+            .find_snapshot_summary(llm_call_id)
+            .await?
+            .unwrap_or_else(|| PromptSnapshotSummary::from_snapshot(llm_call_id, &snapshot));
+        Ok(Some(PromptSnapshotDetail {
+            summary,
+            hash_mismatch: !snapshot.hash_matches(),
+            snapshot,
+        }))
     }
 
     /// Snapshots recorded for a run, oldest first.
@@ -174,9 +194,10 @@ impl Store {
         self.list_snapshot_summaries(&sql, &task_id.0).await
     }
 
-    /// Snapshots recorded for a channel or conversation, oldest first.
+    /// Snapshots recorded for a channel or conversation, newest first.
     pub async fn list_prompt_snapshots_for_channel(
         &self,
+        workspace_id: &WorkspaceId,
         channel_id: &ChannelId,
         limit: u32,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
@@ -184,11 +205,12 @@ impl Store {
             "SELECT {SUMMARY_COLUMNS}
              FROM llm_prompt_snapshots s
              JOIN llm_calls c ON c.id = s.llm_call_id
-             WHERE c.channel_id = ?
+             WHERE s.workspace_id = ? AND c.channel_id = ?
              ORDER BY s.created_at DESC, s.llm_call_id DESC
              LIMIT ?"
         );
         let rows = sqlx::query_as::<_, SnapshotSummaryRow>(&sql)
+            .bind(&workspace_id.0)
             .bind(&channel_id.0)
             .bind(i64::from(limit))
             .fetch_all(self.pool())
@@ -199,19 +221,22 @@ impl Store {
             .collect()
     }
 
-    /// The newest snapshots across the workspace, for the audit view.
+    /// The newest snapshots in a workspace, for the audit view.
     pub async fn list_recent_prompt_snapshots(
         &self,
+        workspace_id: &WorkspaceId,
         limit: u32,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
         let sql = format!(
             "SELECT {SUMMARY_COLUMNS}
              FROM llm_prompt_snapshots s
              JOIN llm_calls c ON c.id = s.llm_call_id
+             WHERE s.workspace_id = ?
              ORDER BY s.created_at DESC, s.llm_call_id DESC
              LIMIT ?"
         );
         let rows = sqlx::query_as::<_, SnapshotSummaryRow>(&sql)
+            .bind(&workspace_id.0)
             .bind(i64::from(limit))
             .fetch_all(self.pool())
             .await
@@ -227,13 +252,37 @@ impl Store {
     /// belong to keep their tokens and call metadata.
     pub async fn delete_prompt_snapshots_before(
         &self,
+        workspace_id: &WorkspaceId,
         cutoff: chrono::DateTime<Utc>,
     ) -> CowResult<u64> {
-        let result = sqlx::query("DELETE FROM llm_prompt_snapshots WHERE created_at < ?")
-            .bind(cutoff.to_rfc3339())
-            .execute(self.pool())
-            .await
-            .map_err(db)?;
+        let result = sqlx::query(
+            "DELETE FROM llm_prompt_snapshots WHERE workspace_id = ? AND created_at < ?",
+        )
+        .bind(&workspace_id.0)
+        .bind(cutoff.to_rfc3339())
+        .execute(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Delete every snapshot recorded for a channel.
+    ///
+    /// A deleted channel removes its evidence with it. Clearing a channel's
+    /// history keeps the snapshots: what a call sent is historical fact, not
+    /// display history.
+    pub async fn delete_prompt_snapshots_for_channel(
+        &self,
+        channel_id: &ChannelId,
+    ) -> CowResult<u64> {
+        let result = sqlx::query(
+            "DELETE FROM llm_prompt_snapshots
+             WHERE llm_call_id IN (SELECT id FROM llm_calls WHERE channel_id = ?)",
+        )
+        .bind(&channel_id.0)
+        .execute(self.pool())
+        .await
+        .map_err(db)?;
         Ok(result.rows_affected())
     }
 
@@ -293,6 +342,43 @@ impl Store {
         .await
         .map_err(db)?;
         Ok(())
+    }
+
+    async fn read_prompt_snapshot(
+        &self,
+        llm_call_id: &str,
+    ) -> CowResult<Option<LlmPromptSnapshot>> {
+        let row = sqlx::query_as::<_, PromptSnapshotRow>(
+            "SELECT payload FROM llm_prompt_snapshots WHERE llm_call_id = ?",
+        )
+        .bind(llm_call_id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        LlmPromptSnapshot::from_payload(&row.payload)
+            .map(Some)
+            .map_err(|error| CowError::Storage(format!("invalid prompt snapshot: {error}")))
+    }
+
+    async fn find_snapshot_summary(
+        &self,
+        llm_call_id: &str,
+    ) -> CowResult<Option<PromptSnapshotSummary>> {
+        let sql = format!(
+            "SELECT {SUMMARY_COLUMNS}
+             FROM llm_prompt_snapshots s
+             JOIN llm_calls c ON c.id = s.llm_call_id
+             WHERE s.llm_call_id = ?"
+        );
+        let row = sqlx::query_as::<_, SnapshotSummaryRow>(&sql)
+            .bind(llm_call_id)
+            .fetch_optional(self.pool())
+            .await
+            .map_err(db)?;
+        row.map(SnapshotSummaryRow::into_domain).transpose()
     }
 
     async fn list_snapshot_summaries(

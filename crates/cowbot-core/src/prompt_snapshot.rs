@@ -19,7 +19,10 @@ use crate::agent::AgentId;
 use crate::channel::ChannelId;
 use crate::conversation::ContextProjection;
 use crate::identity::WorkspaceId;
-use crate::memory::{redact_secrets, TRUNCATION_MARKER};
+use crate::memory::{
+    bearer_token_span, is_secret_token, is_sensitive_key, trim_quotes, word_spans,
+    TRUNCATION_MARKER,
+};
 use crate::prompt::{PromptMemory, PromptRole, PromptSlot};
 use crate::run::RunId;
 use crate::task::TaskId;
@@ -217,17 +220,22 @@ impl LlmPromptSnapshot {
     }
 
     /// The JSON document to store.
+    ///
+    /// A snapshot that cannot serialize is a programming error, not a value a
+    /// caller may silently store empty.
     pub fn payload(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        serde_json::to_string(self).expect("a prompt snapshot always serializes")
     }
 
     /// Read a stored payload back.
     ///
-    /// Unknown schema versions are refused: a newer writer's field meanings
-    /// cannot be guessed at.
+    /// A document from a newer writer is refused because its field meanings
+    /// cannot be guessed at; every version up to the one this build knows is
+    /// accepted, so an upgrade never hides pre-upgrade evidence.
     pub fn from_payload(payload: &str) -> Result<Self, String> {
         let snapshot: Self = serde_json::from_str(payload).map_err(|error| error.to_string())?;
-        if snapshot.schema_version != PROMPT_SNAPSHOT_SCHEMA_VERSION {
+        if snapshot.schema_version == 0 || snapshot.schema_version > PROMPT_SNAPSHOT_SCHEMA_VERSION
+        {
             return Err(format!(
                 "unsupported prompt snapshot schema version {}",
                 snapshot.schema_version
@@ -240,23 +248,25 @@ impl LlmPromptSnapshot {
         let mut redacted = false;
 
         for message in &mut self.messages {
-            redacted |= redact_text(&mut message.content);
+            redacted |= redact_snapshot_text(&mut message.content);
             for call in &mut message.tool_calls {
                 redacted |= redact_json(&mut call.arguments);
             }
         }
         for slot in &mut self.slots {
-            redacted |= redact_text(&mut slot.content);
+            redacted |= redact_snapshot_text(&mut slot.content);
         }
         if let Some(memory) = &mut self.memory {
-            redacted |= redact_text(&mut memory.block);
+            redacted |= redact_snapshot_text(&mut memory.block);
         }
         for tool in &mut self.tools {
-            redacted |= redact_text(&mut tool.description);
+            redacted |= redact_snapshot_text(&mut tool.description);
             redacted |= redact_json(&mut tool.parameters);
         }
 
-        self.redacted = redacted;
+        // Sealing twice must not clear the flag: the hash covers it, and the
+        // first pass already removed the credentials.
+        self.redacted |= redacted;
     }
 
     fn bound(&mut self) {
@@ -387,22 +397,248 @@ pub struct PromptSnapshotSummary {
     pub created_at: DateTime<Utc>,
 }
 
-/// Redact one text field, reporting whether anything changed.
-fn redact_text(text: &mut String) -> bool {
-    let outcome = redact_secrets(text);
-    let changed = outcome.redacted;
-    *text = outcome.content;
+impl PromptSnapshotSummary {
+    /// Describe a snapshot that was just read, without re-parsing the payload.
+    pub fn from_snapshot(llm_call_id: impl Into<String>, snapshot: &LlmPromptSnapshot) -> Self {
+        Self {
+            llm_call_id: llm_call_id.into(),
+            run_id: None,
+            task_id: None,
+            channel_id: None,
+            agent_id: None,
+            call_kind: snapshot.call_kind,
+            model: snapshot.model.clone(),
+            token_count: snapshot.token_count,
+            byte_size: snapshot.payload().len() as u32,
+            truncated: snapshot.truncated,
+            redacted: snapshot.redacted,
+            created_at: snapshot.created_at,
+        }
+    }
+}
+
+/// A stored snapshot together with the call it belongs to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptSnapshotDetail {
+    pub summary: PromptSnapshotSummary,
+    pub snapshot: LlmPromptSnapshot,
+    /// True when the stored payload no longer matches its content hash.
+    ///
+    /// A caller may still render it, but must label it as altered.
+    #[serde(default)]
+    pub hash_mismatch: bool,
+}
+
+/// Redact one prompt field.
+///
+/// Snapshots are the audit record of a real request, so redaction is stricter
+/// than the memory path: every `key=value` / `key: value` pair whose key looks
+/// sensitive is cleared — not only the first separator on a line, and only the
+/// value rather than the rest of the line — bearer tokens are replaced, bare
+/// tokens with a known credential prefix are replaced, and PEM blocks are
+/// replaced whole. The result is still heuristic; retention is the second line
+/// of defence.
+fn redact_snapshot_text(text: &mut String) -> bool {
+    let (stripped, pem) = redact_pem_blocks(text);
+    *text = stripped;
+    let mut changed = pem;
+    changed |= map_lines(text, redact_sensitive_pairs);
+    changed |= map_lines(text, redact_bearer_tokens);
+    changed |= map_lines(text, redact_secret_tokens);
     changed
+}
+
+/// Apply one line-scoped redactor, preserving the original line endings.
+fn map_lines(text: &mut String, redact: fn(&str) -> (String, bool)) -> bool {
+    let mut changed = false;
+    let mut rebuilt = String::with_capacity(text.len());
+    for piece in text.split_inclusive('\n') {
+        let (body, ending) = match piece.strip_suffix("\r\n") {
+            Some(body) => (body, "\r\n"),
+            None => match piece.strip_suffix('\n') {
+                Some(body) => (body, "\n"),
+                None => (piece, ""),
+            },
+        };
+        let (line, line_changed) = redact(body);
+        changed |= line_changed;
+        rebuilt.push_str(&line);
+        rebuilt.push_str(ending);
+    }
+    *text = rebuilt;
+    changed
+}
+
+/// Replace the value of a `Bearer` scheme on a line.
+fn redact_bearer_tokens(line: &str) -> (String, bool) {
+    let Some((start, end)) = bearer_token_span(line) else {
+        return (line.to_string(), false);
+    };
+    let mut value = line.to_string();
+    value.replace_range(start..end, "[redacted]");
+    (value, true)
+}
+
+/// Replace words that carry a known credential prefix or shape.
+fn redact_secret_tokens(line: &str) -> (String, bool) {
+    let mut rebuilt = String::with_capacity(line.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    for (start, end) in word_spans(line) {
+        let word = &line[start..end];
+        let inner = trim_quotes(word);
+        if inner.is_empty() || inner == "[redacted]" || !is_secret_token(inner) {
+            continue;
+        }
+        let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
+        rebuilt.push_str(&line[cursor..inner_start]);
+        rebuilt.push_str("[redacted]");
+        cursor = inner_start + inner.len();
+        changed = true;
+    }
+    if !changed {
+        return (line.to_string(), false);
+    }
+    rebuilt.push_str(&line[cursor..]);
+    (rebuilt, true)
+}
+
+/// Replace every `key=value` or `key: value` whose key looks like a credential.
+///
+/// [`redact_secrets`] only inspects the first separator on a line, which misses
+/// `curl -H "X-Api-Key: sk-..." https://host/?token=...`. This pass walks every
+/// separator and stops the value at whitespace and at URL, JSON, and shell
+/// delimiters.
+fn redact_sensitive_pairs(line: &str) -> (String, bool) {
+    const KEY_DELIMITERS: &[char] = &[
+        '"', '\'', '`', '(', '[', '{', ',', ';', '&', '?', '<', '|', '=',
+    ];
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    let mut index = 0;
+
+    while index < line.len() {
+        let character = line[index..].chars().next().unwrap_or(' ');
+        if character != '=' && character != ':' {
+            index += character.len_utf8();
+            continue;
+        }
+
+        // The key is the token immediately before the separator; trailing
+        // whitespace (`password = ...`) must not empty it.
+        let prefix = line[..index].trim_end();
+        let key_start = prefix
+            .rfind(|candidate: char| {
+                candidate.is_whitespace() || KEY_DELIMITERS.contains(&candidate)
+            })
+            .map(|position| position + prefix[position..].chars().next().unwrap_or(' ').len_utf8())
+            .unwrap_or(0);
+        let key = &prefix[key_start..];
+        if !is_sensitive_key(key) {
+            index += character.len_utf8();
+            continue;
+        }
+
+        let mut value_start = index + character.len_utf8();
+        while value_start < line.len()
+            && line[value_start..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        {
+            value_start += line[value_start..].chars().next().unwrap_or(' ').len_utf8();
+        }
+        // `Authorization: Bearer <token>` and `token: Basic <blob>` put the
+        // scheme before the credential; redact the credential, not the scheme.
+        let scheme = line[value_start..]
+            .split(|candidate: char| candidate.is_whitespace())
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(scheme.as_str(), "bearer" | "basic" | "token" | "digest") {
+            let mut next = value_start + scheme.len();
+            while next < line.len() && line[next..].chars().next().is_some_and(char::is_whitespace)
+            {
+                next += line[next..].chars().next().unwrap_or(' ').len_utf8();
+            }
+            value_start = next;
+        }
+        // Already-redacted text must be left byte-identical: sealing twice has
+        // to produce the same document and therefore the same hash.
+        if line[value_start..].starts_with("[redacted]") {
+            index = value_start + "[redacted]".len();
+            continue;
+        }
+        let value_end = value_start
+            + line[value_start..]
+                .find(|candidate: char| {
+                    candidate.is_whitespace()
+                        || matches!(
+                            candidate,
+                            '&' | '"' | '\'' | '`' | ',' | ';' | ')' | ']' | '}' | '<'
+                        )
+                })
+                .unwrap_or(line.len() - value_start);
+        if value_end <= value_start {
+            index += character.len_utf8();
+            continue;
+        }
+
+        if value_start >= cursor {
+            output.push_str(&line[cursor..value_start]);
+            output.push_str("[redacted]");
+            cursor = value_end;
+            changed = true;
+        }
+        index = value_end;
+    }
+
+    output.push_str(&line[cursor..]);
+    (output, changed)
+}
+
+/// Replace PEM blocks — private keys, certificates, and the like — as a whole.
+fn redact_pem_blocks(text: &str) -> (String, bool) {
+    const BEGIN: &str = "-----BEGIN ";
+    const END: &str = "-----END ";
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut changed = false;
+
+    while let Some(begin) = rest.find(BEGIN) {
+        let Some(end_offset) = rest[begin..].find(END) else {
+            break;
+        };
+        let end_start = begin + end_offset;
+        let line_end = rest[end_start..]
+            .find('\n')
+            .map(|offset| end_start + offset)
+            .unwrap_or(rest.len());
+        output.push_str(&rest[..begin]);
+        output.push_str("[redacted PEM block]");
+        if line_end < rest.len() {
+            output.push('\n');
+            rest = &rest[line_end + 1..];
+        } else {
+            rest = "";
+        }
+        changed = true;
+    }
+
+    output.push_str(rest);
+    (output, changed)
 }
 
 /// Redact every string inside a JSON value.
 ///
 /// Redaction happens per string rather than on serialized JSON so the document
 /// stays valid: replacing a quoted value inside the text would break the
-/// syntax.
+/// syntax. An object value under a sensitive key is cleared outright, because
+/// the key and its value are separate JSON fields.
 fn redact_json(value: &mut serde_json::Value) -> bool {
     match value {
-        serde_json::Value::String(text) => redact_text(text),
+        serde_json::Value::String(text) => redact_snapshot_text(text),
         serde_json::Value::Array(items) => {
             let mut changed = false;
             for item in items {
@@ -412,7 +648,16 @@ fn redact_json(value: &mut serde_json::Value) -> bool {
         }
         serde_json::Value::Object(map) => {
             let mut changed = false;
-            for item in map.values_mut() {
+            for (key, item) in map.iter_mut() {
+                if is_sensitive_key(key) {
+                    if let serde_json::Value::String(text) = item {
+                        if !text.is_empty() && text != "[redacted]" {
+                            text.clear();
+                            text.push_str("[redacted]");
+                            changed = true;
+                        }
+                    }
+                }
                 changed |= redact_json(item);
             }
             changed
@@ -670,5 +915,70 @@ mod tests {
         assert_eq!(settings.retention_days, MAX_PROMPT_SNAPSHOT_RETENTION_DAYS);
         settings.set_retention_days(90);
         assert_eq!(settings.retention_days, 90);
+    }
+
+    #[test]
+    fn redaction_clears_every_sensitive_pair_on_a_line() {
+        let mut text =
+            "curl -H 'X-Api-Key: sk-header-value' 'https://api.test/v1?token=super-secret-value&limit=5'"
+                .to_string();
+        assert!(redact_snapshot_text(&mut text));
+        assert!(!text.contains("sk-header-value"), "{text}");
+        assert!(!text.contains("super-secret-value"), "{text}");
+        // Values that are not credential-shaped survive.
+        assert!(text.contains("limit=5"), "{text}");
+    }
+
+    #[test]
+    fn redaction_replaces_pem_blocks_whole() {
+        let mut text = "before\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\nafter"
+            .to_string();
+        assert!(redact_snapshot_text(&mut text));
+        assert!(text.contains("[redacted PEM block]"), "{text}");
+        assert!(!text.contains("MIIEowIBAAKCAQEA"), "{text}");
+        assert!(text.contains("before"), "{text}");
+        assert!(text.contains("after"), "{text}");
+    }
+
+    #[test]
+    fn redaction_clears_the_credential_after_an_auth_scheme() {
+        let mut text = "Authorization: Bearer abc123def456ghi789jkl".to_string();
+        assert!(redact_snapshot_text(&mut text));
+        assert!(!text.contains("abc123def456ghi789jkl"), "{text}");
+        assert!(!text.contains("Bearer abc123"), "{text}");
+    }
+
+    #[test]
+    fn json_values_under_sensitive_keys_are_cleared() {
+        let mut value = serde_json::json!({
+            "headers": {"api_key": "plain-value", "accept": "application/json"},
+            "count": 1,
+        });
+        assert!(redact_json(&mut value));
+        assert_eq!(value["headers"]["api_key"], "[redacted]");
+        assert_eq!(value["headers"]["accept"], "application/json");
+        assert_eq!(value["count"], 1);
+    }
+
+    #[test]
+    fn sealing_a_dirty_snapshot_twice_keeps_the_redacted_flag() {
+        let snapshot = LlmPromptSnapshot::new(LlmCallKind::Agent, "gpt-4o")
+            .with_messages(vec![message(
+                PromptRole::User,
+                "OPENAI_API_KEY=sk-live-secret-value",
+            )])
+            .seal(&ESTIMATE_COUNTER);
+        assert!(snapshot.redacted);
+
+        let again = snapshot.clone().seal(&ESTIMATE_COUNTER);
+        assert!(again.redacted);
+        assert_eq!(
+            snapshot.content_hash,
+            again.content_hash,
+            "first: {}\nsecond: {}",
+            snapshot.payload(),
+            again.payload()
+        );
+        assert_eq!(snapshot.payload(), again.payload());
     }
 }

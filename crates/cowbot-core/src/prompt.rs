@@ -61,6 +61,9 @@ pub enum PromptSlotName {
     ConversationConvention,
     /// The Plan-mode instruction of a task run.
     ModeInstruction,
+    /// The fixed system prompt of a router, summary, compaction, or extraction
+    /// call, which is not assembled from agent and platform slots.
+    Instruction,
 }
 
 /// One named segment of a system prompt.
