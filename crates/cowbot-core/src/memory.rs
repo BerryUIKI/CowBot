@@ -307,6 +307,30 @@ impl MemoryEntry {
             (false, false) => 1,
         }
     }
+
+    /// The scope an entry belongs to, for display and recall traces.
+    pub fn scope(&self) -> MemoryScope {
+        match (self.channel_id.is_some(), self.agent_id.is_some()) {
+            (false, false) => MemoryScope::Workspace,
+            (false, true) => MemoryScope::Agent,
+            (true, false) => MemoryScope::Conversation,
+            (true, true) => MemoryScope::AgentInConversation,
+        }
+    }
+}
+
+/// Where a memory entry applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    /// Shared by every agent and conversation.
+    Workspace,
+    /// Owned by one agent everywhere.
+    Agent,
+    /// Shared by every participant of one conversation.
+    Conversation,
+    /// Owned by one agent in one conversation.
+    AgentInConversation,
 }
 
 /// A workspace or conversation note.
@@ -680,20 +704,125 @@ pub fn select_recalled_entries<'a>(
     ranked: &[ScoredMemory<'a>],
     budget_tokens: u32,
 ) -> Vec<&'a MemoryEntry> {
+    plan_recalled_entries(ranked, budget_tokens).selected
+}
+
+/// Why one ranked candidate was not injected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecallSkipReason {
+    /// The entry is pending, archived, or otherwise not active.
+    Inactive,
+    /// The entry did not fit the recall budget that was left.
+    OverBudget { remaining_tokens: u32 },
+}
+
+/// One ranked candidate with the decision the selector made for it.
+#[derive(Debug, Clone, Copy)]
+pub struct RecallTrace<'a> {
+    pub entry: &'a MemoryEntry,
+    /// FTS5 `bm25` score where lower is better; `None` for pinned-only entries.
+    pub score: Option<f64>,
+    /// Estimated tokens of the rendered bullet.
+    pub tokens: u32,
+    pub selected: bool,
+    pub skip_reason: Option<RecallSkipReason>,
+}
+
+/// The full recall decision: every considered candidate and what was kept.
+#[derive(Debug, Clone)]
+pub struct RecallPlan<'a> {
+    pub budget_tokens: u32,
+    pub candidates: Vec<RecallTrace<'a>>,
+    pub selected: Vec<&'a MemoryEntry>,
+}
+
+/// Rank-ordered recall decisions for a budget.
+///
+/// This is the single implementation behind [`select_recalled_entries`]; the
+/// trace records inactive entries and over-budget skips without changing which
+/// entries are selected.
+pub fn plan_recalled_entries<'a>(
+    ranked: &[ScoredMemory<'a>],
+    budget_tokens: u32,
+) -> RecallPlan<'a> {
     let mut remaining = budget_tokens;
+    let mut candidates = Vec::with_capacity(ranked.len());
     let mut selected = Vec::new();
     for candidate in ranked {
-        if !candidate.entry.is_active() {
-            continue;
-        }
         let cost = estimate_tokens(&render_memory_entry(candidate.entry));
-        if cost > remaining {
-            continue;
+        let (chosen, skip_reason) = if !candidate.entry.is_active() {
+            (false, Some(RecallSkipReason::Inactive))
+        } else if cost > remaining {
+            (
+                false,
+                Some(RecallSkipReason::OverBudget {
+                    remaining_tokens: remaining,
+                }),
+            )
+        } else {
+            remaining = remaining.saturating_sub(cost);
+            (true, None)
+        };
+        if chosen {
+            selected.push(candidate.entry);
         }
-        remaining = remaining.saturating_sub(cost);
-        selected.push(candidate.entry);
+        candidates.push(RecallTrace {
+            entry: candidate.entry,
+            score: candidate.score,
+            tokens: cost,
+            selected: chosen,
+            skip_reason,
+        });
     }
-    selected
+    RecallPlan {
+        budget_tokens,
+        candidates,
+        selected,
+    }
+}
+
+/// One memory entry a recall considered, as reported to an inspector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecallCandidate {
+    pub entry_id: String,
+    pub content: String,
+    pub kind: MemoryKind,
+    pub scope: MemoryScope,
+    pub pinned: bool,
+    /// FTS5 `bm25` score where lower is better; `None` for pinned-only entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Estimated tokens of the rendered bullet.
+    pub tokens: u32,
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<RecallSkipReason>,
+}
+
+/// What one recall would inject and every candidate it considered.
+///
+/// The block is rendered for a prompt; the candidates carry the selection
+/// decision so an inspector can explain why an entry was left out. Computing
+/// this never changes recall statistics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecallPreview {
+    /// False when recall is disabled in the workspace settings.
+    pub enabled: bool,
+    /// The trimmed search query, empty when only notes and pinned entries were
+    /// considered.
+    #[serde(default)]
+    pub query: String,
+    /// The rendered block, or `None` when notes and entries are both empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<String>,
+    /// Estimated tokens of [`Self::block`].
+    pub estimated_tokens: u32,
+    pub budget_tokens: u32,
+    pub notes_budget_tokens: u32,
+    /// Estimated tokens the notes sections occupy inside the block.
+    pub notes_tokens: u32,
+    pub candidates: Vec<RecallCandidate>,
 }
 
 /// Render one memory bullet.
@@ -1006,6 +1135,121 @@ mod tests {
         let selected = select_recalled_entries(&ranked, 100);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].content, "small fact");
+    }
+
+    #[test]
+    fn recall_plan_traces_selected_inactive_and_over_budget_candidates() {
+        let small = entry("small fact", MemoryKind::Fact);
+        let large = entry(&"x".repeat(4_000), MemoryKind::Fact);
+        let mut archived = entry("archived fact", MemoryKind::Fact);
+        archived.status = MemoryStatus::Archived;
+        let ranked = rank_memories(vec![
+            ScoredMemory {
+                entry: &large,
+                score: Some(0.1),
+            },
+            ScoredMemory {
+                entry: &archived,
+                score: Some(0.15),
+            },
+            ScoredMemory {
+                entry: &small,
+                score: Some(0.2),
+            },
+        ]);
+
+        let plan = plan_recalled_entries(&ranked, 100);
+        assert_eq!(plan.budget_tokens, 100);
+        assert_eq!(plan.selected.len(), 1);
+        assert_eq!(plan.selected[0].content, "small fact");
+        assert_eq!(plan.candidates.len(), 3);
+
+        assert!(!plan.candidates[0].selected);
+        assert_eq!(
+            plan.candidates[0].skip_reason,
+            Some(RecallSkipReason::OverBudget {
+                remaining_tokens: 100
+            })
+        );
+        assert!(!plan.candidates[1].selected);
+        assert_eq!(
+            plan.candidates[1].skip_reason,
+            Some(RecallSkipReason::Inactive)
+        );
+        assert!(plan.candidates[2].selected);
+        assert_eq!(plan.candidates[2].skip_reason, None);
+        assert_eq!(plan.candidates[2].score, Some(0.2));
+        assert!(plan.candidates[2].tokens > 0);
+
+        // The plan is the same selection the plain selector returns.
+        assert_eq!(select_recalled_entries(&ranked, 100), plan.selected);
+    }
+
+    #[test]
+    fn recall_plan_reports_the_remaining_budget_on_each_skip() {
+        let first = entry(&"a".repeat(400), MemoryKind::Fact);
+        let second = entry(&"b".repeat(400), MemoryKind::Fact);
+        let ranked = rank_memories(vec![
+            ScoredMemory {
+                entry: &first,
+                score: Some(0.1),
+            },
+            ScoredMemory {
+                entry: &second,
+                score: Some(0.2),
+            },
+        ]);
+        let plan = plan_recalled_entries(&ranked, 60);
+        assert!(plan.selected.is_empty());
+        assert_eq!(
+            plan.candidates[0].skip_reason,
+            Some(RecallSkipReason::OverBudget {
+                remaining_tokens: 60
+            })
+        );
+        assert_eq!(
+            plan.candidates[1].skip_reason,
+            Some(RecallSkipReason::OverBudget {
+                remaining_tokens: 60
+            })
+        );
+    }
+
+    #[test]
+    fn memory_scope_reflects_both_axes() {
+        let workspace_entry = MemoryEntry::new(
+            workspace(),
+            None,
+            None,
+            MemoryKind::Fact,
+            "shared",
+            MemorySource::User,
+        );
+        assert_eq!(workspace_entry.scope(), MemoryScope::Workspace);
+
+        let agent_entry = MemoryEntry::new(
+            workspace(),
+            Some(AgentId::new("agent-1")),
+            None,
+            MemoryKind::Fact,
+            "agent",
+            MemorySource::User,
+        );
+        assert_eq!(agent_entry.scope(), MemoryScope::Agent);
+
+        let conversation_entry = MemoryEntry::new(
+            workspace(),
+            None,
+            Some(ChannelId::new("channel-1")),
+            MemoryKind::Fact,
+            "conversation",
+            MemorySource::User,
+        );
+        assert_eq!(conversation_entry.scope(), MemoryScope::Conversation);
+        assert_eq!(
+            entry("scoped", MemoryKind::Fact).scope(),
+            MemoryScope::AgentInConversation
+        );
     }
 
     #[test]
