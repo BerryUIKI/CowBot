@@ -9,6 +9,7 @@ mod assignments;
 mod bootstrap;
 mod channel_agents;
 mod channels;
+mod compaction_locks;
 mod conversations;
 mod crew_runner;
 mod memory;
@@ -31,6 +32,7 @@ pub use channel_agents::{
     ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
 };
 pub use channels::ChannelService;
+pub use compaction_locks::{CompactionGuard, CompactionLocks};
 pub use conversations::ConversationService;
 pub use crew_runner::CrewRunner;
 pub use memory::{

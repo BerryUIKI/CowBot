@@ -9,7 +9,7 @@ use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     compaction_split, context_usage_state, project_context, CacheUsageSummary, CompactionOutcome,
-    ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
+    CompactionWrite, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextRole,
     ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
     ConversationSettingsUpdate, ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS,
     MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
@@ -28,6 +28,7 @@ use crate::channel_agents::{
     ChannelAgentService, ChannelTurnOptions, ChannelTurnReport, ParticipantCapacity,
 };
 use crate::channels::{normalize_channel_name, ChannelService};
+use crate::compaction_locks::CompactionLocks;
 use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
@@ -37,6 +38,11 @@ const MAX_TITLE_CHARS: usize = 68;
 
 /// Time one router completion may take before the turn falls back.
 const ROUTER_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Time one compaction summary request may take. The per-branch lock is held
+/// for this long at most, so a hung provider cannot block the branch until
+/// the process restarts.
+const COMPACTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Display messages shown to the router.
 const ROUTER_HISTORY_LIMIT: usize = 10;
@@ -77,6 +83,7 @@ pub struct ConversationService {
     channels: ChannelService,
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
+    compaction_locks: Arc<CompactionLocks>,
 }
 
 impl ConversationService {
@@ -88,7 +95,16 @@ impl ConversationService {
             bus,
             workspace_id,
             session_decisions: None,
+            compaction_locks: Arc::new(CompactionLocks::new()),
         }
+    }
+
+    /// Share the process-wide compaction registry with another service
+    /// instance. The desktop and the channel agent service both handle
+    /// conversation turns, so they must contend on the same per-branch locks.
+    pub fn with_compaction_locks(mut self, locks: Arc<CompactionLocks>) -> Self {
+        self.compaction_locks = locks;
+        self
     }
 
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
@@ -662,6 +678,7 @@ impl ConversationService {
                 .filter(|window| *window > 0);
             if let Some(window) = window {
                 let tool_tokens = capacity.map(|capacity| capacity.tool_tokens).unwrap_or(0);
+                let mut compaction_notice = None;
                 if settings.auto_compact
                     && self
                         .branch_crosses_threshold(
@@ -677,11 +694,39 @@ impl ConversationService {
                         )
                         .await?
                 {
-                    let outcome = self
+                    match self
                         .compact_branch(channel, agent, llm.clone(), &settings.model, false)
-                        .await?;
-                    if outcome.compacted {
-                        auto_compacted.push(agent.name.clone());
+                        .await
+                    {
+                        Ok(outcome) => {
+                            if outcome.compacted {
+                                auto_compacted.push(agent.name.clone());
+                            } else if outcome.in_progress {
+                                compaction_notice = Some(
+                                    "its context is being compacted; try again shortly".to_string(),
+                                );
+                            } else if outcome
+                                .reason
+                                .as_deref()
+                                .is_some_and(|reason| reason.contains("invalid sequence numbers"))
+                            {
+                                compaction_notice = Some(
+                                    "its context branch cannot be compacted; start a new \
+                                     conversation or re-import the workspace"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            // Automatic compaction is an optimization. A
+                            // provider or store failure must not abort the
+                            // user's turn; the capacity check below decides.
+                            tracing::warn!(
+                                error = %error,
+                                agent = %agent.name,
+                                "Automatic compaction failed; answering without it"
+                            );
+                        }
                     }
                 }
                 let entries = self
@@ -698,15 +743,16 @@ impl ConversationService {
                 let projection = project_context(system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
                     skipped.push(agent.id.clone());
+                    let notice = match compaction_notice {
+                        Some(detail) => format!("{} was skipped because {}.", agent.name, detail),
+                        None => format!(
+                            "{} was skipped because its context is full. Clear or compact \
+                             its context to include it again.",
+                            agent.name
+                        ),
+                    };
                     self.channels
-                        .post_system_notice(
-                            &channel.id,
-                            &format!(
-                                "{} was skipped because its context is full. Clear or compact \
-                                 its context to include it again.",
-                                agent.name
-                            ),
-                        )
+                        .post_system_notice(&channel.id, &notice)
                         .await?;
                     continue;
                 }
@@ -1288,6 +1334,18 @@ impl ConversationService {
         model: &str,
         announce: bool,
     ) -> CowResult<CompactionOutcome> {
+        // Claim the branch before reading it. The lock covers the model call
+        // and the guarded write, so a second request cannot summarize the
+        // same prefix and then discover the branch moved.
+        let key = (channel.id.clone(), agent.id.clone());
+        let Some(_guard) = self.compaction_locks.try_acquire(key) else {
+            return Ok(CompactionOutcome {
+                in_progress: true,
+                reason: Some("A compaction is already running for this branch.".to_string()),
+                ..CompactionOutcome::default()
+            });
+        };
+
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
@@ -1301,6 +1359,24 @@ impl ConversationService {
             .iter()
             .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
 
+        // The store's renumber uses negative sequences as a staging range.
+        // Reject a branch with non-positive rows before paying for a summary;
+        // the store still guards the write for a cross-process import or edit.
+        if entries.iter().any(|entry| entry.seq <= 0) {
+            return Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before,
+                tokens_after: tokens_before,
+                reason: Some(
+                    "This context branch has invalid sequence numbers; start a new \
+                     conversation or re-import the workspace."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            });
+        }
+
         let split = compaction_split(&active);
         if split == 0 {
             return Ok(CompactionOutcome {
@@ -1308,12 +1384,15 @@ impl ConversationService {
                 summarized_entries: 0,
                 tokens_before,
                 tokens_after: tokens_before,
-                summary: None,
+                reason: Some("There are no older entries to summarize.".to_string()),
+                ..CompactionOutcome::default()
             });
         }
 
         let summarized = &active[..split];
-        let kept = &active[split..];
+        // `compaction_split` guarantees at least one kept entry, so this is
+        // the sequence the summary will occupy after the tail shifts.
+        let cutoff_seq = active[split].seq;
         let transcript = summary_transcript(summarized);
         let request = ChatCompletionRequest {
             model: model.to_string(),
@@ -1330,7 +1409,21 @@ impl ConversationService {
             tools: Vec::new(),
             temperature: Some(0.2),
         };
-        let response = llm.chat_complete(&request).await?;
+        let response = match tokio::time::timeout(COMPACTION_TIMEOUT, llm.chat_complete(&request))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Ok(CompactionOutcome {
+                    compacted: false,
+                    summarized_entries: 0,
+                    tokens_before,
+                    tokens_after: tokens_before,
+                    reason: Some("The summary request timed out; nothing was written.".to_string()),
+                    ..CompactionOutcome::default()
+                });
+            }
+        };
         self.record_compaction_usage(channel, agent, model, &response)
             .await;
 
@@ -1349,49 +1442,78 @@ impl ConversationService {
             agent.id.clone(),
             format!("Summary of the earlier conversation:\n\n{summary_text}"),
         );
-        let kept_tokens = kept
-            .iter()
-            .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
-        let tokens_after = kept_tokens.saturating_add(summary.tokens);
 
         let mut event = ContextEvent::new(
             channel.id.clone(),
             agent.id.clone(),
             ContextEventKind::Compact,
             tokens_before,
-            tokens_after,
+            0,
         );
         event.detail = Some(format!("summarized {} entries", summarized.len()));
         let excluded_ids = summarized
             .iter()
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
-        self.store
-            .compact_context(&summary, &excluded_ids, &event)
+        let write = self
+            .store
+            .compact_context(&summary, &excluded_ids, cutoff_seq, &mut event)
             .await?;
 
-        if announce {
-            self.channels
-                .post_system_notice(
-                    &channel.id,
-                    &format!(
-                        "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
-                         Earlier messages stay visible but are no longer sent to the model.",
-                        summarized.len(),
-                        tokens_before,
-                        tokens_after
-                    ),
-                )
-                .await?;
-        }
+        match write {
+            CompactionWrite::Applied {
+                tokens_before,
+                tokens_after,
+                ..
+            } => {
+                if announce {
+                    self.channels
+                        .post_system_notice(
+                            &channel.id,
+                            &format!(
+                                "Context compacted: {} earlier entries were summarized ({} → {} tokens). \
+                                 Earlier messages stay visible but are no longer sent to the model.",
+                                summarized.len(),
+                                tokens_before,
+                                tokens_after
+                            ),
+                        )
+                        .await?;
+                }
 
-        Ok(CompactionOutcome {
-            compacted: true,
-            summarized_entries: summarized.len() as u32,
-            tokens_before,
-            tokens_after,
-            summary: Some(summary_text),
-        })
+                Ok(CompactionOutcome {
+                    compacted: true,
+                    summarized_entries: summarized.len() as u32,
+                    tokens_before,
+                    tokens_after,
+                    summary: Some(summary_text),
+                    in_progress: false,
+                    reason: None,
+                })
+            }
+            CompactionWrite::Stale => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "The context changed while it was being summarized; nothing was written."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            }),
+            CompactionWrite::Empty => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "The context was cleared while it was being summarized; nothing was written."
+                        .to_string(),
+                ),
+                ..CompactionOutcome::default()
+            }),
+        }
     }
 
     /// Exclude every active entry from future model requests.
@@ -1468,25 +1590,13 @@ impl ConversationService {
                     agent_id.0, channel.name
                 ))
             })?;
-        let entries = self
+        let (cleared, tokens_before) = self
             .store
-            .list_context_entries(&channel.id, &agent.id)
+            .exclude_active_context_entries(&channel.id, &agent.id)
             .await?;
-        let active = entries
-            .iter()
-            .filter(|entry| !entry.excluded)
-            .collect::<Vec<_>>();
-        let tokens_before = active
-            .iter()
-            .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
-        let ids = active
-            .iter()
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
-        if ids.is_empty() {
+        if cleared == 0 {
             return Ok(0);
         }
-        self.store.exclude_context_entries(&ids).await?;
         let event = ContextEvent::new(
             channel.id.clone(),
             agent.id.clone(),
@@ -1505,7 +1615,7 @@ impl ConversationService {
                 ),
             )
             .await?;
-        Ok(ids.len() as u64)
+        Ok(cleared)
     }
 
     async fn conversation_channel(&self, channel_id: &ChannelId) -> CowResult<Channel> {

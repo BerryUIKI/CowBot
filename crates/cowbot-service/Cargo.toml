@@ -21,6 +21,6 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 cowbot-tools = { workspace = true }
 tempfile = { workspace = true }

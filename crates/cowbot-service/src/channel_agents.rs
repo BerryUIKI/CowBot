@@ -16,6 +16,7 @@ use cowbot_store::Store;
 use cowbot_tools::ToolRegistry;
 
 use crate::channels::ChannelService;
+use crate::compaction_locks::CompactionLocks;
 use crate::conversations::ConversationService;
 use crate::memory::MemoryService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
@@ -131,6 +132,13 @@ impl ChannelAgentService {
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions.clone();
         self.conversations = self.conversations.with_session_decisions(decisions);
+        self
+    }
+
+    /// Share the process-wide compaction registry with the desktop's
+    /// conversation service, so both paths contend on the same branch locks.
+    pub fn with_compaction_locks(mut self, locks: Arc<CompactionLocks>) -> Self {
+        self.conversations = self.conversations.with_compaction_locks(locks);
         self
     }
 

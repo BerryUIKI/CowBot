@@ -2,9 +2,9 @@ use cowbot_core::agent::AgentId;
 use cowbot_core::channel::Channel;
 use cowbot_core::channel::ChannelId;
 use cowbot_core::conversation::{
-    ChannelParticipant, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
-    ContextRole, ContextToolCall, ConversationMode, ConversationSettings, ConversationTurn,
-    RouteSource, TurnId,
+    ChannelParticipant, CompactionWrite, ContextEntry, ContextEntryKind, ContextEvent,
+    ContextEventKind, ContextRole, ContextToolCall, ConversationMode, ConversationSettings,
+    ConversationTurn, RouteSource, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
@@ -441,6 +441,9 @@ impl Store {
     }
 
     /// Append one entry, assigning it the next sequence number in its branch.
+    ///
+    /// The returned sequence is not stable across a later compaction, which
+    /// renumbers the kept tail; treat it as ordering, not identity.
     pub async fn append_context_entry(&self, entry: &ContextEntry) -> CowResult<i64> {
         let tool_calls = serialize_tool_calls(entry)?;
         let seq: i64 = sqlx::query_scalar(
@@ -588,34 +591,235 @@ impl Store {
         Ok(())
     }
 
-    /// Apply a compaction atomically: exclude summarized entries, append the
-    /// summary, and record the event.
+    /// Exclude every active entry in one branch.
+    ///
+    /// Returns the affected row count and the pre-clear active token total.
+    /// Updating by branch rather than by a previously read id list keeps a
+    /// compaction that commits concurrently from leaving its new summary
+    /// active after a clear reports success.
+    pub async fn exclude_active_context_entries(
+        &self,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+    ) -> CowResult<(u64, u32)> {
+        let mut transaction = self
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db)?;
+        let tokens_before: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(tokens), 0) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+        )
+        .bind(&channel_id.0)
+        .bind(&agent_id.0)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+        let result = sqlx::query(
+            "UPDATE context_entries SET excluded = 1
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+        )
+        .bind(&channel_id.0)
+        .bind(&agent_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db)?;
+        transaction.commit().await.map_err(db)?;
+        Ok((
+            result.rows_affected(),
+            u32::try_from(tokens_before).unwrap_or(u32::MAX),
+        ))
+    }
+
+    /// Apply a compaction after checking that the branch still matches the
+    /// summarized prefix.
+    ///
+    /// `cutoff_seq` is the sequence of the first entry that must stay active.
+    /// The summarized prefix is excluded, the tail is renumbered one position
+    /// later to free the cutoff, and the summary is inserted at `cutoff_seq`.
+    /// The unique `(channel_id, agent_id, seq)` index makes a plain
+    /// `seq = seq + 1` update fail mid-statement, so the tail is moved through
+    /// negative values first.
     pub async fn compact_context(
         &self,
         summary: &ContextEntry,
         excluded_ids: &[String],
-        event: &ContextEvent,
-    ) -> CowResult<()> {
-        let tool_calls = serialize_tool_calls(summary)?;
-        let mut transaction = self.pool().begin().await.map_err(db)?;
-        for id in excluded_ids {
-            sqlx::query("UPDATE context_entries SET excluded = 1 WHERE id = ?")
-                .bind(id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(db)?;
+        cutoff_seq: i64,
+        event: &mut ContextEvent,
+    ) -> CowResult<CompactionWrite> {
+        if excluded_ids.is_empty() {
+            return Err(CowError::Config(
+                "compaction requires at least one summarized entry".to_string(),
+            ));
         }
+        if cutoff_seq < 1 {
+            return Err(CowError::Config(
+                "compaction cutoff must be a positive sequence number".to_string(),
+            ));
+        }
+
+        let tool_calls = serialize_tool_calls(summary)?;
+        let mut transaction = self
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db)?;
+
+        // Imported packages can carry arbitrary sequence numbers. The
+        // two-phase renumber below uses negative values as a disjoint staging
+        // range, so a non-positive sequence would make it ambiguous.
+        let non_positive: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND seq <= 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+        if non_positive > 0 {
+            transaction.rollback().await.map_err(db)?;
+            return Err(CowError::Config(
+                "cannot compact a branch with non-positive context sequence numbers".to_string(),
+            ));
+        }
+
+        // A clear can remove every row while the summary is being generated.
+        // Report that directly instead of the more general stale message.
+        let active_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+        if active_count == 0 {
+            transaction.rollback().await.map_err(db)?;
+            return Ok(CompactionWrite::Empty);
+        }
+
+        // The service selected `excluded_ids` as every active entry before
+        // the cutoff. If that is no longer true, another compaction or a
+        // clear changed the branch while the model was running.
+        let active_prefix: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0 AND seq < ?",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .bind(cutoff_seq)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+        if active_prefix != excluded_ids.len() as i64 {
+            transaction.rollback().await.map_err(db)?;
+            return Ok(CompactionWrite::Stale);
+        }
+
+        let tokens_before: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(tokens), 0) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+
+        let mut excluded = 0_u64;
+        for id in excluded_ids {
+            let result = sqlx::query(
+                "UPDATE context_entries SET excluded = 1
+                 WHERE id = ? AND channel_id = ? AND agent_id = ? AND excluded = 0",
+            )
+            .bind(id)
+            .bind(&summary.channel_id.0)
+            .bind(&summary.agent_id.0)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db)?;
+            excluded += result.rows_affected();
+        }
+        if excluded != excluded_ids.len() as u64 {
+            transaction.rollback().await.map_err(db)?;
+            return Ok(CompactionWrite::Stale);
+        }
+
+        let cutoff_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND seq = ? AND excluded = 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .bind(cutoff_seq)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+        if cutoff_exists == 0 {
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM context_entries
+                 WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+            )
+            .bind(&summary.channel_id.0)
+            .bind(&summary.agent_id.0)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(db)?;
+            transaction.rollback().await.map_err(db)?;
+            return Ok(if active == 0 {
+                CompactionWrite::Empty
+            } else {
+                CompactionWrite::Stale
+            });
+        }
+
+        // Free the cutoff and shift the tail by one. Negation is injective
+        // and disjoint from the positive sequence space, so neither update
+        // can collide with the unique index.
+        let shifted = sqlx::query(
+            "UPDATE context_entries SET seq = -seq
+             WHERE channel_id = ? AND agent_id = ? AND seq >= ?",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .bind(cutoff_seq)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db)?
+        .rows_affected();
+
+        let restored = sqlx::query(
+            "UPDATE context_entries SET seq = -seq + 1
+             WHERE channel_id = ? AND agent_id = ? AND seq < 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db)?
+        .rows_affected();
+
+        if shifted != restored {
+            transaction.rollback().await.map_err(db)?;
+            return Err(CowError::Storage(
+                "context sequence renumber did not preserve the branch".to_string(),
+            ));
+        }
+
         sqlx::query(
             "INSERT INTO context_entries
                 (id, channel_id, agent_id, author_agent_id, seq, role, kind, content,
                  tool_calls, tool_call_id, excluded, tokens, created_at)
-             SELECT ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
-             FROM context_entries WHERE channel_id = ? AND agent_id = ?",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&summary.id)
         .bind(&summary.channel_id.0)
         .bind(&summary.agent_id.0)
         .bind(summary.author_agent_id.as_ref().map(|agent| &agent.0))
+        .bind(cutoff_seq)
         .bind(summary.role.as_str())
         .bind(summary.kind.as_str())
         .bind(&summary.content)
@@ -624,11 +828,26 @@ impl Store {
         .bind(if summary.excluded { 1i64 } else { 0i64 })
         .bind(i64::from(summary.tokens))
         .bind(summary.created_at.to_rfc3339())
-        .bind(&summary.channel_id.0)
-        .bind(&summary.agent_id.0)
         .execute(&mut *transaction)
         .await
         .map_err(db)?;
+
+        let tokens_after: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(tokens), 0) FROM context_entries
+             WHERE channel_id = ? AND agent_id = ? AND excluded = 0",
+        )
+        .bind(&summary.channel_id.0)
+        .bind(&summary.agent_id.0)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+
+        // Report the branch as it was actually written, not as the service
+        // read it before the model call. Entries appended during the call are
+        // part of both totals and stay after the summary.
+        event.tokens_before = u32::try_from(tokens_before).unwrap_or(u32::MAX);
+        event.tokens_after = u32::try_from(tokens_after).unwrap_or(u32::MAX);
+
         sqlx::query(
             "INSERT INTO context_events
                 (id, channel_id, agent_id, kind, detail, tokens_before, tokens_after, created_at)
@@ -646,7 +865,11 @@ impl Store {
         .await
         .map_err(db)?;
         transaction.commit().await.map_err(db)?;
-        Ok(())
+        Ok(CompactionWrite::Applied {
+            summary_seq: cutoff_seq,
+            tokens_before: event.tokens_before,
+            tokens_after: event.tokens_after,
+        })
     }
 
     /// Mark every branch entry excluded. The rows stay on disk for audit.
