@@ -23,6 +23,8 @@ use cowbot_core::usage::{estimate_tokens, LlmCallKind, LlmCallRecord};
 use cowbot_llm::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, LlmProvider};
 use cowbot_store::Store;
 
+use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
+
 /// How a memory-relevant turn query is truncated before recall.
 const RECALL_QUERY_MAX_CHARS: usize = 500;
 
@@ -368,8 +370,23 @@ impl MemoryService {
         agent_id: &AgentId,
         query: &str,
     ) -> Option<String> {
+        self.recall_for_prompt_memory(channel_id, agent_id, query)
+            .await
+            .map(|recalled| recalled.block)
+    }
+
+    /// The rendered block, its token estimate, and the selected entry ids.
+    ///
+    /// A prompt snapshot records the selection, not only the text, so the
+    /// recall path returns the ids beside the block (ADR-0037).
+    pub(crate) async fn recall_for_prompt_memory(
+        &self,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> Option<RecalledMemory> {
         match self.recall(channel_id, agent_id, query, true).await {
-            Ok(Some(recalled)) => Some(recalled.block),
+            Ok(Some(recalled)) => Some(recalled),
             Ok(None) => None,
             Err(error) => {
                 tracing::warn!(
@@ -585,7 +602,7 @@ impl MemoryService {
                 return Vec::new();
             }
         };
-        self.record_extraction_usage(channel, model, responder, &response)
+        self.record_extraction_usage(channel, model, responder, &request, &response)
             .await;
 
         let Some(content) = response
@@ -659,6 +676,7 @@ impl MemoryService {
         channel: &Channel,
         model: &str,
         responder: Option<&AgentId>,
+        request: &ChatCompletionRequest,
         response: &ChatCompletionResponse,
     ) {
         let mut record = LlmCallRecord::new(LlmCallKind::MemoryExtract, model.to_string());
@@ -670,6 +688,33 @@ impl MemoryService {
             tracing::warn!(
                 error = %error,
                 "Failed to record memory extraction usage"
+            );
+        }
+        // The extraction prompt is a fixed instruction plus a transcript; the
+        // snapshot records both so a human can see what was sent.
+        let snapshots = PromptSnapshotService::new(self.store.clone(), self.workspace_id.clone());
+        let counter = cowbot_llm::token_counter_for_model(&request.model);
+        let slots = request
+            .messages
+            .first()
+            .filter(|message| message.role == cowbot_llm::ChatRole::System)
+            .map(|message| {
+                vec![cowbot_core::prompt::PromptSlot {
+                    name: cowbot_core::prompt::PromptSlotName::Instruction,
+                    content: message.content.clone(),
+                    tokens: counter.count(&message.content),
+                }]
+            })
+            .unwrap_or_default();
+        let context = SnapshotContext::default().with_slots(slots);
+        let snapshot = seal_with_context(
+            cowbot_llm::snapshot_request(&request.model, LlmCallKind::MemoryExtract, request),
+            &context,
+        );
+        if let Err(error) = snapshots.record(&record.id, &snapshot).await {
+            tracing::warn!(
+                error = %error,
+                "Failed to record the memory extraction prompt snapshot"
             );
         }
     }

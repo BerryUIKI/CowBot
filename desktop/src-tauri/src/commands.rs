@@ -20,6 +20,9 @@ use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt::{PromptKind, PromptPlan};
+use cowbot_core::prompt_snapshot::{
+    PromptSnapshotDetail, PromptSnapshotSettings, PromptSnapshotSummary,
+};
 use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
@@ -1706,6 +1709,81 @@ pub async fn get_task_run_context_preview(
         context_window,
         max_output_tokens,
     ))
+}
+
+/// The redacted prompt snapshots recorded for a run, oldest first.
+#[tauri::command]
+pub async fn list_run_prompt_snapshots(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<Vec<PromptSnapshotSummary>, String> {
+    state
+        .client
+        .list_run_prompt_snapshots(&RunId::new(run_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The newest prompt snapshots in the workspace, for the audit view.
+#[tauri::command]
+pub async fn list_recent_prompt_snapshots(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<PromptSnapshotSummary>, String> {
+    state
+        .client
+        .list_recent_prompt_snapshots(limit.unwrap_or(100))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One recorded prompt snapshot, with the call links it belongs to.
+#[tauri::command]
+pub async fn get_llm_prompt_snapshot(
+    state: State<'_, AppState>,
+    call_id: String,
+) -> Result<Option<PromptSnapshotDetail>, String> {
+    state
+        .client
+        .prompt_snapshot(&call_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The workspace prompt-snapshot settings.
+#[tauri::command]
+pub async fn get_prompt_snapshot_settings(
+    state: State<'_, AppState>,
+) -> Result<PromptSnapshotSettings, String> {
+    state
+        .client
+        .prompt_snapshot_settings()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Change whether snapshots are stored and how long they are kept.
+#[tauri::command]
+pub async fn update_prompt_snapshot_settings(
+    state: State<'_, AppState>,
+    enabled: Option<bool>,
+    retention_days: Option<u32>,
+) -> Result<PromptSnapshotSettings, String> {
+    state
+        .client
+        .update_prompt_snapshot_settings(enabled, retention_days)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Delete expired snapshots now and report how many went.
+#[tauri::command]
+pub async fn purge_prompt_snapshots(state: State<'_, AppState>) -> Result<u64, String> {
+    state
+        .client
+        .purge_prompt_snapshots()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

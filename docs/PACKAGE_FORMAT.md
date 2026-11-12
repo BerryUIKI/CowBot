@@ -104,6 +104,11 @@ responder, and authored peer entries, so an imported conversation keeps its
 routing behavior and history; route chips may be absent until the imported
 workspace produces new turns (ADR-0032).
 
+LLM prompt snapshots (`llm_prompt_snapshots`) are device-local audit evidence
+and are never written into a package, not even as a redacted digest. They expire
+on their own retention clock instead (ADR-0037). A package that carries such a
+file is rejected as an unexpected path, like any other path outside this layout.
+
 ## Import semantics (v1)
 
 - The archive is read completely, every path is checked against the v1 layout,

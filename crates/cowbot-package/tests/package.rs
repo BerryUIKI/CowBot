@@ -522,3 +522,98 @@ async fn manifest_checksums_cover_every_content_file() {
         );
     }
 }
+
+/// Rebuild an archive with one extra file, keeping every original entry.
+fn append_zip_entry(bytes: &[u8], path: &str, contents: &[u8]) -> Vec<u8> {
+    let mut source = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut target = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for index in 0..source.len() {
+        let mut file = source.by_index(index).unwrap();
+        let name = file.name().unwrap().to_string();
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buffer).unwrap();
+        target.start_file(name, options).unwrap();
+        std::io::Write::write_all(&mut target, &buffer).unwrap();
+    }
+    target.start_file(path, options).unwrap();
+    std::io::Write::write_all(&mut target, contents).unwrap();
+    target.finish().unwrap().into_inner()
+}
+
+#[tokio::test]
+async fn prompt_snapshots_are_excluded_from_workspace_packages() {
+    use cowbot_core::prompt::PromptRole;
+    use cowbot_core::prompt_snapshot::{LlmPromptSnapshot, SnapshotMessage};
+    use cowbot_core::run::Run;
+    use cowbot_core::usage::{LlmCallKind, LlmCallRecord, ESTIMATE_COUNTER};
+
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let agent = source
+        .list_agents(&workspace.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let task = Task::new("Snapshot task", "Output").assign_to(agent.id.clone());
+    source
+        .create_task(&workspace.id, None, &task)
+        .await
+        .unwrap();
+    let run = Run::new(task.id.clone(), agent.id.clone());
+    source.create_run(&run).await.unwrap();
+    let mut call = LlmCallRecord::new(LlmCallKind::Agent, "mock-model");
+    call.run_id = Some(run.id.clone());
+    call.task_id = Some(task.id.clone());
+    source.record_llm_call(&call).await.unwrap();
+    let snapshot = LlmPromptSnapshot::new(LlmCallKind::Agent, "mock-model")
+        .with_messages(vec![SnapshotMessage::new(
+            PromptRole::System,
+            "SNAPSHOT-ONLY-CONTENT",
+        )])
+        .seal(&ESTIMATE_COUNTER);
+    source
+        .record_prompt_snapshot(&workspace.id, &call.id, &snapshot)
+        .await
+        .unwrap();
+    assert!(source
+        .get_prompt_snapshot(&call.id)
+        .await
+        .unwrap()
+        .is_some());
+
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let manifest = inspect(&bytes).unwrap();
+    assert!(
+        manifest
+            .checksums
+            .keys()
+            .all(|path| !path.contains("prompt")),
+        "no snapshot file may be packaged: {:?}",
+        manifest.checksums.keys().collect::<Vec<_>>()
+    );
+
+    // A package round trip still works, and the target has no snapshots.
+    let target = test_store().await;
+    let summary = import_workspace(&target, &bytes).await.unwrap();
+    assert!(target
+        .list_recent_prompt_snapshots(&summary.workspace_id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_package_carrying_prompt_snapshots_is_rejected() {
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let tampered = append_zip_entry(&bytes, "prompt_snapshots.json", b"[]");
+
+    let target = test_store().await;
+    let result = import_workspace(&target, &tampered).await;
+    assert!(matches!(result, Err(PackageError::UnexpectedFile { .. })));
+    assert!(target.list_workspaces().await.unwrap().is_empty());
+}

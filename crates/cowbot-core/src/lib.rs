@@ -11,6 +11,7 @@ pub mod memory;
 pub mod mention;
 pub mod permission;
 pub mod prompt;
+pub mod prompt_snapshot;
 pub mod risk;
 pub mod run;
 pub mod task;
@@ -64,6 +65,13 @@ pub use permission::{
 pub use prompt::{
     PromptKind, PromptMemory, PromptMessage, PromptPlan, PromptRole, PromptSlot, PromptSlotName,
     PromptTool,
+};
+pub use prompt_snapshot::{
+    clamp_retention_days, LlmPromptSnapshot, PromptSnapshotDetail, PromptSnapshotSettings,
+    PromptSnapshotSummary, SnapshotMessage, SnapshotToolCall,
+    DEFAULT_PROMPT_SNAPSHOT_RETENTION_DAYS, MAX_PROMPT_SNAPSHOT_RETENTION_DAYS,
+    MIN_PROMPT_SNAPSHOT_RETENTION_DAYS, PROMPT_SNAPSHOT_MAX_BYTES,
+    PROMPT_SNAPSHOT_MESSAGE_MAX_CHARS, PROMPT_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use risk::RiskLevel;
 pub use run::{Run, RunId, RunStatus, ToolCallRecord};

@@ -467,13 +467,23 @@ session, human, policy, or system. Approval is a guardrail, not OS isolation:
 the subprocess sandbox runs commands with your user permissions, so treat
 model-generated commands as untrusted.
 
+Settings → Audit also lists **recent recorded prompts**. CowBot stores each LLM
+call's request — the messages, tool schemas, prompt slots, and the memory it
+selected — with credential-shaped content redacted before storage. Set how long
+they are kept (1–3,650 days, default 30) or turn storage off; stored snapshots
+still expire, and **Purge expired now** removes them immediately. A task run's
+**Recorded prompts** action opens the same viewer from task detail. This is not
+the same as **Inspect context**: the inspector rebuilds the *next* request from
+current settings, while a snapshot is the request that was actually sent.
+
 ## Data and backups
 
 - Workspace data: the workspace databases under the app data directory.
 - Model providers, API keys, the onboarding flag, and the workspace registry:
   `config.json` in the same directory (plain text).
 - Backups: use **Export workspace** for a portable package, or copy the database
-  files while CowBot is closed.
+  files while CowBot is closed. Prompt snapshots are device-local audit evidence
+  and are never included in an exported package.
 - Uninstalling the app does not delete your data; remove the app data directory
   manually if you want a clean install.
 

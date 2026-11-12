@@ -34,6 +34,9 @@ import type {
   PermissionRule,
   Project,
   ProjectBranches,
+  PromptSnapshotDetail,
+  PromptSnapshotSettings,
+  PromptSnapshotSummary,
   ProviderProtocol,
   RecalledMemory,
   RuleDecision,
@@ -160,6 +163,46 @@ export function getConversationContextPreview(
 /** Rebuild the first request one task run sent. */
 export function getTaskRunContextPreview(runId: string): Promise<ContextPreview> {
   return invoke<ContextPreview>("get_task_run_context_preview", { runId });
+}
+
+/** The redacted prompt snapshots recorded for a run, oldest first. */
+export function listRunPromptSnapshots(
+  runId: string,
+): Promise<PromptSnapshotSummary[]> {
+  return invoke<PromptSnapshotSummary[]>("list_run_prompt_snapshots", { runId });
+}
+
+/** The newest prompt snapshots in the workspace, for the audit view. */
+export function listRecentPromptSnapshots(
+  limit = 100,
+): Promise<PromptSnapshotSummary[]> {
+  return invoke<PromptSnapshotSummary[]>("list_recent_prompt_snapshots", { limit });
+}
+
+/** One recorded prompt snapshot with the call links it belongs to. */
+export function getLlmPromptSnapshot(
+  callId: string,
+): Promise<PromptSnapshotDetail | null> {
+  return invoke<PromptSnapshotDetail | null>("get_llm_prompt_snapshot", { callId });
+}
+
+export function getPromptSnapshotSettings(): Promise<PromptSnapshotSettings> {
+  return invoke<PromptSnapshotSettings>("get_prompt_snapshot_settings");
+}
+
+export function updatePromptSnapshotSettings(
+  enabled: boolean | null,
+  retentionDays: number | null,
+): Promise<PromptSnapshotSettings> {
+  return invoke<PromptSnapshotSettings>("update_prompt_snapshot_settings", {
+    enabled,
+    retentionDays,
+  });
+}
+
+/** Delete expired snapshots now and report how many went. */
+export function purgePromptSnapshots(): Promise<number> {
+  return invoke<number>("purge_prompt_snapshots");
 }
 
 export function updateConversationSettings(

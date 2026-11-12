@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import ModelProviderSettings from "./ModelProviderSettings";
 import MemorySettings from "./MemorySettings";
+import { PromptSnapshotAuditPanel } from "./PromptSnapshotViewer";
 import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
@@ -826,6 +827,8 @@ export default function SettingsView({
                   ))}
                 </ul>
               )}
+
+              <PromptSnapshotAuditPanel />
             </section>
           ) : null}
 

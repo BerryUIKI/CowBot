@@ -173,6 +173,10 @@ impl AgentInstance {
         );
 
         let tool_definitions = self.tools.definitions_for(&self.profile.tools);
+        let capture_prompts = self
+            .usage_recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.records_prompts());
 
         let mut iterations = 0;
         let max_iters = self.profile.max_iterations;
@@ -200,6 +204,12 @@ impl AgentInstance {
                     call_kind: LlmCallKind::Agent,
                     usage: response.usage.clone(),
                     raw_usage: response.raw_usage.clone(),
+                    // Sealing belongs to the recorder: only it knows the
+                    // workspace settings and the prompt slots the request
+                    // was assembled from.
+                    snapshot: capture_prompts.then(|| {
+                        cowbot_llm::snapshot_request(&self.model, LlmCallKind::Agent, &req)
+                    }),
                 };
                 if let Err(error) = recorder.record_llm_call(&call).await {
                     warn!(

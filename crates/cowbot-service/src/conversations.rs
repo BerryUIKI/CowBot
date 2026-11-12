@@ -19,11 +19,11 @@ use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::mention::resolve_mentions;
-use cowbot_core::prompt::{PromptSlot, PromptSlotName};
+use cowbot_core::prompt::{PromptMemory, PromptSlot, PromptSlotName};
 use cowbot_core::task::{Task, TaskId, TaskSource};
 use cowbot_core::usage::{LlmCallKind, LlmCallRecord, TokenCounter, UsageTotals};
 use cowbot_llm::{
-    token_counter_for_model, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
+    token_counter_for_model, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole,
     LlmProvider,
 };
 use cowbot_store::Store;
@@ -34,7 +34,8 @@ use crate::channel_agents::{
 };
 use crate::channels::{normalize_channel_name, ChannelService};
 use crate::compaction_locks::CompactionLocks;
-use crate::memory::MemoryService;
+use crate::memory::{MemoryService, RecalledMemory};
+use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
 
@@ -457,15 +458,18 @@ impl ConversationService {
             .await?;
         let memory = self
             .memory
-            .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+            .recall_for_prompt_memory(Some(&channel.id), &agent.id, message.content.trim())
             .await;
-        let messages = assemble_conversation_messages(
+        let assembled = assemble_conversation_messages(
             counter.as_ref(),
             &agent,
             &agents,
             &entries,
-            memory.as_deref(),
+            memory.as_ref().map(|memory| memory.block.as_str()),
         );
+        let snapshot_context =
+            snapshot_context_for(&assembled.slots, memory.as_ref(), counter.as_ref());
+        let messages = assembled.messages;
 
         let task = Task::new(
             message.content.trim(),
@@ -510,6 +514,7 @@ impl ConversationService {
                 messages,
                 channel.id.clone(),
                 agent.id.clone(),
+                snapshot_context,
             )
             .await?;
 
@@ -863,9 +868,9 @@ impl ConversationService {
                 .await?;
             let memory = self
                 .memory
-                .recall_for_prompt(Some(&channel.id), &agent.id, message.content.trim())
+                .recall_for_prompt_memory(Some(&channel.id), &agent.id, message.content.trim())
                 .await;
-            let messages = assemble_group_messages(
+            let assembled = assemble_group_messages(
                 counter.as_ref(),
                 agent,
                 &participants,
@@ -873,8 +878,11 @@ impl ConversationService {
                 platform,
                 &agents,
                 &entries,
-                memory.as_deref(),
+                memory.as_ref().map(|memory| memory.block.as_str()),
             );
+            let snapshot_context =
+                snapshot_context_for(&assembled.slots, memory.as_ref(), counter.as_ref());
+            let messages = assembled.messages;
             let task = Task::new(
                 message.content.trim(),
                 "A concise reply addressed to the user in this group conversation.",
@@ -895,6 +903,7 @@ impl ConversationService {
                     messages,
                     channel.id.clone(),
                     agent.id.clone(),
+                    snapshot_context,
                 )
                 .await?;
             tasks.push(task.id);
@@ -1212,7 +1221,7 @@ impl ConversationService {
             }
         };
 
-        self.record_router_usage(channel, model, &call_id, &response)
+        self.record_router_usage(channel, model, &call_id, &request, &response)
             .await;
 
         let Some(content) = response
@@ -1262,6 +1271,7 @@ impl ConversationService {
         channel: &Channel,
         model: &str,
         call_id: &str,
+        request: &ChatCompletionRequest,
         response: &ChatCompletionResponse,
     ) {
         let mut record = LlmCallRecord::new(LlmCallKind::Router, model.to_string());
@@ -1272,6 +1282,13 @@ impl ConversationService {
         if let Err(error) = self.store.record_llm_call(&record).await {
             tracing::warn!(error = %error, "Failed to record router usage");
         }
+        self.record_prompt_snapshot(
+            &record.id,
+            request,
+            LlmCallKind::Router,
+            instruction_context(request),
+        )
+        .await;
     }
 
     async fn render_router_history(
@@ -1463,7 +1480,7 @@ impl ConversationService {
                 });
             }
         };
-        self.record_compaction_usage(channel, agent, model, &response)
+        self.record_compaction_usage(channel, agent, model, &request, &response)
             .await;
 
         let summary_text = response
@@ -1709,6 +1726,7 @@ impl ConversationService {
         channel: &Channel,
         agent: &AgentProfile,
         model: &str,
+        request: &ChatCompletionRequest,
         response: &cowbot_llm::ChatCompletionResponse,
     ) {
         let mut record = LlmCallRecord::new(LlmCallKind::Compact, model.to_string());
@@ -1718,6 +1736,32 @@ impl ConversationService {
         record.raw_usage = response.raw_usage.clone();
         if let Err(error) = self.store.record_llm_call(&record).await {
             tracing::warn!(error = %error, "Failed to record compaction usage");
+        }
+        self.record_prompt_snapshot(
+            &record.id,
+            request,
+            LlmCallKind::Compact,
+            instruction_context(request),
+        )
+        .await;
+    }
+
+    /// Store the sealed request behind one call, logging and continuing on
+    /// failure. Usage is already persisted by the caller.
+    async fn record_prompt_snapshot(
+        &self,
+        llm_call_id: &str,
+        request: &ChatCompletionRequest,
+        call_kind: LlmCallKind,
+        context: SnapshotContext,
+    ) {
+        let snapshots = PromptSnapshotService::new(self.store.clone(), self.workspace_id.clone());
+        let snapshot = seal_with_context(
+            cowbot_llm::snapshot_request(&request.model, call_kind, request),
+            &context,
+        );
+        if let Err(error) = snapshots.record(llm_call_id, &snapshot).await {
+            tracing::warn!(error = %error, "Failed to record a prompt snapshot");
         }
     }
 
@@ -1992,7 +2036,7 @@ pub(crate) fn assemble_group_messages(
     agents: &[AgentProfile],
     entries: &[ContextEntry],
     memory: Option<&str>,
-) -> Vec<ChatMessage> {
+) -> AssembledRequest {
     let prompt = group_system_prompt(
         counter,
         agent,
@@ -2011,7 +2055,10 @@ pub(crate) fn assemble_group_messages(
             .filter(|entry| !entry.excluded)
             .map(entry_to_message),
     );
-    messages
+    AssembledRequest {
+        messages,
+        slots: prompt.slots,
+    }
 }
 
 /// Outcomes of one group drain, in settle order.
@@ -2051,6 +2098,16 @@ pub(crate) fn conversation_system_prompt(
     writer.finish()
 }
 
+/// A rendered model request and the named system-prompt slots behind it.
+///
+/// The slots travel with the request so a prompt snapshot can record what the
+/// system prompt was assembled from, not only its finished text (ADR-0037).
+#[derive(Debug, Clone)]
+pub(crate) struct AssembledRequest {
+    pub messages: Vec<ChatMessage>,
+    pub slots: Vec<PromptSlot>,
+}
+
 /// Assemble the model request from the conversation's active branch.
 ///
 /// The order is deterministic: system prompt first, then entries by sequence.
@@ -2060,7 +2117,7 @@ pub(crate) fn assemble_conversation_messages(
     agents: &[AgentProfile],
     entries: &[ContextEntry],
     memory: Option<&str>,
-) -> Vec<ChatMessage> {
+) -> AssembledRequest {
     let prompt = conversation_system_prompt(counter, agent, agents);
     let mut messages = vec![ChatMessage::system(prompt.text)];
     if let Some(memory) = memory.filter(|memory| !memory.trim().is_empty()) {
@@ -2072,7 +2129,50 @@ pub(crate) fn assemble_conversation_messages(
             .filter(|entry| !entry.excluded)
             .map(entry_to_message),
     );
-    messages
+    AssembledRequest {
+        messages,
+        slots: prompt.slots,
+    }
+}
+
+/// What a prompt snapshot records beside the finished request.
+///
+/// The slot names, their contents, and the memory entry ids are lost once the
+/// messages are assembled, so the turn captures them here (ADR-0037).
+fn snapshot_context_for(
+    slots: &[PromptSlot],
+    recalled: Option<&RecalledMemory>,
+    counter: &dyn TokenCounter,
+) -> SnapshotContext {
+    let memory = recalled.map(|recalled| PromptMemory {
+        block: recalled.block.clone(),
+        tokens: counter.count_message(&recalled.block),
+    });
+    let selected = recalled
+        .map(|recalled| recalled.entry_ids.clone())
+        .unwrap_or_default();
+    SnapshotContext::default()
+        .with_slots(slots.to_vec())
+        .with_memory(memory, selected)
+}
+
+/// The fixed system prompt of a router, compaction, or extraction call as one
+/// named slot, so the snapshot explains a prompt that was not assembled from
+/// agent and platform slots.
+fn instruction_context(request: &ChatCompletionRequest) -> SnapshotContext {
+    let Some(system) = request
+        .messages
+        .first()
+        .filter(|message| message.role == ChatRole::System)
+    else {
+        return SnapshotContext::default();
+    };
+    let counter = token_counter_for_model(&request.model);
+    SnapshotContext::default().with_slots(vec![PromptSlot {
+        name: PromptSlotName::Instruction,
+        content: system.content.clone(),
+        tokens: counter.count(&system.content),
+    }])
 }
 
 fn entry_to_message(entry: &ContextEntry) -> ChatMessage {
@@ -2241,6 +2341,9 @@ mod tests {
             None,
         );
 
+        let first = first.messages;
+        let second = second.messages;
+
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(second.iter()) {
             assert_eq!(left.role, right.role);
@@ -2264,7 +2367,8 @@ mod tests {
             std::slice::from_ref(&agent),
             &entries,
             Some(cowbot_core::memory::MEMORY_BLOCK_HEADER),
-        );
+        )
+        .messages;
         assert_eq!(messages[0].role, ChatRole::System);
         assert_eq!(
             messages[1].content,
@@ -2278,7 +2382,8 @@ mod tests {
             std::slice::from_ref(&agent),
             &entries,
             Some("  "),
-        );
+        )
+        .messages;
         assert_eq!(
             blank[1].content, "question",
             "a blank memory block adds no message"
@@ -2305,7 +2410,8 @@ mod tests {
             std::slice::from_ref(&agent),
             &[assistant, tool],
             None,
-        );
+        )
+        .messages;
         assert_eq!(
             messages[1].tool_calls.as_ref().unwrap()[0].name,
             "read_file"
