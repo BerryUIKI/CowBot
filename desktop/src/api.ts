@@ -12,6 +12,8 @@ import type {
   Channel,
   ChannelMessage,
   ClientSession,
+  CommandInfo,
+  CommandParseResult,
   CompactionOutcome,
   ContextPreview,
   ConversationContext,
@@ -628,6 +630,14 @@ export function createWorkspace(name: string): Promise<void> {
 
 export function listProjects(): Promise<Project[]> {
   return invoke<Project[]>("list_projects");
+}
+
+export function listCommands(): Promise<CommandInfo[]> {
+  return invoke<CommandInfo[]>("list_commands");
+}
+
+export function parseCommand(input: string): Promise<CommandParseResult> {
+  return invoke<CommandParseResult>("parse_command", { input });
 }
 
 export function addProject(path: string): Promise<Project[]> {

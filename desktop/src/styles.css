@@ -4649,6 +4649,63 @@ button {
   font-size: 11px;
 }
 
+.command-suggestions {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 8px;
+  z-index: 36;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(460px, calc(100vw - 48px));
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 10px;
+  background: var(--panel, #1b1a18);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+.command-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--paper-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-option.is-active {
+  background: color-mix(in srgb, var(--brass) 14%, transparent);
+  color: var(--paper);
+}
+
+.command-usage {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--paper);
+}
+
+.command-summary {
+  color: var(--paper-faint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.command-hint {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--paper-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .context-hint {
   margin: 0;
   color: var(--paper-faint);

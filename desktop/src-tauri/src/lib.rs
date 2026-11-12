@@ -311,6 +311,8 @@ pub fn run() {
             commands::list_project_branches,
             commands::export_workspace,
             commands::import_workspace,
+            commands::list_commands,
+            commands::parse_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CowBot");
