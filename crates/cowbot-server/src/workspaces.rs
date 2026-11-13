@@ -29,6 +29,14 @@ pub struct WorkspaceBody {
     pub role: Role,
 }
 
+/// A workspace in the sign-in answer, before any route has run.
+#[derive(Debug, Serialize)]
+pub struct SignInWorkspaceBody {
+    pub id: String,
+    pub name: String,
+    pub role: Role,
+}
+
 /// Every workspace the caller belongs to.
 pub async fn list_workspaces(
     State(state): State<AppState>,
@@ -492,7 +500,7 @@ async fn ensure_not_last_owner(
 ///
 /// The source is `human` because an authenticated person made the request; a
 /// future API-token route would record the token instead.
-async fn audit(
+pub(crate) async fn audit(
     state: &AppState,
     workspace_id: &WorkspaceId,
     actor: &str,

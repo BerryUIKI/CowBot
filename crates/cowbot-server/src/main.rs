@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Change it from POST /api/v1/auth/password after signing in.");
     }
 
-    let state = AppState::new(store, auth);
+    let state = AppState::new(store, auth, cowbot_bus::EventBus::default_bus());
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     tracing::info!(
         address = %config.address,

@@ -75,6 +75,7 @@ impl From<&cowbot_core::identity::User> for UserBody {
 pub struct WorkspaceBody {
     pub id: String,
     pub name: String,
+    pub created_at: DateTime<Utc>,
     pub role: Role,
 }
 
@@ -152,6 +153,7 @@ async fn workspaces_for(
         result.push(WorkspaceBody {
             id: workspace.id.0.clone(),
             name: workspace.name,
+            created_at: workspace.created_at,
             role: membership.role,
         });
     }

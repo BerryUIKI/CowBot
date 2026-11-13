@@ -11,9 +11,13 @@
 
 pub mod api;
 pub mod auth;
+pub mod channels;
 pub mod config;
 pub mod error;
 pub mod router;
+pub mod stream;
+pub mod tasks;
+pub mod tokens;
 pub mod workspaces;
 
 pub use auth::{AuthService, AuthenticatedUser, IssuedSession};

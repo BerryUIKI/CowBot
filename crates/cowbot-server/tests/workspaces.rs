@@ -33,7 +33,11 @@ async fn fixture() -> Fixture {
     };
     let auth = Arc::new(AuthService::new(store.clone(), config));
     auth.bootstrap(OWNER_PASSWORD).await.unwrap();
-    let state = AppState::new(store.clone(), auth.clone());
+    let state = AppState::new(
+        store.clone(),
+        auth.clone(),
+        cowbot_bus::EventBus::default_bus(),
+    );
     let router = app(state);
 
     let (_, signed_in) = call(

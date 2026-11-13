@@ -24,7 +24,7 @@ async fn test_app() -> (Router, Store) {
     };
     let auth = Arc::new(AuthService::new(store.clone(), config));
     auth.bootstrap(PASSWORD).await.unwrap();
-    let state = AppState::new(store.clone(), auth);
+    let state = AppState::new(store.clone(), auth, cowbot_bus::EventBus::default_bus());
     (app(state), store)
 }
 
@@ -230,7 +230,7 @@ async fn a_short_password_is_refused_at_bootstrap_and_at_change() {
 
     let auth = Arc::new(AuthService::new(store.clone(), config));
     auth.bootstrap(PASSWORD).await.unwrap();
-    let state = AppState::new(store, auth);
+    let state = AppState::new(store, auth, cowbot_bus::EventBus::default_bus());
     let router = app(state);
     let (_, signed_in) = call(
         router.clone(),

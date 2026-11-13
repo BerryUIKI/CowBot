@@ -372,6 +372,17 @@ impl Store {
         row.map(RunRow::into_domain).transpose()
     }
 
+    /// The workspace that owns a task.
+    pub async fn task_workspace(&self, id: &TaskId) -> CowResult<Option<WorkspaceId>> {
+        let workspace_id: Option<String> =
+            sqlx::query_scalar("SELECT workspace_id FROM tasks WHERE id = ?")
+                .bind(&id.0)
+                .fetch_optional(self.pool())
+                .await
+                .map_err(db)?;
+        Ok(workspace_id.map(WorkspaceId))
+    }
+
     pub async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>> {
         let rows = sqlx::query_as::<_, RunRow>(
             "SELECT id, task_id, agent_id, status, started_at, finished_at, agent_profile

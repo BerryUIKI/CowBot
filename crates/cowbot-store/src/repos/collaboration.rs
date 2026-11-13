@@ -128,6 +128,17 @@ impl Store {
         Ok(count > 0)
     }
 
+    /// The workspace that owns a channel.
+    pub async fn channel_workspace(&self, id: &ChannelId) -> CowResult<Option<WorkspaceId>> {
+        let id: Option<String> =
+            sqlx::query_scalar("SELECT workspace_id FROM channels WHERE id = ?")
+                .bind(&id.0)
+                .fetch_optional(self.pool())
+                .await
+                .map_err(db)?;
+        Ok(id.map(WorkspaceId))
+    }
+
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         let rows = sqlx::query_as::<_, ChannelRow>(
             "SELECT id, name, topic, created_at, agent_id, pinned, kind FROM channels

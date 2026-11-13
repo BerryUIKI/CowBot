@@ -1088,6 +1088,17 @@ impl Client for LocalClient {
             .await
     }
 
+    async fn request_task_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree> {
+        self.request_worktree(task_id, project_id, project_path, base_branch)
+            .await
+    }
+
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>> {
         self.store.list_agents(&self.session.workspace.id).await
     }

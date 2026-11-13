@@ -16,10 +16,17 @@ cowbot-tools = { workspace = true }
 cowbot-package = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = "0.30"
+futures = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+cowbot-server = { workspace = true }
+cowbot-bus = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 cowbot-llm = { workspace = true }
