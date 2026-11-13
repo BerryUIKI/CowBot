@@ -4,7 +4,8 @@ Start with the root [README](../README.md) for implemented functionality and a r
 
 | Audience | Guide |
 | --- | --- |
-| Users | [Desktop user guide](USER_GUIDE.md) |
+| Users | [Desktop user guide](USER_GUIDE.md) and [what works today](LIMITATIONS.md) |
+| Operators | [Security, trust boundaries, and known gaps](../SECURITY.md) |
 | Developers | [Development and troubleshooting](DEVELOPMENT.md) |
 | Contributors | [Contributing](../CONTRIBUTING.md) |
 | Collaborators and reviewers | [Collaboration workflow](COLLABORATION.md) |
@@ -12,6 +13,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 | Release history | [Release notes](releases/README.md) |
 | Community | [Code of Conduct](../CODE_OF_CONDUCT.md) and [security reporting](../SECURITY.md) |
 | Product contributors | [PRD](PRD.md) and [roadmap](ROADMAP.md) |
+| Model providers | [Provider capabilities](PROVIDER_CAPABILITIES.md) |
 | Architecture contributors | [Target architecture](ARCHITECTURE.md) and [decision records](ADR/README.md) |
 | Context management (implemented) | [M1 usage accounting plan](plans/M1-usage-accounting.md), [M2 conversations and context plan](plans/M2-conversations-and-context.md), [ADR-0029](ADR/0029-token-usage-accounting.md), and [ADR-0030](ADR/0030-conversation-sessions-and-context.md) |
 | Group conversations and routing (implemented) | [M3 group conversations and routing plan](plans/M3-group-conversations-and-routing.md) and [ADR-0032](ADR/0032-group-conversations-and-routing.md) |

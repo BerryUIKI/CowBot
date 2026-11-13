@@ -649,11 +649,15 @@ reporting, see [SECURITY.md](../SECURITY.md).
 
 ## Known limitations in 0.1.x
 
+The [limitations page](LIMITATIONS.md) is the full, current account of what
+works, what does not, and which behaviours are deliberate. This section is the
+short version for the version you are running.
+
 - Local/offline single-user mode only: no server, remote sessions, or
   multi-user workspaces.
 - Channel answers are one turn per addressed agent: no threads as conversation
-  scope, no proactive agent replies to unmentioned messages in group channels,
-  and no streaming.
+  scope, and no proactive agent replies to unmentioned messages in group
+  channels.
 - HTML previews cannot reach the network, external images, or the app, and a
   button inside one cannot send a message back to the agent yet. Reply in the
   composer after using the preview.
@@ -668,8 +672,8 @@ reporting, see [SECURITY.md](../SECURITY.md).
   instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
-- No streaming responses, retries, or rate limiting. Token usage is recorded per
-  model call, but there are no cost or billing views.
+- No retries or rate limiting, and no cost or billing views. Token usage is
+  recorded per model call.
 - Context occupancy and compaction use a model-aware token count: exact for
   the OpenAI-compatible families CowBot ships a tokenizer for, and a labelled
   character estimate for every other model, including Claude, DeepSeek, and

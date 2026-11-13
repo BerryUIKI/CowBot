@@ -1,20 +1,135 @@
 # Security policy
 
-## Current status and trust boundaries
+CowBot is an early-development local runtime with a CLI and a desktop shell.
+This page states the assets it protects, where the trust boundaries are, what is
+known to be missing, and what an operator must do before trusting it with real
+work. It replaces the shorter status note of earlier releases without changing
+the reporting instructions.
 
-CowBot is an early-development local runtime with a CLI and an incremental desktop shell. No production-hardening guarantee, supported-version matrix, or dedicated security response SLA is established. Reports against the current source are welcome; older versions may require an upgrade rather than a backport.
+**Applies to:** CowBot 0.1.9 and the `dev` branch at the time of writing.
 
-- The subprocess backend executes commands as the current host user. It is not a container, virtual machine, or OS isolation boundary.
-- Timeouts and returned-output truncation do not bound total memory use, prevent network access, or guarantee termination of every descendant process.
-- CLI file tools are unrestricted. The optional library base path joins paths but does not enforce traversal or symlink containment.
-- CLI crew execution gates tool calls through persisted approval policy (default `ask`). Policy is a decision layer, not OS isolation. Direct library use can omit the optional tool gate; `trusted` deliberately permits broader execution. Review policy configuration before using a live model.
-- Commands inherit the environment. Prompts, file content, and tool outputs can be sent to the configured model endpoint. Console/debug logs may contain sensitive task and tool data.
-- Provider credentials, endpoint trust, and hosted-service data retention must be managed by the operator.
+## Assets
 
-Run live tasks only in a disposable environment with restricted OS permissions and no valuable files or credentials. Treat model output as untrusted input. SQLite stores local tasks, messages, runs, tool calls, and audit data; protect database files and backups. Container/WASM isolation and remote authentication remain future work.
+| Asset | Where it lives | Who can reach it |
+| --- | --- | --- |
+| Workspace data — channels, conversations, context branches, notes, memory | The SQLite database in the app data directory | Your OS user; anything running as you |
+| Task and tool-call history, audit events, prompt snapshots | The same database | Your OS user; anything running as you |
+| Provider credentials | Environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...) and the desktop's `config.json` | Your OS user; the desktop backend |
+| Workspace packages (`.cowpkg`) | Wherever you export them | Anyone who can read the file |
+| Model traffic | In flight to the configured endpoint | The endpoint operator, and anyone on the path to it |
+| The device itself | Files, processes, network | The subprocess sandbox runs as you |
+
+The database is the whole product state. It is not encrypted at rest, it is not
+authenticated, and it is copied verbatim by `.cowpkg` export minus the
+device-local and credential data described below.
+
+## Trust boundaries
+
+```
++----------------------- your OS user ------------------------+
+|                                                             |
+|  Desktop UI  <--IPC-->  Tauri backend  <---> SQLite         |
+|                              |                              |
+|                              v                              |
+|                    cowbot-service (approvals, runtime)      |
+|                              |                              |
+|                    +---------+---------+                    |
+|                    |                   |                    |
+|                    v                   v                    |
+|            subprocess sandbox    model provider HTTP        |
+|            (your permissions)    (leaves the machine)       |
++-------------------------------------------------------------+
+```
+
+1. **The UI is untrusted input to the backend.** Model output is rendered as
+   Markdown with sanitized inline HTML; `html` code blocks render inside a
+   sandboxed iframe. The frontend never touches SQLite or `cowbot-service`.
+2. **The sandbox is not an isolation boundary.** A tool call runs a subprocess
+   as your user. Approval policy decides *whether* a call runs; it does not
+   confine what the call can do once it runs.
+3. **The model endpoint is outside your trust boundary.** Everything in the
+   prompt — your messages, recalled memory, notes, file contents, tool output —
+   leaves the machine when you use a hosted provider. A local runtime such as
+   Ollama keeps it local, but CowBot cannot verify that a URL is local.
+4. **Credentials never cross back to the UI.** The backend owns API keys; a
+   command that returns a provider reports only whether a key is present.
+5. **Prompt snapshots are device-local.** They are sealed, redacted, and never
+   written into a workspace package.
+
+## Authentication and session model
+
+Today there is **no authentication**. The desktop auto-creates one local user
+and one workspace on first open, and the CLI does the same. There are no
+sessions to steal because there is no login, and no service listening on a
+socket to reach.
+
+Phase 2 (self-hosted team mode) is planned to add a server, accounts,
+invitations, API tokens, and multi-user workspaces. Those types exist in
+`cowbot-core` and are unused by the local runtime. Until that ships, do not
+expose a CowBot workspace to another person or another machine and assume it is
+protected.
+
+## Known gaps
+
+| Gap | Impact | Plan |
+| --- | --- | --- |
+| Subprocess sandbox is not OS isolation | A tool call can read, write, and execute anything you can | Isolated backends (Docker, WASM) — Phase 3 |
+| File tools join against a base path without traversal containment | A crafted path can reach outside the workspace directory | Symlink- and traversal-safe path resolution |
+| No bound on sandbox memory, network, or descendant processes | A runaway or hostile command can exhaust the machine | Resource limits alongside the isolated backends |
+| Database is unencrypted | Anyone who reads the file reads the whole workspace | Encrypted-at-rest option; relies on OS disk encryption today |
+| Credentials sit in `config.json` and the environment | Any process running as you can read them | OS keychain integration |
+| No authentication or sessions | Local only; no safe way to share a workspace | Phase 2 server with accounts and API tokens |
+| Prompt and tool output may appear in logs | Sensitive task data can reach console or debug output | Structured redacted logging |
+| No prompt-cache or cost control per agent | A live model can spend without a per-agent budget | Per-assignment budgets already exist; per-agent spend caps planned |
+
+The [limitations page](LIMITATIONS.md) covers the functional gaps; this table
+covers the ones with a security consequence.
+
+## Operational checklist
+
+### Running locally
+
+- [ ] Keep the database and any `.cowpkg` exports on an encrypted disk.
+- [ ] Set API keys in the environment, not in shell history or a shared file.
+- [ ] Prefer `ask` or `accept-edits` approval for a live model; `trusted` runs
+      every tool call.
+- [ ] Review the workspace permission rules and session decisions before a long
+      unattended run.
+- [ ] Run tasks that execute code in a disposable directory with no valuable
+      files or credentials.
+- [ ] Back up the database before opening it with a new build; migrations are
+      forward-only.
+- [ ] Turn off prompt snapshot capture, or set a short retention, if the content
+      it seals is more sensitive than the usage data you need.
+
+### Before any future self-hosted deployment
+
+- [ ] Treat every preceding item as still required.
+- [ ] Do not expose the server beyond localhost until accounts and auth land.
+- [ ] Terminate TLS in front of the server; CowBot will not provide it.
+- [ ] Decide whether model traffic may leave the network; a hosted provider
+      sends prompts off-site.
+- [ ] Give the process a dedicated OS user with no access to unrelated files.
 
 ## Reporting a vulnerability
 
-Do not post exploit details, credentials, or private data in a public issue. Use GitHub's private vulnerability reporting **if enabled** on the repository's [Security page](https://github.com/BerryUIKI/CowBot/security). If it is unavailable, open a public issue asking maintainers to establish a private reporting channel, without including vulnerability details. No dedicated security email is currently published.
+Do not post exploit details, credentials, or private data in a public issue. Use
+GitHub's private vulnerability reporting **if enabled** on the repository's
+[Security page](https://github.com/BerryUIKI/CowBot/security). If it is
+unavailable, open a public issue asking maintainers to establish a private
+reporting channel, without including vulnerability details. No dedicated
+security email is currently published.
 
-Once a private channel is available, include the affected revision, platform, minimal reproduction, expected and observed behavior, impact, and any suggested mitigation. Use synthetic data and redact secrets. Maintainers should acknowledge the report, coordinate a fix and disclosure with the reporter, and avoid publishing details before a mitigation is ready. Response timing depends on maintainer availability.
+Once a private channel is available, include the affected revision, platform,
+minimal reproduction, expected and observed behavior, impact, and any suggested
+mitigation. Use synthetic data and redact secrets. Maintainers should
+acknowledge the report, coordinate a fix and disclosure with the reporter, and
+avoid publishing details before a mitigation is ready. Response timing depends
+on maintainer availability.
+
+## Supported versions
+
+Reports against the current release and the `dev` branch are welcome. Fixes land
+on `dev` and ship in the next release; older releases may require an upgrade
+rather than a backport. There is no long-term support branch and no support
+window yet.
