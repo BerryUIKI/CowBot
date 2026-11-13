@@ -11,7 +11,7 @@ import type { TurnTarget } from "./TurnTarget";
  *
  * Every variant except [`TurnEvent::TurnStarted`] carries the turn id, and
  * [`TurnEvent::is_terminal`] marks the two that end it. The final message is
- * persisted before a terminal event is published (ADR-0039).
+ * persisted before a terminal event is published (ADR-0041).
  */
 export type TurnEvent = { "type": "turn_started", turn_id: TurnId, target: TurnTarget, 
 /**
