@@ -24,6 +24,7 @@
   <a href="#what-works-today">Features</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="docs/LIMITATIONS.md">Limitations</a> ·
   <a href="assets/README.md">Brand assets</a>
 </p>
 
@@ -231,6 +232,9 @@ Start with the [documentation index](docs/README.md), [developer guide](docs/DEV
 | [Product requirements](docs/PRD.md) | Users, workflows, and product scope |
 | [Architecture](docs/ARCHITECTURE.md) | Functional domains and system design |
 | [Roadmap](docs/ROADMAP.md) | Local MVP → self-hosted teams → ecosystem extensions |
+| [Limitations](docs/LIMITATIONS.md) | What works, what does not, and deliberate surprises |
+| [Security](SECURITY.md) | Assets, trust boundaries, known gaps, and an operator checklist |
+| [Provider capabilities](docs/PROVIDER_CAPABILITIES.md) | Protocol matrix across Chat Completions, Messages, and Responses |
 | [Architecture decisions](docs/ADR) | Recorded design decisions and tradeoffs |
 | [Template format](docs/TEMPLATE_FORMAT.md) | Agent and team template schema |
 | [Design references](docs/REFERENCES.md) | External references informing the platform |
