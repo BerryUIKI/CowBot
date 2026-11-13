@@ -4606,6 +4606,37 @@ button {
   font-size: 12px;
 }
 
+/* Muting keeps a participant in the roster, so it reads as a list, not a
+   removal control. */
+.context-mute {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--paper-dim);
+}
+
+.context-mute-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.context-mute-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.context-mute-item:has(input:checked) {
+  border-color: var(--danger, #b3553d);
+  color: var(--paper-faint);
+  text-decoration: line-through;
+}
+
 .mention-suggestions {
   position: absolute;
   bottom: calc(100% + 10px);

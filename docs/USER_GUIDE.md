@@ -240,11 +240,24 @@ from templates; a standalone agent editor is not part of this release.
   deleted, compacted, and cleared like other sidebar rows.
 - **Group routing** — in a group conversation, `@Agent` addresses that
   participant and `@team` (also `@all`, `@everyone`, `@here`) addresses every
-  participant; names outside the group are rejected with a notice. A message
-  that addresses nobody goes to the default responder. With routing enabled,
-  the conversation's model picks up to three participants first and falls back
-  to the default responder when it cannot. Type `@` in the composer to open a
-  participant list: arrow keys move, Enter or Tab inserts, and Escape closes it.
+  participant; names outside the group are rejected with a notice. A mention
+  always wins. When a message addresses nobody, the conversation's **routing
+  mode** in the context popover decides: **Default responder** hands it to the
+  stored default responder, and if **Route unaddressed messages with the
+  model** is on, the conversation's model picks up to three participants first;
+  **Rotation** gives the turn to the next participant after the last speaker in
+  roster order, without a model call; **Default responder only** never asks the
+  model. Type `@` in the composer to open a participant list: arrow keys move,
+  Enter or Tab inserts, and Escape closes it. If a full roster fills up, the
+  full participant is skipped and the rest of the turn continues (ADR-0032).
+- **Muting and reply cleanup** — the context popover's Routing section lists
+  each participant with a **mute** toggle. A muted participant stays in the
+  roster and keeps receiving messages in its own branch, but is never picked to
+  answer; muting everyone leaves the message unanswered with a notice. **Strip
+  speaker labels and cross-talk** (on by default) removes a leading `Name:`
+  prefix and cuts a reply where another participant appears to have started
+  speaking, so a model that ignores the `[Name]` convention cannot put words in
+  another agent's mouth (ADR-0042).
 - **Channels** — group rooms share the **Chats** list with agent chats and are
   marked with their channel avatar. Create one with **New channel** or the
   **+** button, post messages, and follow the timeline. Names
@@ -395,12 +408,14 @@ or compacting the context never deletes messages.
   changes recall statistics or the conversation, so it is safe to use while
   checking why an agent ignored a remembered fact.
 - Each user message in a group gets an **Answered by** line under it, showing
-  whether mentions, routing, or the default responder chose the responders,
+  whether a mention, the model router, the rotation, or the default responder
+  chose the responders,
   which participants replied, and any failures or skips. Open **Routing** for
   the selected roster, unmatched names, the router's reason, and outcome counts.
   These details survive a restart because the route is stored with the message.
-- A message that addresses nobody in a group with no default responder stays
-  unanswered; the timeline shows a short note instead of inventing an agent.
+- A message that addresses nobody in a group with no default responder, or with
+  every participant muted, stays unanswered; the timeline shows a short note
+  instead of inventing an agent.
 - The fixed model is recorded when the conversation is created; changing the
   active provider in Settings does not switch existing conversations. A
   conversation whose provider was deleted falls back to the active provider

@@ -7,6 +7,7 @@ import type {
   CacheUsageSummary,
   ConversationContext,
   ConversationParticipantView,
+  RoutingMode,
 } from "./types";
 
 interface ContextMeterProps {
@@ -20,6 +21,9 @@ interface ContextMeterProps {
   onThresholdChange: (threshold: number) => void;
   onRouterChange: (enabled: boolean) => void;
   onDefaultResponderChange: (agentId: string) => void;
+  onRoutingModeChange: (mode: RoutingMode) => void;
+  onMutedChange: (agentIds: string[]) => void;
+  onReplyCleanupChange: (enabled: boolean) => void;
   onMemoryChanged: () => void;
   onNewConversation: () => void;
   /** Open the read-only prompt and recall inspector for one participant. */
@@ -160,6 +164,9 @@ export default function ContextMeter({
   onThresholdChange,
   onRouterChange,
   onDefaultResponderChange,
+  onRoutingModeChange,
+  onMutedChange,
+  onReplyCleanupChange,
   onMemoryChanged,
   onNewConversation,
   onInspect,
@@ -512,14 +519,76 @@ export default function ContextMeter({
             {group ? (
               <div className="context-routing">
                 <h4>Routing</h4>
+                <label className="context-default-responder">
+                  <span>Who answers an unaddressed message</span>
+                  <select
+                    value={context.routing_mode}
+                    disabled={busy}
+                    onChange={(event) =>
+                      onRoutingModeChange(event.target.value as RoutingMode)
+                    }
+                  >
+                    <option value="mention">
+                      Default responder (or the model router)
+                    </option>
+                    <option value="rotation">
+                      Rotation — the next participant after the last speaker
+                    </option>
+                    <option value="default">Default responder only</option>
+                  </select>
+                </label>
+                {context.routing_mode === "mention" ? (
+                  <label className="context-toggle">
+                    <input
+                      type="checkbox"
+                      checked={context.router_enabled}
+                      disabled={busy}
+                      onChange={(event) => onRouterChange(event.target.checked)}
+                    />
+                    <span>Route unaddressed messages with the model</span>
+                  </label>
+                ) : null}
+                <div className="context-mute">
+                  <span>Mute</span>
+                  <div className="context-mute-list">
+                    {participants.map((participant) => {
+                      const muted = context.muted_participants.includes(
+                        participant.agent_id,
+                      );
+                      return (
+                        <label key={participant.agent_id} className="context-mute-item">
+                          <input
+                            type="checkbox"
+                            checked={muted}
+                            disabled={busy}
+                            onChange={() =>
+                              onMutedChange(
+                                muted
+                                  ? context.muted_participants.filter(
+                                      (id) => id !== participant.agent_id,
+                                    )
+                                  : [...context.muted_participants, participant.agent_id],
+                              )
+                            }
+                          />
+                          <span>{participant.agent_name || participant.agent_id}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="context-hint">
+                    A muted participant stays in the roster and keeps the
+                    history, but is never picked to answer.
+                  </p>
+                </div>
                 <label className="context-toggle">
                   <input
                     type="checkbox"
-                    checked={context.router_enabled}
+                    checked={context.reply_cleanup}
                     disabled={busy}
-                    onChange={(event) => onRouterChange(event.target.checked)}
+                    onChange={(event) => onReplyCleanupChange(event.target.checked)}
                   />
-                  <span>Route unaddressed messages with the model</span>
+                  <span>Strip speaker labels and cross-talk from replies</span>
                 </label>
                 <label className="context-default-responder">
                   <span>Default responder</span>

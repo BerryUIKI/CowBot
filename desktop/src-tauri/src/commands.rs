@@ -17,7 +17,7 @@ use cowbot_core::command::{
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
-    ConversationTurn, TurnId,
+    ConversationTurn, RoutingMode, TurnId,
 };
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
@@ -1312,6 +1312,12 @@ pub struct ConversationContextView {
     pub auto_compact: bool,
     pub compact_threshold: u32,
     pub router_enabled: bool,
+    /// How an unmentioned group message picks its responder (ADR-0042).
+    pub routing_mode: String,
+    /// Participants kept in the roster but never selected.
+    pub muted_participants: Vec<String>,
+    /// Whether group replies are stripped of speaker labels and cross-talk.
+    pub reply_cleanup: bool,
     pub default_responder: Option<String>,
     pub cache_last_turn: CacheUsageSummary,
     pub cache_conversation: CacheUsageSummary,
@@ -1507,6 +1513,13 @@ fn context_view_from_parts(
         auto_compact: settings.auto_compact,
         compact_threshold: settings.compact_threshold,
         router_enabled: settings.router_enabled,
+        routing_mode: settings.routing_mode.as_str().to_string(),
+        muted_participants: settings
+            .muted_participants
+            .iter()
+            .map(|agent| agent.0.clone())
+            .collect(),
+        reply_cleanup: settings.reply_cleanup,
         default_responder: settings
             .default_responder
             .as_ref()
@@ -1883,6 +1896,7 @@ pub async fn get_conversation_context(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_conversation_settings(
     state: State<'_, AppState>,
     channel_id: String,
@@ -1890,6 +1904,9 @@ pub async fn update_conversation_settings(
     compact_threshold: Option<u32>,
     router_enabled: Option<bool>,
     default_responder: Option<String>,
+    routing_mode: Option<String>,
+    muted_participants: Option<Vec<String>>,
+    reply_cleanup: Option<bool>,
 ) -> Result<ConversationContextView, String> {
     let channel_id = ChannelId::new(channel_id);
     state
@@ -1901,6 +1918,14 @@ pub async fn update_conversation_settings(
                 compact_threshold,
                 router_enabled,
                 default_responder: default_responder.map(AgentId::new),
+                routing_mode: routing_mode
+                    .as_deref()
+                    .map(str::parse::<RoutingMode>)
+                    .transpose()
+                    .map_err(|_| format!("unknown routing mode '{:?}'", routing_mode))?,
+                muted_participants: muted_participants
+                    .map(|ids| ids.into_iter().map(AgentId::new).collect()),
+                reply_cleanup,
             },
         )
         .await

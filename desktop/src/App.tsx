@@ -116,6 +116,7 @@ import type {
   Project,
   ProjectBranches,
   RouteSource,
+  RoutingMode,
   SideAnswer,
   Task,
   TaskOverviewEntry,
@@ -1449,13 +1450,30 @@ export default function App() {
     channel: Channel,
     routerEnabled: boolean,
   ) {
+    await updateConversationSetting(channel, { routerEnabled });
+  }
+
+  /// Change one routing setting and keep the rest as they are.
+  async function updateConversationSetting(
+    channel: Channel,
+    change: {
+      routerEnabled?: boolean;
+      routingMode?: RoutingMode;
+      mutedParticipants?: string[];
+      replyCleanup?: boolean;
+    },
+  ) {
     setError(null);
     try {
       const context = await updateConversationSettings(
         channel.id,
         conversationContext?.auto_compact ?? false,
         conversationContext?.compact_threshold ?? 80,
-        routerEnabled,
+        change.routerEnabled,
+        undefined,
+        change.routingMode,
+        change.mutedParticipants,
+        change.replyCleanup,
       );
       setConversationContext(context);
     } catch (err) {
@@ -2475,9 +2493,11 @@ export default function App() {
         ? "by mention"
         : source === "router"
           ? "by routing"
-          : source === "default"
-            ? "by the default responder"
-            : "";
+          : source === "rotation"
+            ? "by rotation"
+            : source === "default"
+              ? "by the default responder"
+              : "";
 
     if (source === "silent") {
       return (
@@ -3421,6 +3441,21 @@ export default function App() {
                           }
                           onRouterChange={(enabled) =>
                             void updateConversationRouting(selectedChannel, enabled)
+                          }
+                          onRoutingModeChange={(mode) =>
+                            void updateConversationSetting(selectedChannel, {
+                              routingMode: mode,
+                            })
+                          }
+                          onMutedChange={(agentIds) =>
+                            void updateConversationSetting(selectedChannel, {
+                              mutedParticipants: agentIds,
+                            })
+                          }
+                          onReplyCleanupChange={(enabled) =>
+                            void updateConversationSetting(selectedChannel, {
+                              replyCleanup: enabled,
+                            })
                           }
                           onDefaultResponderChange={(agentId) =>
                             void updateDefaultResponder(selectedChannel, agentId)

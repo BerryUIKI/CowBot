@@ -28,6 +28,7 @@ import type {
   TokenSource,
   ToolCallRecord,
   Workspace,
+  RoutingMode,
 } from "./generated/index";
 
 
@@ -103,6 +104,7 @@ export type {
   RecallSkipReason,
   ReplyMode,
   RouteSource,
+  RoutingMode,
   RuleDecision,
   RuleSource,
   Run,
@@ -232,6 +234,12 @@ export interface ConversationContext {
   auto_compact: boolean;
   compact_threshold: number;
   router_enabled: boolean;
+  /// How an unmentioned group message picks its responder (ADR-0042).
+  routing_mode: RoutingMode;
+  /// Participants kept in the roster but never selected.
+  muted_participants: string[];
+  /// Whether group replies are stripped of speaker labels and cross-talk.
+  reply_cleanup: boolean;
   default_responder: string | null;
   cache_last_turn: CacheUsageSummary;
   cache_conversation: CacheUsageSummary;

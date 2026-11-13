@@ -2,6 +2,7 @@
 import type { AgentId } from "./AgentId";
 import type { ChannelId } from "./ChannelId";
 import type { ConversationMode } from "./ConversationMode";
+import type { RoutingMode } from "./RoutingMode";
 
 /**
  * Per-conversation settings stored independently from the channel row.
@@ -23,6 +24,18 @@ default_responder?: AgentId | null,
  * Whether an unaddressed group message may be routed by the model.
  */
 router_enabled: boolean, 
+/**
+ * How an unmentioned group message picks its responder (ADR-0042).
+ */
+routing_mode: RoutingMode, 
+/**
+ * Participants kept in the roster and history but never selected.
+ */
+muted_participants: Array<AgentId>, 
+/**
+ * Whether a group reply is stripped of speaker labels and cross-talk.
+ */
+reply_cleanup: boolean, 
 /**
  * Whether the runtime may compact the context automatically.
  */
