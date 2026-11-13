@@ -58,13 +58,18 @@ whatever the user already saw.
 Every turn — a direct conversation reply, a group reply, a channel mention
 turn, a task run — is opened by `cowbot-service::turns::TurnRunner` with a
 fresh `TurnId`, streams its progress as `TurnEvent`s on the bus, and is
-finished by it after the reply is stored. The services share one runner
-registry, so `cancel_turn(turn_id)` reaches a turn wherever it runs, and is
-idempotent: an unknown or finished turn returns `false` and does nothing.
+finished by it after the reply is stored. `LocalClient` owns one runner and
+hands it to every turn-spawning service, so `cancel_turn(turn_id)` reaches a
+chat turn and a task run alike, and is idempotent: an unknown or finished turn
+returns `false` and does nothing. Clearing a channel's history or a
+conversation's context stops that channel's open turns first, so a reply still
+streaming cannot land in what the user just cleared.
 
 The runner persists before publishing the terminal event. A stop keeps the
-text it produced and stores it with a `_[Stopped]_` marker; a task turn with
-text completes its assignment with that partial output rather than failing it.
+text it produced and stores it with a `_[Stopped]_` marker. A task turn that is
+stopped with text is cancelled rather than failed — run, assignment, and task
+all read `cancelled` — and the partial reply survives as the cancellation
+reason, so history shows what was produced without claiming the work finished.
 A provider failure after partial text reports `turn_error` with the partial
 text, so a reload shows what the user saw instead of nothing.
 
@@ -82,9 +87,10 @@ the gate waits, and the same turn continues when the decision lands.
 
 The chat view folds each event into a live bubble — reasoning behind a
 collapsible, tool chips that tick from running to done, text rendered as it
-arrives — with a stop button beside the composer while anything streams. The
-terminal event follows persistence, so the stored message replaces the bubble
-and a reload shows exactly that state.
+arrives — with a stop button beside the composer while anything streams. A
+task run streams to no chat, so the composer names it and offers its stop
+instead of letting it run invisibly. The terminal event follows persistence, so
+the stored message replaces the bubble and a reload shows exactly that state.
 
 ## Alternatives considered
 

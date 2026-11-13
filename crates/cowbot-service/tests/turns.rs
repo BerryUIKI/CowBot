@@ -82,6 +82,7 @@ async fn a_runner_publishes_started_deltas_and_a_persisted_done() {
             target: cowbot_core::turn::TurnTarget::Task {
                 task_id: cowbot_core::task::TaskId::new("task-1"),
                 agent_id: AgentId("agent-1".to_string()),
+                run_id: cowbot_core::run::RunId::new("run-1"),
             },
             agent_ids: vec![AgentId("agent-1".to_string())],
             sink: TurnSink::Caller,
@@ -219,13 +220,18 @@ async fn cancelling_a_task_turn_keeps_its_partial_output() {
         }
         other => panic!("expected turn_done, got {other:?}"),
     }
+    // A stopped task is cancelled, not completed: the run, the assignment, and
+    // the task agree, and the partial reply survives as the cancellation reason.
     let stored = store.get_task(&task.id).await.unwrap().unwrap();
-    match stored.status {
-        TaskStatus::Completed { output } => {
-            assert!(output.starts_with("half an"), "got {output}");
-            assert!(output.contains("[Stopped]"), "got {output}");
+    assert_eq!(stored.status, TaskStatus::Cancelled);
+    let assignments = store.list_assignments_for_task(&task.id).await.unwrap();
+    let assignment = assignments.last().expect("one assignment");
+    match assignment.outcome.as_ref() {
+        Some(cowbot_core::assignment::AssignmentOutcome::Cancelled { reason }) => {
+            assert!(reason.starts_with("half an"), "got {reason}");
+            assert!(reason.contains("[Stopped]"), "got {reason}");
         }
-        other => panic!("expected the partial output to be stored, got {other:?}"),
+        other => panic!("expected a cancelled outcome with the partial text, got {other:?}"),
     }
 }
 

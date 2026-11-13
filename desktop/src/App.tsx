@@ -319,6 +319,8 @@ export default function App() {
   const [streamingTurns, setStreamingTurns] = useState<
     Record<string, {
       channelId: string | null;
+      /// The run a task turn belongs to; null for a chat turn.
+      runId: string | null;
       agentId: string | null;
       text: string;
       reasoning: string;
@@ -1244,6 +1246,16 @@ export default function App() {
         agents.find((candidate) => candidate.id === turn.agentId)?.name ?? "Agent",
     }));
   const channelIsStreaming = channelStreams.length > 0;
+  /// A task run's turn streams to no chat, so the composer names it instead of
+  /// letting it run invisibly; a task turn is the only one with a run id.
+  const taskStream = Object.entries(streamingTurns)
+    .filter(([, turn]) => turn.channelId === null && turn.runId !== null)
+    .map(([id, turn]) => ({
+      id,
+      ...turn,
+      name:
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? "Agent",
+    }))[0];
   const conversationParticipantNames = conversationParticipants.map(
     (participant) => participant.agent_name,
   );
@@ -1940,11 +1952,13 @@ export default function App() {
     if (turn.type === "turn_started") {
       const target = turn.target;
       const channelId = target.kind === "conversation" ? target.channel_id : null;
+      const runId = target.kind === "task" ? target.run_id : null;
       const agentId = target.agent_id;
       setStreamingTurns((current) => ({
         ...current,
         [id]: current[id] ?? {
           channelId,
+          runId,
           agentId,
           text: "",
           reasoning: "",
@@ -1998,18 +2012,25 @@ export default function App() {
     }
     if (turn.type === "turn_done" || turn.type === "turn_error") {
       // The terminal event follows persistence, so the stored message is
-      // authoritative: refresh and drop the live bubble.
+      // authoritative: refresh and drop the live bubble. Read from the live
+      // ref, because `setStreamingTurns` has not re-rendered yet and this
+      // callback's closure holds the map from its registration.
+      const finished = streamingTurnsRef.current[id];
       setStreamingTurns((current) => {
         const next = { ...current };
         delete next[id];
         return next;
       });
-      setContextVersion((version) => version + 1);
-      // Read the channel from the live ref: this callback is registered once,
-      // so `streamingTurns` in its closure is the empty map from first render.
-      const channel = streamingTurnsRef.current[id]?.channelId;
-      if (channel) {
-        refreshMessages(channel).catch((err) => setError(errorMessage(err)));
+      if (finished?.channelId) {
+        setContextVersion((version) => version + 1);
+        refreshMessages(finished.channelId).catch((err) => setError(errorMessage(err)));
+      }
+      // A task turn settles into the task list and, when open, its detail.
+      if (finished?.runId || finished?.channelId === null) {
+        refreshTasks().catch((err) => setError(errorMessage(err)));
+        if (selectedTaskId) {
+          refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
+        }
       }
       if (turn.type === "turn_error" && turn.error) {
         setError(turn.error);
@@ -2017,19 +2038,23 @@ export default function App() {
     }
   }
 
-  /// Stop the one live turn answering in the selected channel (ADR-0041).
+  /// Stop one live turn by id (ADR-0041).
+  async function stopTurn(turnId: string) {
+    try {
+      await cancelTurn(turnId);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  /// Stop the one live turn answering in the selected channel.
   async function stopCurrentTurn() {
     const entries = Object.entries(streamingTurns);
     const match = entries.find(
       ([, turn]) => selectedId && turn.channelId === selectedId,
     );
     if (!match) return;
-    const [turnId] = match;
-    try {
-      await cancelTurn(turnId);
-    } catch (err) {
-      setError(errorMessage(err));
-    }
+    await stopTurn(match[0]);
   }
 
   async function sendMessage(text: string = draft) {
@@ -3795,7 +3820,23 @@ export default function App() {
                     disabled={conversationFull}
                     rows={1}
                   />
-                  {channelIsStreaming ? (
+                  {taskStream ? (
+                    <button
+                      type="button"
+                      className="composer-stop"
+                      title={`Stop ${taskStream.name}'s task run`}
+                      aria-label={`Stop ${taskStream.name}'s task run`}
+                      onClick={() => void stopTurn(taskStream.id)}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <rect x="7" y="7" width="10" height="10" rx="2" />
+                      </svg>
+                    </button>
+                  ) : channelIsStreaming ? (
                     <button
                       type="button"
                       className="composer-stop"
@@ -3811,6 +3852,12 @@ export default function App() {
                         <rect x="7" y="7" width="10" height="10" rx="2" />
                       </svg>
                     </button>
+                  ) : null}
+                  {taskStream ? (
+                    <span className="composer-task-run">
+                      {taskStream.name} is working on a task
+                      {taskStream.tools.some((tool) => tool.running) ? " · tool running" : ""}
+                    </span>
                   ) : null}
                   <button
                     type="submit"

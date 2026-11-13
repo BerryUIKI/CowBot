@@ -190,6 +190,17 @@ impl ChannelAgentService {
         }
     }
 
+    /// The shared turn registry, so a caller can stop a turn this service
+    /// started (ADR-0041).
+    pub fn turns(&self) -> Arc<TurnRunner> {
+        self.turns.clone()
+    }
+
+    /// Stop every open turn in a channel and report how many were stopped.
+    pub fn cancel_channel_turns(&self, channel_id: &ChannelId) -> usize {
+        self.turns.cancel_channel(channel_id)
+    }
+
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions.clone();
         self.conversations = self.conversations.with_session_decisions(decisions);

@@ -13,12 +13,14 @@ use cowbot_store::Store;
 use crate::assignments::AssignmentService;
 use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::TurnRunner;
 
 /// Executes a crew through the assignment scheduler.
 #[derive(Clone)]
 pub struct CrewRunner {
     assignments: AssignmentService,
     session_decisions: Option<Arc<SessionDecisions>>,
+    turns: Option<Arc<TurnRunner>>,
 }
 
 impl CrewRunner {
@@ -26,11 +28,19 @@ impl CrewRunner {
         Self {
             assignments: AssignmentService::new(store, bus),
             session_decisions: None,
+            turns: None,
         }
     }
 
     pub fn with_session_decisions(mut self, decisions: Arc<SessionDecisions>) -> Self {
         self.session_decisions = Some(decisions);
+        self
+    }
+
+    /// Share a turn registry so `cancel_turn` reaches a task run's turn
+    /// (ADR-0041).
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = Some(turns);
         self
     }
 
@@ -86,6 +96,9 @@ impl CrewRunner {
         .with_model_permissions(options.use_model_permissions)
         .with_session_decisions(self.session_decisions.clone())
         .with_task_memory();
+        if let Some(turns) = &self.turns {
+            scheduler = scheduler.with_turns(turns.clone());
+        }
         for agent in crew.agents.values() {
             scheduler.register_instance(agent);
         }

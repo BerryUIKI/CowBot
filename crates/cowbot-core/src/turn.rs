@@ -3,6 +3,7 @@ use crate::approval::Approval;
 use crate::cancel::CancelSignal;
 use crate::channel::ChannelId;
 use crate::conversation::TurnId;
+use crate::run::RunId;
 use crate::task::TaskId;
 use crate::tool::{ToolCall, ToolResult};
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,13 @@ pub enum TurnTarget {
         message_id: String,
     },
     /// A task the user ran.
-    Task { task_id: TaskId, agent_id: AgentId },
+    Task {
+        task_id: TaskId,
+        agent_id: AgentId,
+        /// The run executing the task, so the UI can find the task a turn
+        /// belongs to while it streams.
+        run_id: RunId,
+    },
 }
 
 /// A tool call that is waiting for a human decision.
@@ -133,8 +140,6 @@ pub trait TurnControl: Send + Sync {
     /// Trip the turn's cancel signal, if it is still open. Idempotent: an
     /// unknown or finished turn is a no-op that reports `false`.
     fn cancel(&self, turn: &TurnId) -> bool;
-    /// Cancel every open turn in a channel.
-    fn cancel_channel(&self, channel_id: &ChannelId) -> usize;
     /// The cancellation scope for a turn opened by [`Self::open`].
     fn turn(&self, turn: &TurnId) -> CancelSignal;
     /// Forget a turn once its terminal event has been published.

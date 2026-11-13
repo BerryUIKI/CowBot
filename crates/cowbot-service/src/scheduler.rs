@@ -852,6 +852,7 @@ impl AssignmentScheduler {
                     target: TurnTarget::Task {
                         task_id: task.id.clone(),
                         agent_id: assignment.assignee.clone(),
+                        run_id: run.id.clone(),
                     },
                     agent_ids: vec![assignment.assignee.clone()],
                     // The assignment service stores the task output, so the
@@ -955,9 +956,11 @@ impl AssignmentScheduler {
                     TurnCompletion::failed(error.to_string(), partial.clone())
                 };
 
-                // A stop with text completes the assignment with the partial
-                // output, so the task history shows what was kept instead of an
-                // error. A stop without text, or a failure, fails it.
+                // A stop with text keeps the partial reply as the assignment's
+                // cancellation reason, so task history shows what was produced
+                // without claiming the work finished: the run, the assignment,
+                // and the task all read as cancelled, which is what happened.
+                // A stop without text, or a failure, fails it.
                 if stopped && !partial.is_empty() {
                     let partial_output = crate::turns::stopped_text(&partial);
                     self.assignments
@@ -965,7 +968,7 @@ impl AssignmentScheduler {
                         .update_run_status(&run.id, RunStatus::Cancelled, Some(Utc::now()))
                         .await?;
                     self.assignments
-                        .complete(&assignment.id, partial_output)
+                        .cancel(&assignment.id, partial_output)
                         .await?;
                 } else {
                     self.assignments

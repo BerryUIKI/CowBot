@@ -5457,6 +5457,17 @@ button {
   height: 14px;
 }
 
+/* A task turn streams to no chat, so the composer carries its label. */
+.composer-task-run {
+  flex: none;
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--paper-faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-bubble-streaming {
   display: flex;
   flex-direction: column;
