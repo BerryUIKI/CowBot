@@ -58,16 +58,31 @@ device-local and credential data described below.
 
 ## Authentication and session model
 
-Today there is **no authentication**. The desktop auto-creates one local user
+**Local mode has no authentication.** The desktop auto-creates one local user
 and one workspace on first open, and the CLI does the same. There are no
 sessions to steal because there is no login, and no service listening on a
-socket to reach.
+socket to reach. Do not expose a local workspace to another person or another
+machine and assume it is protected.
 
-Phase 2 (self-hosted team mode) is planned to add a server, accounts,
-invitations, API tokens, and multi-user workspaces. Those types exist in
-`cowbot-core` and are unused by the local runtime. Until that ships, do not
-expose a CowBot workspace to another person or another machine and assume it is
-protected.
+**Server mode has started (Phase 2, ADR-0043).** `cowbot-server` serves
+Argon2id password accounts and opaque bearer sessions over HTTP. The properties
+implemented so far:
+
+- A password is hashed with Argon2id and must be at least ten characters; an
+  unknown email and a wrong password return the same response after the same
+  work, so accounts cannot be enumerated.
+- A session token is 256 random bits, and only its SHA-256 hash is stored; a
+  database read cannot mint a live session. Sessions expire after two weeks by
+  default, and an expired one is deleted when it is read.
+- Changing a password drops every session for that user.
+- Failed sign-ins are counted per `X-Forwarded-For` source and refused after ten
+  in fifteen minutes.
+
+What server mode does **not** have yet: workspace, channel, and task routes;
+membership or role enforcement beyond storing the role; invitations; API
+tokens; TLS; and the WebSocket surface. Do not deploy it beyond localhost, and
+do not treat an account on it as protecting anything but itself, until 2.2
+lands.
 
 ## Known gaps
 
@@ -78,7 +93,9 @@ protected.
 | No bound on sandbox memory, network, or descendant processes | A runaway or hostile command can exhaust the machine | Resource limits alongside the isolated backends |
 | Database is unencrypted | Anyone who reads the file reads the whole workspace | Encrypted-at-rest option; relies on OS disk encryption today |
 | Credentials sit in `config.json` and the environment | Any process running as you can read them | OS keychain integration |
-| No authentication or sessions | Local only; no safe way to share a workspace | Phase 2 server with accounts and API tokens |
+| No authentication in local mode | Local only; no safe way to share a workspace | Phase 2 server; accounts and sessions exist (ADR-0043), workspace routes and membership enforcement are 2.2 |
+| Server rate limiting is per process | A restart clears the window; several processes would not share it | One server per database is the deployment model; a shared store is a later change |
+| Server has no TLS | Credentials cross the wire in clear text without a proxy | Terminate TLS at a reverse proxy; the server does not provide it |
 | Prompt and tool output may appear in logs | Sensitive task data can reach console or debug output | Structured redacted logging |
 | No prompt-cache or cost control per agent | A live model can spend without a per-agent budget | Per-assignment budgets already exist; per-agent spend caps planned |
 
@@ -102,11 +119,14 @@ covers the ones with a security consequence.
 - [ ] Turn off prompt snapshot capture, or set a short retention, if the content
       it seals is more sensitive than the usage data you need.
 
-### Before any future self-hosted deployment
+### Before any self-hosted deployment
 
 - [ ] Treat every preceding item as still required.
-- [ ] Do not expose the server beyond localhost until accounts and auth land.
-- [ ] Terminate TLS in front of the server; CowBot will not provide it.
+- [ ] Do not expose the server beyond localhost until the workspace routes and
+      membership enforcement land (milestone 2.2).
+- [ ] Terminate TLS in front of the server; CowBot does not provide it.
+- [ ] Change the owner password the server prints on first start, and keep the
+      generated one out of shell history.
 - [ ] Decide whether model traffic may leave the network; a hosted provider
       sends prompts off-site.
 - [ ] Give the process a dedicated OS user with no access to unrelated files.

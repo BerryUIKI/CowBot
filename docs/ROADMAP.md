@@ -117,6 +117,14 @@ Delivered:
 | ID | Milestone | Key Deliverables | Depends On |
 | --- | --- | --- | --- |
 | 2.1 | Server and API foundation (`cowbot-server`) | HTTP + WebSocket API; Argon2id accounts; opaque sessions; API tokens; error model; login rate limiting | Phase 1 |
+
+> **2.1 progress**: `cowbot-server` exists with the HTTP surface and the account
+> model — `GET /health`, `POST /api/v1/auth/sign-in`, `POST /api/v1/auth/sign-out`,
+> `POST /api/v1/auth/password`, and `GET /api/v1/me` — over the same
+> `cowbot-store` database local mode uses. Passwords are Argon2id, sessions are
+> 256-bit opaque tokens stored only as a SHA-256 hash, sign-ins are rate limited
+> per source, and the error model is one JSON body with a stable code (ADR-0043).
+> The WebSocket surface and API tokens arrive with the workspace routes in 2.2.
 | 2.2 | Multi-user workspaces | Workspace creation; invitations; Owner/Admin/Member roles; membership enforcement; audit integration | 2.1 |
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
 | 2.4 | Deployment and operations | Single binary and Docker image; Compose example; TLS via reverse proxy; health checks; backup/restore; configuration reference | 2.1 |
