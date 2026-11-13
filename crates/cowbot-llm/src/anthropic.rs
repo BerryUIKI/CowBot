@@ -280,6 +280,11 @@ impl LlmProvider for AnthropicProvider {
         let mut decoder = SseDecoder::new();
         let mut block = StreamedBlock::default();
         let mut finished = false;
+        // Anthropic splits usage across events: `message_start` carries the
+        // input and cache counts, `message_delta` carries only the output
+        // count. Accumulating into one object keeps the input counts a later
+        // event does not repeat.
+        let mut usage_values = Value::Object(serde_json::Map::new());
         let mut stream = response.bytes_stream();
 
         loop {
@@ -315,7 +320,7 @@ impl LlmProvider for AnthropicProvider {
                 match event_type.as_str() {
                     "message_start" => {
                         if let Some(usage) = event.pointer("/message/usage") {
-                            emit_usage(usage, &mut outcome, on_chunk);
+                            emit_usage(usage, &mut usage_values, &mut outcome, on_chunk);
                         }
                     }
                     "content_block_start" => {
@@ -396,7 +401,7 @@ impl LlmProvider for AnthropicProvider {
                             outcome.finish_reason = Some(reason.to_string());
                         }
                         if let Some(usage) = event.get("usage") {
-                            emit_usage(usage, &mut outcome, on_chunk);
+                            emit_usage(usage, &mut usage_values, &mut outcome, on_chunk);
                         }
                     }
                     "message_stop" => {
@@ -547,19 +552,27 @@ fn parse_usage(raw: &Value) -> Option<TokenUsage> {
     })
 }
 
-/// Record streamed usage and forward it.
+/// Merge one streamed usage object and forward the accumulated totals.
 ///
 /// Anthropic splits usage across `message_start` (input and cache) and
-/// `message_delta` (output), so each object is normalized on its own and the
-/// later values replace the earlier ones.
+/// `message_delta` (output). Emitting each object on its own would replace the
+/// input counts with zero, because `message_delta` reports only the output
+/// count; keeping the merged object means every chunk carries the full picture
+/// up to that point, and the last one is complete.
 fn emit_usage(
     raw: &Value,
+    accumulated: &mut Value,
     outcome: &mut CompletionOutcome,
     on_chunk: &mut (dyn FnMut(StreamChunk) + Send),
 ) {
+    if let (Some(target), Some(fields)) = (accumulated.as_object_mut(), raw.as_object()) {
+        for (key, value) in fields {
+            target.insert(key.clone(), value.clone());
+        }
+    }
     let chunk = StreamChunk::Usage {
-        usage: parse_usage(raw),
-        raw_usage: Some(raw.clone()),
+        usage: parse_usage(accumulated),
+        raw_usage: Some(accumulated.clone()),
     };
     outcome.apply(chunk.clone());
     on_chunk(chunk);
@@ -769,5 +782,48 @@ mod tests {
             "https://api.anthropic.com/v1/messages"
         );
         assert_eq!(provider.models_url(), "https://api.anthropic.com/v1/models");
+    }
+
+    #[test]
+    fn streamed_usage_keeps_the_input_counts_a_later_event_omits() {
+        // Anthropic reports input and cache in `message_start` and only the
+        // output count in `message_delta`. Emitting each on its own would
+        // zero the input counts, so the accumulator carries them forward.
+        let mut accumulated = json!({});
+        let mut outcome = CompletionOutcome::default();
+        let mut emitted = Vec::new();
+
+        emit_usage(
+            &json!({
+                "input_tokens": 40000,
+                "cache_read_input_tokens": 1200,
+                "cache_creation_input_tokens": 300,
+                "output_tokens": 1,
+            }),
+            &mut accumulated,
+            &mut outcome,
+            &mut |chunk| emitted.push(chunk),
+        );
+        emit_usage(
+            &json!({ "output_tokens": 275 }),
+            &mut accumulated,
+            &mut outcome,
+            &mut |chunk| emitted.push(chunk),
+        );
+
+        let final_usage = outcome.usage.expect("the stream reports usage");
+        assert_eq!(final_usage.uncached_input_tokens, 40000);
+        assert_eq!(final_usage.cached_input_tokens, 1200);
+        assert_eq!(final_usage.cache_write_input_tokens, 300);
+        assert_eq!(final_usage.output_tokens, 275);
+        assert_eq!(final_usage.total_input_tokens(), 41500);
+
+        // The last chunk a consumer folds in is the complete picture.
+        let StreamChunk::Usage { usage, .. } = emitted.last().expect("two usage chunks") else {
+            panic!("expected a usage chunk");
+        };
+        let usage = usage.as_ref().expect("the merged object parses");
+        assert_eq!(usage.total_input_tokens(), 41500);
+        assert_eq!(usage.output_tokens, 275);
     }
 }
