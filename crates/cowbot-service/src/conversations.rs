@@ -2,18 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split_by, context_entry_tokens, context_usage_state, project_context,
+    compaction_split_by, context_entry_tokens, context_usage_state, next_rotation, project_context,
     CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
     ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn, RouteSource, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
-    MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    ConversationTurn, RouteSource, RoutingMode, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS,
+    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
@@ -298,6 +299,34 @@ impl ConversationService {
             }
             settings.default_responder = Some(responder.clone());
         }
+        if let Some(mode) = update.routing_mode {
+            settings.routing_mode = mode;
+        }
+        if let Some(reply_cleanup) = update.reply_cleanup {
+            settings.reply_cleanup = reply_cleanup;
+        }
+        if let Some(muted) = &update.muted_participants {
+            // Muting keeps the roster, so an id outside it is a mistake worth
+            // reporting rather than silently storing.
+            let participants = self.store.list_channel_participants(channel_id).await?;
+            for agent_id in muted {
+                if !participants
+                    .iter()
+                    .any(|participant| &participant.agent_id == agent_id)
+                {
+                    return Err(CowError::Config(format!(
+                        "'{agent_id}' is not a participant of this conversation"
+                    )));
+                }
+            }
+            let mut unique = Vec::with_capacity(muted.len());
+            for agent_id in muted {
+                if !unique.contains(agent_id) {
+                    unique.push(agent_id.clone());
+                }
+            }
+            settings.muted_participants = unique;
+        }
         settings.updated_at = chrono::Utc::now();
         self.store.update_conversation_settings(&settings).await?;
         Ok(settings)
@@ -532,6 +561,8 @@ impl ConversationService {
                     agent_id: agent.id.clone(),
                     snapshot_context,
                     record_context: true,
+                    // A single conversation has no peers to cross-talk with.
+                    cleanup: None,
                 },
                 requester,
                 AssignmentOrigin::User,
@@ -644,8 +675,36 @@ impl ConversationService {
                 ..ChannelTurnReport::default()
             });
         } else {
+            // An explicit mention always wins above. What happens next follows
+            // the conversation's routing mode (ADR-0042).
             let mut routed = None;
-            if settings.router_enabled {
+            if settings.routing_mode == RoutingMode::Rotation {
+                let last = last_group_speaker(&self.store, channel, &participants).await?;
+                match next_rotation(
+                    &participants,
+                    |agent| agent.id.clone(),
+                    &settings.muted_participants,
+                    last.as_ref(),
+                ) {
+                    Some(agent) => {
+                        turn.source = RouteSource::Rotation;
+                        turn.reason = Some(rotation_reason(settings.muted_participants.len()));
+                        routed = Some(vec![agent.clone()]);
+                    }
+                    None => {
+                        turn.source = RouteSource::Silent;
+                        turn.reason =
+                            Some("Every participant is muted, so nobody answered.".to_string());
+                        self.record_turn(&turn).await?;
+                        return Ok(ChannelTurnReport {
+                            unknown_mentions: unknown,
+                            route: Some(turn.source),
+                            turn_id: Some(turn.id),
+                            ..ChannelTurnReport::default()
+                        });
+                    }
+                }
+            } else if settings.routing_mode.uses_router(settings.router_enabled) {
                 let decision = self
                     .route_with_model(
                         channel,
@@ -880,6 +939,14 @@ impl ConversationService {
         self.store.insert_conversation_turn(&turn).await?;
 
         let mut tasks = Vec::new();
+        // Every other participant's name, so a group reply that drifts into
+        // another speaker's line is cut where that line begins (ADR-0042).
+        let group_cleanup: Option<Vec<String>> = settings.reply_cleanup.then(|| {
+            participants
+                .iter()
+                .map(|participant| participant.name.clone())
+                .collect()
+        });
         for agent in &responders {
             scheduler.register_agent(
                 agent.clone(),
@@ -928,6 +995,12 @@ impl ConversationService {
                         agent_id: agent.id.clone(),
                         snapshot_context,
                         record_context: true,
+                        cleanup: group_cleanup
+                            .as_ref()
+                            .map(|others| crate::turns::ReplyCleanup {
+                                speaker: agent.name.clone(),
+                                others: others.clone(),
+                            }),
                     },
                     requester.clone(),
                     AssignmentOrigin::User,
@@ -1917,6 +1990,52 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 /// participant named `main` (the built-in Main Assistant), then to the first
 /// participant in order. The boolean reports that fallback happened so the
 /// turn can explain it. An unset responder stays silent.
+/// The agent who wrote the last assistant entry any participant can see.
+///
+/// The rotation starts after this speaker. Direct branches diverge after a
+/// while, so the newest assistant entry across the roster is the best single
+/// answer to "who spoke last"; when there is none, the rotation starts at the
+/// first participant.
+async fn last_group_speaker(
+    store: &Store,
+    channel: &Channel,
+    participants: &[AgentProfile],
+) -> CowResult<Option<AgentId>> {
+    let mut latest: Option<(DateTime<Utc>, AgentId)> = None;
+    for participant in participants {
+        let entries = store
+            .list_context_entries(&channel.id, &participant.id)
+            .await?;
+        for entry in entries {
+            if entry.role != ContextRole::Assistant {
+                continue;
+            }
+            let author = entry
+                .author_agent_id
+                .clone()
+                .unwrap_or(entry.agent_id.clone());
+            if latest
+                .as_ref()
+                .is_none_or(|(at, _)| entry.created_at >= *at)
+            {
+                latest = Some((entry.created_at, author));
+            }
+        }
+    }
+    Ok(latest.map(|(_, author)| author))
+}
+
+/// Why the rotation picked the participant it did, for the Answered-by line.
+pub(crate) fn rotation_reason(muted: usize) -> String {
+    if muted > 0 {
+        format!(
+            "The rotation picked the next participant after the last speaker,              skipping {muted} muted participant(s)."
+        )
+    } else {
+        "The rotation picked the next participant after the last speaker.".to_string()
+    }
+}
+
 pub(crate) fn resolve_default_responder<'a>(
     settings: &ConversationSettings,
     participants: &'a [AgentProfile],

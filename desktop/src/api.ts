@@ -33,6 +33,7 @@ import type {
   ModelMetadata,
   ModelSettings,
   NoteSave,
+  RoutingMode,
   OnboardingState,
   PermissionRule,
   Project,
@@ -214,6 +215,9 @@ export function updateConversationSettings(
   compactThreshold: number,
   routerEnabled?: boolean,
   defaultResponder?: string | null,
+  routingMode?: RoutingMode,
+  mutedParticipants?: string[],
+  replyCleanup?: boolean,
 ): Promise<ConversationContext> {
   return invoke<ConversationContext>("update_conversation_settings", {
     channelId,
@@ -221,6 +225,9 @@ export function updateConversationSettings(
     compactThreshold,
     routerEnabled,
     defaultResponder,
+    routingMode,
+    mutedParticipants,
+    replyCleanup,
   });
 }
 

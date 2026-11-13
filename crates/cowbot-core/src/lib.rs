@@ -40,14 +40,14 @@ pub use command::{
     CommandParse, CommandSpec, CommandTarget, APPROVAL_CHOICES, COMMANDS, SETTINGS_CHOICES,
 };
 pub use conversation::{
-    compaction_split, compaction_split_by, context_entry_tokens, context_usage_state,
-    project_context, usable_window, CacheUsageSummary, ChannelKind, ChannelParticipant,
-    CompactionOutcome, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
-    ContextProjection, ContextRole, ContextToolCall, ContextUsageState, ConversationContext,
-    ConversationMode, ConversationParticipantContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn, RouteSource, TurnId, CONTEXT_KEEP_RECENT_TOKENS,
-    CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS, DEFAULT_COMPACT_THRESHOLD,
-    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    clean_group_reply, compaction_split, compaction_split_by, context_entry_tokens,
+    context_usage_state, next_rotation, project_context, usable_window, CacheUsageSummary,
+    ChannelKind, ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind,
+    ContextEvent, ContextEventKind, ContextProjection, ContextRole, ContextToolCall,
+    ContextUsageState, ConversationContext, ConversationMode, ConversationParticipantContext,
+    ConversationSettings, ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode,
+    TurnId, CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
+    DEFAULT_COMPACT_THRESHOLD, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 pub use error::{CowError, CowResult};
 pub use event::{Event, EventPayload};

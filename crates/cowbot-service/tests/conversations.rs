@@ -1660,6 +1660,7 @@ async fn group_default_responder_answers_an_unaddressed_message() {
                 compact_threshold: None,
                 router_enabled: None,
                 default_responder: Some(planner.clone()),
+                ..ConversationSettingsUpdate::default()
             },
         )
         .await
@@ -1704,6 +1705,295 @@ async fn group_default_responder_answers_an_unaddressed_message() {
         TaskSource::ConversationTurn,
         "group turns are hidden from the task list like single turns"
     );
+}
+
+/// A provider whose answer is a fixed string, so cleanup can be observed.
+struct FixedLlm {
+    answer: String,
+}
+
+#[async_trait]
+impl LlmProvider for FixedLlm {
+    fn name(&self) -> &str {
+        "fixed"
+    }
+
+    async fn chat_complete(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> CowResult<ChatCompletionResponse> {
+        Ok(ChatCompletionResponse {
+            content: Some(self.answer.clone()),
+            tool_calls: Vec::new(),
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
+        })
+    }
+
+    async fn list_models(&self) -> CowResult<Vec<String>> {
+        Ok(vec!["fixed-model".to_string()])
+    }
+}
+
+#[tokio::test]
+async fn rotation_picks_the_next_participant_after_the_last_speaker() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    let coder = fixture.participants[1].id.clone();
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                routing_mode: Some(cowbot_core::conversation::RoutingMode::Rotation),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // No speaker yet: the first participant opens the rotation.
+    let first = post_user(&fixture.channels, &fixture.channel, "who starts?").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &first,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.replied, vec![planner.clone()]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Rotation);
+
+    // The next turn goes to the following participant, with no router call.
+    let second = post_user(&fixture.channels, &fixture.channel, "and now?").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &second,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.replied, vec![coder.clone()]);
+
+    // A mention still wins over the rotation.
+    let third = post_user(&fixture.channels, &fixture.channel, "@Planner ping").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &third,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.replied, vec![planner.clone()]);
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &third.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Mention);
+}
+
+#[tokio::test]
+async fn a_muted_participant_is_skipped_but_stays_in_the_roster() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    let coder = fixture.participants[1].id.clone();
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                routing_mode: Some(cowbot_core::conversation::RoutingMode::Rotation),
+                muted_participants: Some(vec![planner.clone()]),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let message = post_user(&fixture.channels, &fixture.channel, "go").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.replied,
+        vec![coder.clone()],
+        "the muted agent was skipped"
+    );
+
+    // The roster is unchanged: muting is not removal.
+    let roster = fixture
+        .store
+        .list_channel_participants(&fixture.channel.id)
+        .await
+        .unwrap();
+    assert_eq!(roster.len(), 2);
+
+    // Muting everyone leaves the turn silent rather than failing.
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                muted_participants: Some(vec![planner, coder]),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let message = post_user(&fixture.channels, &fixture.channel, "anyone?").await;
+    let report = fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(RecordingLlm::new()),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    assert!(report.replied.is_empty());
+    let turn = fixture
+        .store
+        .get_conversation_turn(&fixture.channel.id, &message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.source, RouteSource::Silent);
+}
+
+#[tokio::test]
+async fn a_mute_outside_the_roster_is_refused() {
+    let fixture = group_fixture(None).await;
+    let stranger = AgentId::new("stranger");
+    let error = fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                muted_participants: Some(vec![stranger]),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("not a participant"),
+        "got {error}"
+    );
+}
+
+#[tokio::test]
+async fn a_group_reply_is_cleaned_of_a_speaker_label_and_cross_talk() {
+    let fixture = group_fixture(None).await;
+    let planner = fixture.participants[0].id.clone();
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                default_responder: Some(planner),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let utterance = "Planner: The plan is ready.\nCoder: I will build it.";
+    let message = post_user(&fixture.channels, &fixture.channel, "report").await;
+    fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(FixedLlm {
+                answer: utterance.to_string(),
+            }),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    let reply = messages
+        .iter()
+        .find(|message| matches!(message.sender, Sender::Agent(_)))
+        .expect("an agent reply");
+    assert_eq!(
+        reply.content, "The plan is ready.",
+        "the speaker label is stripped and the other speaker's line is cut"
+    );
+
+    // Turning cleanup off keeps the raw output.
+    fixture
+        .service
+        .update_settings(
+            &fixture.channel.id,
+            &ConversationSettingsUpdate {
+                reply_cleanup: Some(false),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let message = post_user(&fixture.channels, &fixture.channel, "again").await;
+    fixture
+        .service
+        .reply(
+            &fixture.channel.id,
+            &message,
+            Arc::new(FixedLlm {
+                answer: utterance.to_string(),
+            }),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+    let messages = fixture
+        .channels
+        .list_messages(&fixture.channel.id, 50)
+        .await
+        .unwrap();
+    let replies: Vec<&ChannelMessage> = messages
+        .iter()
+        .filter(|message| matches!(message.sender, Sender::Agent(_)))
+        .collect();
+    assert!(replies[1].content.contains("Coder: I will build it."));
 }
 
 #[tokio::test]
@@ -1968,6 +2258,7 @@ async fn enable_router(fixture: &GroupFixture, default_responder: Option<AgentId
                 compact_threshold: None,
                 router_enabled: Some(true),
                 default_responder,
+                ..ConversationSettingsUpdate::default()
             },
         )
         .await
