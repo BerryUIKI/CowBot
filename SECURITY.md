@@ -78,11 +78,23 @@ implemented so far:
 - Failed sign-ins are counted per `X-Forwarded-For` source and refused after ten
   in fifteen minutes.
 
-What server mode does **not** have yet: workspace, channel, and task routes;
-membership or role enforcement beyond storing the role; invitations; API
-tokens; TLS; and the WebSocket surface. Do not deploy it beyond localhost, and
-do not treat an account on it as protecting anything but itself, until 2.2
-lands.
+**Workspaces and roles (ADR-0044).** Workspace, membership, and invitation
+routes enforce roles:
+
+- Every workspace route resolves the caller's membership first, and a non-member
+  gets `404` rather than `403`, so workspace existence cannot be probed.
+- An Admin manages Members but cannot promote a peer or grant Owner; only an
+  Owner grants Owner. A Member can read the workspace and its roster but cannot
+  invite, rename, or change members.
+- The last Owner cannot be demoted or removed, counted in the store so two
+  concurrent demotions cannot both succeed.
+- An invitation is a single-use 256-bit token, stored only as a hash, valid
+  seven days, deleted on acceptance; its token is never returned by the listing.
+- Membership changes are audited with the acting user and `source: human`.
+
+What server mode does **not** have yet: channel, task, and approval routes; API
+tokens; TLS; and the WebSocket surface. Do not deploy it beyond localhost until
+those land.
 
 ## Known gaps
 
@@ -122,8 +134,8 @@ covers the ones with a security consequence.
 ### Before any self-hosted deployment
 
 - [ ] Treat every preceding item as still required.
-- [ ] Do not expose the server beyond localhost until the workspace routes and
-      membership enforcement land (milestone 2.2).
+- [ ] Do not expose the server beyond localhost until the channel, task, and
+      approval routes land with the same enforcement.
 - [ ] Terminate TLS in front of the server; CowBot does not provide it.
 - [ ] Change the owner password the server prints on first start, and keep the
       generated one out of shell history.

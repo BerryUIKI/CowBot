@@ -245,15 +245,15 @@ fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::password_
 }
 
 /// A 256-bit random token, hex-encoded.
-fn random_token() -> String {
+pub fn random_token() -> String {
     use argon2::password_hash::rand_core::RngCore;
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The stored form of a session token.
-fn hash_token(token: &str) -> String {
+/// The stored form of a token (a session or an invite).
+pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

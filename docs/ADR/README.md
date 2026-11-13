@@ -47,6 +47,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0041](0041-turn-streaming-and-cancellation.md) | Turn streaming and cancellation |
 | [0042](0042-group-routing-modes-and-mute.md) | Group routing modes, participant mute, and reply cleanup |
 | [0043](0043-self-hosted-server-auth.md) | Self-hosted server: password accounts and bearer sessions |
+| [0044](0044-workspace-membership-and-roles.md) | Workspace membership, role enforcement, and invitations |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

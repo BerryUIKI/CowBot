@@ -7,13 +7,14 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use cowbot_store::Store;
 
 use crate::api;
 use crate::auth::{AuthService, AuthenticatedUser};
 use crate::error::ApiError;
+use crate::workspaces;
 
 /// Shared state every handler sees.
 #[derive(Clone)]
@@ -41,7 +42,33 @@ pub fn app(state: AppState) -> Router {
     let authenticated = Router::new()
         .route("/api/v1/me", get(api::me))
         .route("/api/v1/auth/sign-out", post(api::sign_out))
-        .route("/api/v1/auth/password", post(api::change_password));
+        .route("/api/v1/auth/password", post(api::change_password))
+        // Workspaces (ADR-0044)
+        .route(
+            "/api/v1/workspaces",
+            get(workspaces::list_workspaces).post(workspaces::create_workspace),
+        )
+        .route("/api/v1/invites/accept", post(workspaces::accept_invite))
+        .route(
+            "/api/v1/workspaces/{workspace_id}",
+            patch(workspaces::rename_workspace),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members",
+            get(workspaces::list_members),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{user_id}",
+            patch(workspaces::update_member).delete(workspaces::remove_member),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/invites",
+            get(workspaces::list_invites).post(workspaces::create_invite),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/invites/{invite_id}",
+            delete(workspaces::revoke_invite),
+        );
 
     public
         .merge(authenticated)

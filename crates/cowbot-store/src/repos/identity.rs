@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::{
     ApiToken, Invite, Membership, Role, Session, User, UserId, Workspace, WorkspaceId,
@@ -128,11 +128,7 @@ impl InviteRow {
 }
 
 fn role_to_str(role: Role) -> &'static str {
-    match role {
-        Role::Owner => "owner",
-        Role::Admin => "admin",
-        Role::Member => "member",
-    }
+    role.as_str()
 }
 
 fn role_from_str(value: &str) -> CowResult<Role> {
@@ -248,6 +244,77 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
+        Ok(())
+    }
+
+    /// Set a member's role, or add the membership if it does not exist.
+    pub async fn set_member_role(
+        &self,
+        user_id: &UserId,
+        workspace_id: &WorkspaceId,
+        role: Role,
+    ) -> CowResult<()> {
+        sqlx::query(
+            "INSERT INTO memberships (user_id, workspace_id, role) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, workspace_id) DO UPDATE SET role = excluded.role",
+        )
+        .bind(&user_id.0)
+        .bind(&workspace_id.0)
+        .bind(role_to_str(role))
+        .execute(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    /// Remove a membership. The user and their sessions are untouched.
+    pub async fn remove_member(
+        &self,
+        user_id: &UserId,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<u64> {
+        let result = sqlx::query("DELETE FROM memberships WHERE user_id = ? AND workspace_id = ?")
+            .bind(&user_id.0)
+            .bind(&workspace_id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Count the owners of a workspace, so the last one cannot be removed.
+    pub async fn count_owners(&self, workspace_id: &WorkspaceId) -> CowResult<u64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memberships WHERE workspace_id = ? AND role = 'owner'",
+        )
+        .bind(&workspace_id.0)
+        .fetch_one(self.pool())
+        .await
+        .map_err(db)?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Every invite for a workspace, newest first, for an admin to review.
+    pub async fn list_invites(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Invite>> {
+        let rows = sqlx::query_as::<_, InviteRow>(
+            "SELECT id, workspace_id, token_hash, role, expires_at
+             FROM invites WHERE workspace_id = ? ORDER BY expires_at DESC",
+        )
+        .bind(&workspace_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(InviteRow::into_domain).collect()
+    }
+
+    /// Rename a workspace.
+    pub async fn rename_workspace(&self, id: &WorkspaceId, name: &str) -> CowResult<()> {
+        sqlx::query("UPDATE workspaces SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
         Ok(())
     }
 
@@ -419,6 +486,17 @@ impl Store {
         .await
         .map_err(db)?;
         row.map(InviteRow::into_domain).transpose()
+    }
+
+    /// Move an invitation's expiry, for tests and for an admin shortening one.
+    pub async fn set_invite_expiry(&self, id: &str, expires_at: DateTime<Utc>) -> CowResult<()> {
+        sqlx::query("UPDATE invites SET expires_at = ? WHERE id = ?")
+            .bind(expires_at.to_rfc3339())
+            .bind(id)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
     }
 
     pub async fn delete_invite(&self, id: &str) -> CowResult<()> {
