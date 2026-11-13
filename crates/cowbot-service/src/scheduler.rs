@@ -35,7 +35,7 @@ use crate::permissions::ModelPermissionEvaluator;
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
-use crate::turns::{TurnCompletion, TurnRunner, TurnSink, TurnSpec};
+use crate::turns::{ReplyCleanup, TurnCompletion, TurnRunner, TurnSink, TurnSpec};
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
 /// approval policy; the agent is asked to finish with the plan itself.
@@ -56,6 +56,8 @@ struct PreparedConversationTurn {
     /// Channel mention turns do not: their branch is not used by the next
     /// round, so only user-created conversations and task runs record it.
     record_context: bool,
+    /// The names a group reply is cleaned against, when cleaning is on.
+    cleanup: Option<crate::turns::ReplyCleanup>,
 }
 
 /// A conversation turn's prepared model request and recording rules.
@@ -69,6 +71,8 @@ pub struct ConversationTurnRequest {
     pub snapshot_context: SnapshotContext,
     /// Append the assistant text to the participant's context branch.
     pub record_context: bool,
+    /// The names a group reply is cleaned against, when cleaning is on.
+    pub cleanup: Option<ReplyCleanup>,
 }
 
 /// Options for one scheduled crew run.
@@ -446,6 +450,7 @@ impl AssignmentScheduler {
             agent_id,
             snapshot_context,
             record_context,
+            cleanup,
         } = turn;
         if let Ok(mut prepared) = self.prepared.lock() {
             prepared.insert(
@@ -456,6 +461,7 @@ impl AssignmentScheduler {
                     agent_id,
                     snapshot_context,
                     record_context,
+                    cleanup,
                 },
             );
         }
@@ -843,6 +849,7 @@ impl AssignmentScheduler {
                         agent_id: turn.agent_id.clone(),
                         agent_name: executor.profile.name.clone(),
                         record_context: turn.record_context,
+                        cleanup: turn.cleanup.clone(),
                     },
                 },
                 Some(turn.channel_id.clone()),

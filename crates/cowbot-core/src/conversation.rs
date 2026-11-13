@@ -154,6 +154,15 @@ pub struct ConversationSettings {
     pub default_responder: Option<AgentId>,
     /// Whether an unaddressed group message may be routed by the model.
     pub router_enabled: bool,
+    /// How an unmentioned group message picks its responder (ADR-0042).
+    #[serde(default)]
+    pub routing_mode: RoutingMode,
+    /// Participants kept in the roster and history but never selected.
+    #[serde(default)]
+    pub muted_participants: Vec<AgentId>,
+    /// Whether a group reply is stripped of speaker labels and cross-talk.
+    #[serde(default = "default_true")]
+    pub reply_cleanup: bool,
     /// Whether the runtime may compact the context automatically.
     pub auto_compact: bool,
     /// Percentage of the usable window that triggers automatic compaction.
@@ -176,6 +185,9 @@ impl ConversationSettings {
             model: model.into(),
             default_responder: None,
             router_enabled: false,
+            routing_mode: RoutingMode::Mention,
+            muted_participants: Vec::new(),
+            reply_cleanup: true,
             auto_compact: false,
             compact_threshold: DEFAULT_COMPACT_THRESHOLD,
             created_at: now,
@@ -208,6 +220,12 @@ pub struct ConversationSettingsUpdate {
     pub compact_threshold: Option<u32>,
     /// Turn automatic routing on or off; single conversations ignore it.
     pub router_enabled: Option<bool>,
+    /// How an unmentioned group message picks its responder.
+    pub routing_mode: Option<RoutingMode>,
+    /// Replace the muted set; participants stay in the roster and history.
+    pub muted_participants: Option<Vec<AgentId>>,
+    /// Strip speaker labels and cross-talk from group replies.
+    pub reply_cleanup: Option<bool>,
     /// Replace the participant that answers unaddressed messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_responder: Option<AgentId>,
@@ -628,6 +646,158 @@ pub enum CompactionWrite {
     Empty,
 }
 
+/// Strip a group reply of the speaker labels models add on their own.
+///
+/// A model told the `[Name]` convention sometimes answers `Name: ...` anyway,
+/// or keeps writing after another participant's turn would have started. The
+/// cleanup removes a leading prefix for the speaker and cuts the reply at the
+/// first line another participant appears to have written. Direct
+/// conversations never see it, and a user can turn it off per conversation.
+pub fn clean_group_reply(content: &str, speaker: &str, other_participants: &[String]) -> String {
+    let mut lines = content.lines();
+    let first = lines.next().unwrap_or_default();
+    let mut kept: Vec<&str> = Vec::new();
+
+    // A leading `Name:` or `[Name]:` prefix for the speaker is redundant.
+    let mut first_line = first;
+    if let Some(rest) = strip_speaker_prefix(first_line, speaker) {
+        first_line = rest;
+    }
+    kept.push(first_line);
+
+    let others: Vec<&str> = other_participants
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !name.eq_ignore_ascii_case(speaker))
+        .collect();
+    for line in lines {
+        if others
+            .iter()
+            .any(|name| strip_speaker_prefix(line, name).is_some())
+        {
+            break;
+        }
+        kept.push(line);
+    }
+
+    let joined = kept.join(
+        "
+",
+    );
+    let trimmed = joined.trim();
+    // A cut that leaves the reply empty falls back to the original text, so
+    // cleanup never deletes an answer.
+    if trimmed.is_empty() {
+        content.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// The text after a leading `Name:` or `[Name]:` label, when it matches.
+fn strip_speaker_prefix<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let trimmed = line.trim_start();
+    let bracketed = format!("[{name}]");
+    let rest = trimmed
+        .strip_prefix(name)
+        .or_else(|| trimmed.strip_prefix(bracketed.as_str()))?;
+    let rest = rest.trim_start().strip_prefix(':')?;
+    Some(rest.trim_start())
+}
+
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
+/// How an unmentioned group message picks its responder.
+///
+/// An explicit mention always wins, whatever the mode. The mode only decides
+/// what happens when nobody is named (ADR-0042).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    /// The model router decides, when it is enabled.
+    #[default]
+    Mention,
+    /// The participant after the last assistant author takes the turn.
+    Rotation,
+    /// Only the stored default responder answers.
+    Default,
+}
+
+impl RoutingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mention => "mention",
+            Self::Rotation => "rotation",
+            Self::Default => "default",
+        }
+    }
+
+    /// Whether the model router may decide an unmentioned message.
+    ///
+    /// The router only runs in the mode that names it, so a rotation or a fixed
+    /// default never pays for a routing call.
+    pub fn uses_router(self, router_enabled: bool) -> bool {
+        matches!(self, Self::Mention) && router_enabled
+    }
+}
+
+impl std::str::FromStr for RoutingMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mention" => Ok(Self::Mention),
+            "rotation" => Ok(Self::Rotation),
+            "default" => Ok(Self::Default),
+            _ => Err(()),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The participant after `last` in roster order, skipping muted ones.
+///
+/// An unknown or absent last speaker starts the rotation at the first
+/// unmuted participant, so a fresh conversation and a roster change both
+/// behave predictably. Returns `None` when every participant is muted.
+pub fn next_rotation<'a, T>(
+    participants: &'a [T],
+    id_of: impl Fn(&T) -> AgentId,
+    muted: &[AgentId],
+    last: Option<&AgentId>,
+) -> Option<&'a T> {
+    let total = participants.len();
+    if total == 0 {
+        return None;
+    }
+    let is_unmuted = |participant: &T| !muted.contains(&id_of(participant));
+    if !participants.iter().any(is_unmuted) {
+        return None;
+    }
+    let Some(position) = last.and_then(|last| {
+        participants
+            .iter()
+            .position(|participant| &id_of(participant) == last)
+    }) else {
+        return participants
+            .iter()
+            .find(|participant| is_unmuted(participant));
+    };
+    // Walk forward from the last speaker's roster slot, wrapping, and skip
+    // muted participants. The full-ring bound keeps an all-muted tail from
+    // spinning.
+    let mut index = position;
+    for _ in 0..total {
+        index = (index + 1) % total;
+        if is_unmuted(&participants[index]) {
+            return participants.get(index);
+        }
+    }
+    None
+}
+
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why a group message selected the participants it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -637,6 +807,8 @@ pub enum RouteSource {
     Mention,
     /// The router selected the participants.
     Router,
+    /// The roster's turn-taking rotation picked the next participant.
+    Rotation,
     /// No participant was mentioned; the default responder answers.
     Default,
     /// No participant was mentioned and no default responder is configured.
@@ -650,6 +822,7 @@ impl RouteSource {
         match self {
             Self::Mention => "mention",
             Self::Router => "router",
+            Self::Rotation => "rotation",
             Self::Default => "default",
             Self::Silent => "silent",
             Self::Unmatched => "unmatched",
@@ -664,6 +837,7 @@ impl std::str::FromStr for RouteSource {
         match value {
             "mention" => Ok(Self::Mention),
             "router" => Ok(Self::Router),
+            "rotation" => Ok(Self::Rotation),
             "default" => Ok(Self::Default),
             "silent" => Ok(Self::Silent),
             "unmatched" => Ok(Self::Unmatched),
@@ -1322,5 +1496,110 @@ mod tests {
         // A summary with an older message and two kept entries: there is new
         // material to fold into the next summary.
         assert_eq!(compaction_split(&[summary, first, second, third]), 2);
+    }
+
+    fn roster(ids: &[&str]) -> Vec<AgentId> {
+        ids.iter().map(|id| AgentId::new(*id)).collect()
+    }
+
+    #[test]
+    fn rotation_follows_the_roster_and_wraps() {
+        let participants = roster(&["a", "b", "c"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let pick = |last: &str| {
+            next_rotation(&participants, id_of, &[], Some(&AgentId::new(last)))
+                .map(|agent| agent.0.clone())
+        };
+        assert_eq!(pick("a").as_deref(), Some("b"));
+        assert_eq!(pick("b").as_deref(), Some("c"));
+        assert_eq!(pick("c").as_deref(), Some("a"), "the rotation wraps");
+    }
+
+    #[test]
+    fn rotation_starts_at_the_first_participant_without_a_last_speaker() {
+        let participants = roster(&["a", "b", "c"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let first = next_rotation(&participants, id_of, &[], None);
+        assert_eq!(first.map(|agent| agent.0.as_str()), Some("a"));
+
+        // An agent no longer on the roster starts it over rather than failing.
+        let stranger = AgentId::new("zzz");
+        let first = next_rotation(&participants, id_of, &[], Some(&stranger));
+        assert_eq!(first.map(|agent| agent.0.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn rotation_skips_muted_participants() {
+        let participants = roster(&["a", "b", "c", "d"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let muted = roster(&["b", "c"]);
+        let picked = next_rotation(&participants, id_of, &muted, Some(&AgentId::new("a")));
+        assert_eq!(picked.map(|agent| agent.0.as_str()), Some("d"));
+
+        // Coming back around, a muted run is skipped entirely.
+        let picked = next_rotation(&participants, id_of, &muted, Some(&AgentId::new("d")));
+        assert_eq!(picked.map(|agent| agent.0.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn a_fully_muted_rotation_selects_nobody() {
+        let participants = roster(&["a", "b"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let muted = roster(&["a", "b"]);
+        assert!(next_rotation(&participants, id_of, &muted, None).is_none());
+        assert!(next_rotation(&participants, id_of, &muted, Some(&AgentId::new("a"))).is_none());
+        let empty: Vec<AgentId> = Vec::new();
+        assert!(next_rotation(&empty, id_of, &[], None).is_none());
+    }
+
+    #[test]
+    fn cleanup_strips_the_speakers_own_prefix() {
+        let others = vec!["Reviewer".to_string()];
+        assert_eq!(
+            clean_group_reply("Coder: Here is the fix.", "Coder", &others),
+            "Here is the fix."
+        );
+        assert_eq!(
+            clean_group_reply("[Coder]: Here is the fix.", "Coder", &others),
+            "Here is the fix."
+        );
+        // A prefix that belongs to someone else is a cross-talk cut, so the
+        // reply falls back to what it produced rather than vanishing.
+        assert_eq!(
+            clean_group_reply("Reviewer: I disagree.", "Coder", &others),
+            "Reviewer: I disagree."
+        );
+    }
+
+    #[test]
+    fn cleanup_cuts_the_reply_at_another_participants_turn() {
+        let others = vec!["Reviewer".to_string(), "Planner".to_string()];
+        let reply = "Coder: Here is the fix.
+
+It compiles.
+
+Reviewer: Looks wrong to me.";
+        assert_eq!(
+            clean_group_reply(reply, "Coder", &others),
+            "Here is the fix.
+
+It compiles."
+        );
+
+        let bracketed = "Two things.
+[Planner]: and a third";
+        assert_eq!(
+            clean_group_reply(bracketed, "Coder", &others),
+            "Two things."
+        );
+    }
+
+    #[test]
+    fn cleanup_leaves_a_normal_reply_alone() {
+        let others = vec!["Reviewer".to_string()];
+        let reply = "The build passes.
+
+See `Reviewer::check` for the rule.";
+        assert_eq!(clean_group_reply(reply, "Coder", &others), reply);
     }
 }

@@ -16,7 +16,7 @@ use cowbot_core::agent::AgentId;
 use cowbot_core::approval::Approval;
 use cowbot_core::cancel::CancelSignal;
 use cowbot_core::channel::{ChannelId, Sender};
-use cowbot_core::conversation::{ContextEntry, ContextRole, TurnId};
+use cowbot_core::conversation::{clean_group_reply, ContextEntry, ContextRole, TurnId};
 use cowbot_core::error::CowResult;
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::run::RunId;
@@ -60,10 +60,28 @@ pub enum TurnSink {
         agent_name: String,
         /// Write the reply into the participant's context branch.
         record_context: bool,
+        /// Names a group reply may strip: the speaker plus the other
+        /// participants, or empty when the reply is stored raw.
+        cleanup: Option<ReplyCleanup>,
     },
     /// The caller stores the output itself (task runs go through the
     /// assignment service); the runner only publishes the terminal event.
     Caller,
+}
+
+/// The participant names a group reply is cleaned against.
+#[derive(Debug, Clone)]
+pub struct ReplyCleanup {
+    /// The participant who wrote the reply.
+    pub speaker: String,
+    /// Every other participant's name.
+    pub others: Vec<String>,
+}
+
+impl ReplyCleanup {
+    pub fn clean(&self, text: &str) -> String {
+        clean_group_reply(text, &self.speaker, &self.others)
+    }
 }
 
 /// What a runner needs to open a turn.
@@ -255,12 +273,17 @@ impl TurnRunner {
                 agent_id,
                 agent_name,
                 record_context,
+                cleanup,
             } => {
+                let body = match cleanup {
+                    Some(cleanup) if completion.error.is_none() => cleanup.clean(&text),
+                    _ => text.clone(),
+                };
                 self.store_conversation(
                     channel_id,
                     agent_id,
                     agent_name,
-                    &text,
+                    &body,
                     *record_context && completion.record_context,
                     completion.error.as_deref(),
                 )
