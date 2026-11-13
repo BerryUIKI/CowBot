@@ -319,11 +319,16 @@ export default function App() {
   const [streamingTurns, setStreamingTurns] = useState<
     Record<string, {
       channelId: string | null;
+      agentId: string | null;
       text: string;
       reasoning: string;
       tools: { name: string; running: boolean }[];
     }>
   >({});
+  /// The live state of `streamingTurns`, readable from event callbacks that
+  /// were registered once and would otherwise close over a stale copy.
+  const streamingTurnsRef = useRef(streamingTurns);
+  streamingTurnsRef.current = streamingTurns;
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
@@ -1232,7 +1237,12 @@ export default function App() {
   /// Live turns streaming into the selected channel, oldest first.
   const channelStreams = Object.entries(streamingTurns)
     .filter(([, turn]) => selectedId && turn.channelId === selectedId)
-    .map(([id, turn]) => ({ id, ...turn }));
+    .map(([id, turn]) => ({
+      id,
+      ...turn,
+      name:
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? "Agent",
+    }));
   const channelIsStreaming = channelStreams.length > 0;
   const conversationParticipantNames = conversationParticipants.map(
     (participant) => participant.agent_name,
@@ -1928,16 +1938,14 @@ export default function App() {
   function handleTurnEvent(turn: TurnEvent) {
     const id = turn.turn_id;
     if (turn.type === "turn_started") {
-      const channel = (turn as unknown as {
-        target?: { conversation?: { channel_id?: string }; task?: unknown };
-      }).target;
-      const channelId =
-        (channel as { conversation?: { channel_id?: string } } | undefined)?.conversation
-          ?.channel_id ?? null;
+      const target = turn.target;
+      const channelId = target.kind === "conversation" ? target.channel_id : null;
+      const agentId = target.agent_id;
       setStreamingTurns((current) => ({
         ...current,
         [id]: current[id] ?? {
           channelId,
+          agentId,
           text: "",
           reasoning: "",
           tools: [],
@@ -1997,7 +2005,9 @@ export default function App() {
         return next;
       });
       setContextVersion((version) => version + 1);
-      const channel = streamingTurns[id]?.channelId;
+      // Read the channel from the live ref: this callback is registered once,
+      // so `streamingTurns` in its closure is the empty map from first render.
+      const channel = streamingTurnsRef.current[id]?.channelId;
       if (channel) {
         refreshMessages(channel).catch((err) => setError(errorMessage(err)));
       }
@@ -3585,15 +3595,9 @@ export default function App() {
                       ))
                     ) : null}
                     {channelStreams.map((turn) => {
-                      const agent = agents.find(
-                        (candidate) =>
-                          candidate.id ===
-                          pendingReply?.agents.find(
-                            (listed) => listed.id === candidate.id,
-                          )?.id,
-                      );
-                      const name =
-                        agent?.name ?? pendingReply?.agents[0]?.name ?? "Agent";
+                      // Each turn names its own agent, so two participants who
+                      // answer at once are labelled correctly.
+                      const name = turn.name;
                       return (
                         <li className="chat-row chat-row-agent" key={`stream-${turn.id}`}>
                           <Avatar name={name} kind="agent" size="small" />
