@@ -3,7 +3,7 @@ pub mod crew;
 pub mod roles;
 
 pub use agent::AgentInstance;
-pub use agent::ConversationRecorder;
+pub use agent::{ConversationRecorder, TurnObserver};
 pub use crew::Crew;
 pub use roles::StandardRoles;
 
@@ -13,18 +13,20 @@ mod tests {
     use async_trait::async_trait;
     use cowbot_bus::EventBus;
     use cowbot_core::agent::AgentId;
+    use cowbot_core::cancel::CancelSignal;
     use cowbot_core::error::{CowError, CowResult};
     use cowbot_core::task::Task;
     use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolGate};
     use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder, TokenUsage};
     use cowbot_llm::{
         ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatRole, LlmProvider,
-        LlmToolCall, MockLlmProvider,
+        LlmToolCall, MockLlmProvider, MockTurn, StreamChunk,
     };
     use cowbot_tools::{CodeExecutionTool, SubprocessSandbox, ToolRegistry};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     struct DenyGate {
         calls: Arc<AtomicUsize>,
@@ -411,5 +413,173 @@ mod tests {
         assert_eq!(requests[0].messages[1].role, ChatRole::System);
         assert_eq!(requests[0].messages[1].content, "You are in Plan mode.");
         assert_eq!(requests[0].messages[2].content, "latest question");
+    }
+
+    /// Records what the agent reports while it runs.
+    #[derive(Default)]
+    struct RecordingObserver {
+        deltas: Mutex<Vec<String>>,
+        tools_started: Mutex<Vec<String>>,
+        tools_finished: Mutex<Vec<String>>,
+    }
+
+    impl TurnObserver for RecordingObserver {
+        fn text_delta(&self, text: &str) {
+            self.deltas.lock().unwrap().push(text.to_string());
+        }
+
+        fn tool_call_started(&self, call: &ToolCall) {
+            self.tools_started.lock().unwrap().push(call.name.clone());
+        }
+
+        fn tool_call_finished(&self, result: &cowbot_core::tool::ToolResult) {
+            self.tools_finished
+                .lock()
+                .unwrap()
+                .push(result.call_id.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn text_deltas_are_reported_as_they_stream() {
+        let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
+            chunks: vec![
+                StreamChunk::Text("Hello ".to_string()),
+                StreamChunk::Text("there".to_string()),
+            ],
+            finish_reason: Some("stop".to_string()),
+            chunk_delay: None,
+            error_after_chunks: None,
+        }]));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let observer = Arc::new(RecordingObserver::default());
+        agent.set_observer(Some(observer.clone()));
+
+        let task = Task::new("Say hello", "Greeting");
+        let output = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        assert_eq!(output, "Hello there");
+        assert_eq!(
+            observer.deltas.lock().unwrap().clone(),
+            vec!["Hello ".to_string(), "there".to_string()]
+        );
+        assert_eq!(agent.draft(), "Hello there");
+    }
+
+    #[tokio::test]
+    async fn tool_calls_are_reported_around_their_execution() {
+        let llm = Arc::new(MockLlmProvider::with_turns(vec![
+            MockTurn {
+                chunks: vec![
+                    StreamChunk::Text("checking".to_string()),
+                    StreamChunk::ToolCall(LlmToolCall {
+                        id: "call-1".to_string(),
+                        name: "missing_tool".to_string(),
+                        arguments: json!({}),
+                    }),
+                ],
+                finish_reason: Some("tool_calls".to_string()),
+                chunk_delay: None,
+                error_after_chunks: None,
+            },
+            MockTurn::text("done"),
+        ]));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let observer = Arc::new(RecordingObserver::default());
+        agent.set_observer(Some(observer.clone()));
+
+        let task = Task::new("Use a tool", "Answer");
+        let output = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await
+            .unwrap();
+
+        assert_eq!(output, "done");
+        assert_eq!(
+            observer.tools_started.lock().unwrap().clone(),
+            vec!["missing_tool".to_string()]
+        );
+        assert_eq!(
+            observer.tools_finished.lock().unwrap().clone(),
+            vec!["call-1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_turn_keeps_the_partial_text() {
+        let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
+            chunks: vec![
+                StreamChunk::Text("partial ".to_string()),
+                StreamChunk::Text("answer".to_string()),
+            ],
+            finish_reason: Some("stop".to_string()),
+            chunk_delay: Some(Duration::from_millis(400)),
+            error_after_chunks: None,
+        }]));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+        let cancel = CancelSignal::new();
+        agent.set_cancel(cancel.clone());
+        let observer = Arc::new(RecordingObserver::default());
+        agent.set_observer(Some(observer.clone()));
+
+        let stopper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            stopper.cancel();
+        });
+
+        let task = Task::new("Write a long answer", "Answer");
+        let result = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await;
+
+        assert!(matches!(result, Err(CowError::Cancelled)));
+        assert_eq!(agent.draft(), "partial ");
+        assert_eq!(
+            observer.deltas.lock().unwrap().clone(),
+            vec!["partial ".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_provider_error_after_partial_text_keeps_the_draft() {
+        let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
+            chunks: vec![StreamChunk::Text("half".to_string())],
+            finish_reason: None,
+            chunk_delay: None,
+            error_after_chunks: Some("upstream reset".to_string()),
+        }]));
+        let mut agent = AgentInstance::new(
+            StandardRoles::coder(),
+            llm,
+            ToolRegistry::new(),
+            "mock-model",
+        );
+
+        let task = Task::new("Fail mid-way", "Answer");
+        let result = agent
+            .execute_task(&task, &[], &EventBus::default_bus())
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(agent.draft(), "half");
     }
 }

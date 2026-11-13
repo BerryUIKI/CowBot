@@ -673,7 +673,11 @@ impl std::str::FromStr for RouteSource {
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
-/// Unique identifier for one routed group message.
+/// Unique identifier for one live turn.
+///
+/// A turn is a group routing decision's id when the turn came from a routed
+/// group message, and is minted fresh for a direct chat, channel, or task turn
+/// (ADR-0041).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub String);
 

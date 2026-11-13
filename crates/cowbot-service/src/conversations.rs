@@ -12,7 +12,7 @@ use cowbot_core::conversation::{
     CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
     ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
+    ConversationTurn, RouteSource, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
     MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
@@ -36,8 +36,10 @@ use crate::channels::{normalize_channel_name, ChannelService};
 use crate::compaction_locks::CompactionLocks;
 use crate::memory::{MemoryService, RecalledMemory};
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
-use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::TurnRunner;
+use cowbot_core::turn::TurnControl;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
 const MAX_TITLE_CHARS: usize = 68;
@@ -90,13 +92,17 @@ pub struct ConversationService {
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
     compaction_locks: Arc<CompactionLocks>,
+    /// Shared turn registry for every turn this service spawns (ADR-0041).
+    turns: Arc<TurnRunner>,
 }
 
 impl ConversationService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
+        let turns = Arc::new(TurnRunner::new(store.clone(), bus.clone()));
         Self {
             channels: ChannelService::new(store.clone(), bus.clone()),
             memory: MemoryService::new(store.clone(), workspace_id.clone()),
+            turns,
             store,
             bus,
             workspace_id,
@@ -116,6 +122,17 @@ impl ConversationService {
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions;
         self
+    }
+
+    /// Share another service's turn registry.
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = turns;
+        self
+    }
+
+    /// Stop a running turn of this conversation service.
+    pub fn cancel_turn(&self, turn: &TurnId) -> bool {
+        self.turns.cancel(turn)
     }
 
     /// Create a single-agent conversation with a fixed provider and model.
@@ -492,7 +509,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         scheduler.register_agent(agent.clone(), llm.clone(), tools, settings.model.clone());
 
         let mut run_options = CrewRunOptions {
@@ -508,18 +526,24 @@ impl ConversationService {
         scheduler
             .enqueue_conversation_turn(
                 &task,
+                ConversationTurnRequest {
+                    messages,
+                    channel_id: channel.id.clone(),
+                    agent_id: agent.id.clone(),
+                    snapshot_context,
+                    record_context: true,
+                },
                 requester,
                 AssignmentOrigin::User,
                 &run_options,
-                messages,
-                channel.id.clone(),
-                agent.id.clone(),
-                snapshot_context,
             )
             .await?;
 
         let outcome = scheduler.run_until_idle().await;
-        let reply = self.channels.post_task_outcome(channel, &task_id).await?;
+        // The turn runner posts a conversation reply with its text and its
+        // stopped marker, so this path only needs the text for memory
+        // extraction (ADR-0041).
+        let reply = self.store.task_output(&task_id).await?;
         outcome?;
 
         // A settled turn may contribute pending memory candidates. Extraction
@@ -840,7 +864,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
@@ -897,13 +922,16 @@ impl ConversationService {
             scheduler
                 .enqueue_conversation_turn(
                     &task,
+                    ConversationTurnRequest {
+                        messages,
+                        channel_id: channel.id.clone(),
+                        agent_id: agent.id.clone(),
+                        snapshot_context,
+                        record_context: true,
+                    },
                     requester.clone(),
                     AssignmentOrigin::User,
                     &task_options,
-                    messages,
-                    channel.id.clone(),
-                    agent.id.clone(),
-                    snapshot_context,
                 )
                 .await?;
             tasks.push(task.id);
@@ -1036,25 +1064,19 @@ impl ConversationService {
                 .unwrap_or_else(|| format!("Agent {}", assignee.0)),
         };
 
+        // The turn runner already posted the reply, including a stopped one, so
+        // settling mirrors it into the other branches and reports the outcome
+        // instead of posting a second copy (ADR-0041).
         match &task.status {
             cowbot_core::task::TaskStatus::Completed { output } => {
                 let content = output.trim();
                 if content.is_empty() {
-                    self.channels
-                        .post_system_notice(
-                            &channel.id,
-                            &format!("{name} finished without a reply."),
-                        )
-                        .await?;
-                    return Ok(None);
+                    return Ok(Some(SettledGroupReply {
+                        agent_id: assignee,
+                        replied: false,
+                        content: None,
+                    }));
                 }
-                self.channels
-                    .post_message(
-                        &channel.id,
-                        Sender::Agent(assignee.clone()),
-                        content.to_string(),
-                    )
-                    .await?;
                 for participant in participants
                     .iter()
                     .filter(|participant| participant.id != assignee)
@@ -1074,16 +1096,11 @@ impl ConversationService {
                     content: Some(content.to_string()),
                 }))
             }
-            cowbot_core::task::TaskStatus::Failed { error } => {
-                self.channels
-                    .post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
-                    .await?;
-                Ok(Some(SettledGroupReply {
-                    agent_id: assignee,
-                    replied: false,
-                    content: None,
-                }))
-            }
+            cowbot_core::task::TaskStatus::Failed { .. } => Ok(Some(SettledGroupReply {
+                agent_id: assignee,
+                replied: false,
+                content: None,
+            })),
             _ => Ok(None),
         }
     }

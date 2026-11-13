@@ -258,53 +258,6 @@ impl ChannelService {
         self.store.list_messages(channel_id, limit).await
     }
 
-    /// Post the settled outcome of a turn task back into its channel.
-    ///
-    /// Returns the reply text that was posted, or `None` when the task failed,
-    /// produced no output, or never settled.
-    pub(crate) async fn post_task_outcome(
-        &self,
-        channel: &Channel,
-        task_id: &cowbot_core::task::TaskId,
-    ) -> CowResult<Option<String>> {
-        let Some(task) = self.store.get_task(task_id).await? else {
-            return Ok(None);
-        };
-        let Some(assignee) = task.assigned_agent.clone() else {
-            return Ok(None);
-        };
-        let name = self
-            .store
-            .get_agent(&assignee)
-            .await?
-            .map(|agent| agent.name)
-            .unwrap_or_else(|| format!("Agent {}", assignee.0));
-
-        match &task.status {
-            cowbot_core::task::TaskStatus::Completed { output } => {
-                let content = output.trim();
-                if content.is_empty() {
-                    self.post_system_notice(
-                        &channel.id,
-                        &format!("{name} finished without a reply."),
-                    )
-                    .await?;
-                    Ok(None)
-                } else {
-                    self.post_message(&channel.id, Sender::Agent(assignee), content.to_string())
-                        .await?;
-                    Ok(Some(content.to_string()))
-                }
-            }
-            cowbot_core::task::TaskStatus::Failed { error } => {
-                self.post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
-                    .await?;
-                Ok(None)
-            }
-            _ => Ok(None),
-        }
-    }
-
     pub(crate) async fn post_system_notice(
         &self,
         channel_id: &ChannelId,

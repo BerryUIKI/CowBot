@@ -64,7 +64,7 @@ pub enum LlmCallKind {
     /// Memory extraction from a completed conversation.
     MemoryExtract,
     /// A side question asked with `/btw`: one turn whose answer is shown to the
-    /// user but never posted or appended to a context branch (ADR-0039).
+    /// user but never posted or appended to a context branch (ADR-0041).
     SideQuestion,
 }
 

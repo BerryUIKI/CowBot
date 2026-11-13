@@ -17,7 +17,7 @@ use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     ChannelParticipant, CompactionOutcome, ConversationContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn,
+    ConversationSettingsUpdate, ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
@@ -244,6 +244,7 @@ impl LocalClient {
     ) -> CowResult<HashMap<TaskId, String>> {
         CrewRunner::new(self.store.clone(), self.bus.clone())
             .with_session_decisions(self.session_decisions.clone())
+            .with_turns(self.channel_agents.turns())
             .run_with_options(
                 crew,
                 &self.session.workspace.id,
@@ -306,7 +307,8 @@ impl LocalClient {
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
         .with_session_decisions(Some(self.session_decisions.clone()))
-        .with_task_memory();
+        .with_task_memory()
+        .with_turns(self.channel_agents.turns());
         scheduler.register_instance(&agent);
         scheduler
             .enqueue(
@@ -593,6 +595,9 @@ impl Client for LocalClient {
     }
 
     async fn clear_channel_messages(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        // A reply still streaming into this channel would land in the history
+        // the user just cleared, so stop the channel's turns first (ADR-0041).
+        self.channel_agents.cancel_channel_turns(channel_id);
         self.channels.clear_channel_messages(channel_id).await
     }
 
@@ -785,6 +790,8 @@ impl Client for LocalClient {
     }
 
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        // A turn in flight would append to the branch just excluded.
+        self.channel_agents.cancel_channel_turns(channel_id);
         self.conversations.clear_context(channel_id).await
     }
 
@@ -906,6 +913,12 @@ impl Client for LocalClient {
 
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()> {
         self.tasks.cancel(task_id, reason).await
+    }
+
+    async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool> {
+        // Every turn the client starts — conversation, group, channel, and task
+        // run — registers with this one runner, so one lookup covers them all.
+        Ok(self.channel_agents.cancel_turn(turn_id))
     }
 
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task> {

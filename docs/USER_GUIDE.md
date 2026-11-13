@@ -217,7 +217,16 @@ from templates; a standalone agent editor is not part of this release.
   time. Select one and write in the composer: the message goes to that agent
   directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
-  chat timeline, and a typing bubble marks a turn in progress.
+  chat timeline, and a live bubble streams the reply as it is produced:
+  model thinking sits behind a collapsible, tool calls appear as chips that
+  tick from running to done, and the text arrives incrementally. While a
+  reply streams, the composer shows a **Stop** button — it ends the turn,
+  keeps the text produced so far in the timeline with a stopped marker, and
+  a reload shows the same stored state. A task run streams to no chat, so the
+  composer names it and offers the same stop while it works. Clearing a chat's
+  history or a conversation's context stops its open turn first. Approval
+  requests still interrupt mid-stream with their usual card, and the same reply
+  continues after you decide (ADR-0041).
 - **Conversations** — the collapsible **Conversations** section holds
   user-created sessions with one agent or a group of two to eight. Choose **New conversation**, give
   it a title, and select participants in the order you want them listed; use

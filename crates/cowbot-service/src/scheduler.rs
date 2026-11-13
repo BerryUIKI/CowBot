@@ -12,12 +12,15 @@ use cowbot_core::assignment::{
     AssignmentStatus,
 };
 use cowbot_core::channel::ChannelId;
+use cowbot_core::conversation::TurnId;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::run::{Run, RunId, RunStatus, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::tool::{ToolCall, ToolCallRecorder, ToolGate, ToolResult};
+use cowbot_core::turn::TurnControl;
+use cowbot_core::turn::TurnTarget;
 use cowbot_core::usage::{LlmCallRecord, LlmCallUsage, LlmUsageRecorder};
 use cowbot_llm::{ChatMessage, LlmProvider};
 use cowbot_store::Store;
@@ -32,6 +35,7 @@ use crate::permissions::ModelPermissionEvaluator;
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
 use crate::remember::{RememberTool, REMEMBER_TOOL_NAME};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::{TurnCompletion, TurnRunner, TurnSink, TurnSpec};
 
 /// Instruction prepended to a Plan-mode run. Mutating tools are denied by the
 /// approval policy; the agent is asked to finish with the plan itself.
@@ -47,6 +51,24 @@ struct PreparedConversationTurn {
     agent_id: AgentId,
     /// Prompt slots and memory selection behind `messages` (ADR-0037).
     snapshot_context: SnapshotContext,
+    /// Write the assistant text into the participant's context branch.
+    ///
+    /// Channel mention turns do not: their branch is not used by the next
+    /// round, so only user-created conversations and task runs record it.
+    record_context: bool,
+}
+
+/// A conversation turn's prepared model request and recording rules.
+#[derive(Clone)]
+pub struct ConversationTurnRequest {
+    /// The assembled model request.
+    pub messages: Vec<ChatMessage>,
+    pub channel_id: ChannelId,
+    pub agent_id: AgentId,
+    /// Prompt slots and memory selection behind `messages` (ADR-0037).
+    pub snapshot_context: SnapshotContext,
+    /// Append the assistant text to the participant's context branch.
+    pub record_context: bool,
 }
 
 /// Options for one scheduled crew run.
@@ -87,24 +109,56 @@ struct AgentExecution {
     model: String,
 }
 
+/// The handles one assignment execution needs beyond its agent.
+struct Execution<'a> {
+    task: &'a Task,
+    context: &'a [String],
+    bus: &'a EventBus,
+    gate: Arc<dyn ToolGate>,
+    recorder: Arc<dyn ToolCallRecorder>,
+    usage_recorder: Arc<dyn LlmUsageRecorder>,
+    conversation: Option<Vec<ChatMessage>>,
+    plan_mode: bool,
+    memory: Option<String>,
+    /// The turn's cancellation scope; a stopped turn aborts the model request
+    /// and keeps the partial text (ADR-0041).
+    cancel: cowbot_core::cancel::CancelSignal,
+    /// The turn the agent reports deltas and tool progress to.
+    observer: Option<Arc<dyn cowbot_agent::TurnObserver>>,
+}
+
+/// What one agent execution produced, whatever its outcome.
+struct ExecutionResult {
+    /// The final answer, or the failure that ended the agent loop.
+    output: CowResult<String>,
+    /// Text the model produced before the loop ended.
+    ///
+    /// A stopped or failed turn persists this instead of losing what the user
+    /// already saw.
+    draft: String,
+    /// Messages the turn appended to its context branch, when it recorded them.
+    recorded: Option<Vec<ChatMessage>>,
+}
+
 impl AgentExecution {
     /// Execute one assignment on a fresh agent instance.
     ///
     /// A new instance per call keeps assignment execution independent, which
     /// lets independent roots run concurrently.
-    #[allow(clippy::too_many_arguments)]
-    async fn execute(
-        &self,
-        task: &Task,
-        context: &[String],
-        bus: &EventBus,
-        gate: Arc<dyn ToolGate>,
-        recorder: Arc<dyn ToolCallRecorder>,
-        usage_recorder: Arc<dyn LlmUsageRecorder>,
-        conversation: Option<Vec<ChatMessage>>,
-        plan_mode: bool,
-        memory: Option<String>,
-    ) -> CowResult<(String, Option<Vec<ChatMessage>>)> {
+    async fn execute(&self, execution: Execution<'_>) -> ExecutionResult {
+        let Execution {
+            task,
+            context,
+            bus,
+            gate,
+            recorder,
+            usage_recorder,
+            conversation,
+            plan_mode,
+            memory,
+            cancel,
+            observer,
+        } = execution;
         let mut agent = AgentInstance::new(
             self.profile.clone(),
             self.llm.clone(),
@@ -115,6 +169,8 @@ impl AgentExecution {
         agent.set_tool_recorder(Some(recorder));
         agent.set_usage_recorder(Some(usage_recorder));
         agent.set_memory_block(memory);
+        agent.set_cancel(cancel);
+        agent.set_observer(observer);
         if plan_mode {
             agent.set_mode_instruction(Some(PLAN_MODE_INSTRUCTION.to_string()));
         }
@@ -123,12 +179,20 @@ impl AgentExecution {
             Some(messages) => {
                 let collector = Arc::new(CollectingConversation::new());
                 agent.set_conversation_recorder(Some(collector.clone()));
-                let output = agent.execute_messages(task, messages, bus).await?;
-                Ok((output, Some(collector.messages())))
+                let output = agent.execute_messages(task, messages, bus).await;
+                ExecutionResult {
+                    output,
+                    draft: agent.draft().to_string(),
+                    recorded: Some(collector.messages()),
+                }
             }
             None => {
-                let output = agent.execute_task(task, context, bus).await?;
-                Ok((output, None))
+                let output = agent.execute_task(task, context, bus).await;
+                ExecutionResult {
+                    output,
+                    draft: agent.draft().to_string(),
+                    recorded: None,
+                }
             }
         }
     }
@@ -196,6 +260,8 @@ pub struct AssignmentScheduler {
     prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
     /// Tasks whose completed Plan-mode output becomes their stored plan.
     plan_tasks: Arc<StdMutex<HashSet<TaskId>>>,
+    /// One lifecycle owner for every turn this scheduler runs (ADR-0041).
+    turns: Arc<TurnRunner>,
 }
 
 enum Claim {
@@ -217,8 +283,9 @@ impl AssignmentScheduler {
         max_concurrency: usize,
     ) -> Self {
         let assignments = AssignmentService::new(store.clone(), bus.clone());
-        let approvals = ApprovalService::new(store, bus, workspace_id.clone());
+        let approvals = ApprovalService::new(store, bus.clone(), workspace_id.clone());
         let memory = MemoryService::new(assignments.store().clone(), workspace_id.clone());
+        let turns = Arc::new(TurnRunner::new(assignments.store().clone(), bus));
         Self {
             assignments,
             approvals,
@@ -232,6 +299,7 @@ impl AssignmentScheduler {
             session_decisions: None,
             prepared: Arc::new(StdMutex::new(HashMap::new())),
             plan_tasks: Arc::new(StdMutex::new(HashSet::new())),
+            turns,
         }
     }
 
@@ -267,6 +335,32 @@ impl AssignmentScheduler {
     /// separate from each other and from visible crew runs.
     pub fn with_scope(mut self) -> Self {
         self.scope = Some(Arc::new(StdMutex::new(HashSet::new())));
+        self
+    }
+
+    /// Stop a running turn.
+    ///
+    /// Idempotent: an unknown or already finished turn reports `false` and does
+    /// nothing. The runner aborts the upstream request and stores the partial
+    /// text with the stopped marker (ADR-0041).
+    pub fn cancel_turn(&self, turn: &TurnId) -> bool {
+        self.turns.cancel(turn)
+    }
+
+    /// The runner this scheduler publishes turn events through.
+    ///
+    /// Sharing it with the caller lets a service cancel any turn it spawned,
+    /// wherever that turn is running.
+    pub fn turns(&self) -> Arc<TurnRunner> {
+        Arc::clone(&self.turns)
+    }
+
+    /// Run with a shared turn registry instead of a private one.
+    ///
+    /// Services that spawn several schedulers pass the registry here so one
+    /// `cancel_turn` reaches every turn.
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = turns;
         self
     }
 
@@ -335,19 +429,24 @@ impl AssignmentScheduler {
     /// Enqueue a conversation turn that runs against a caller-assembled request.
     ///
     /// The assistant and tool messages produced by the turn are appended to the
-    /// conversation's context branch when the assignment completes.
-    #[allow(clippy::too_many_arguments)]
+    /// conversation's context branch when the assignment completes, unless the
+    /// caller asked for a channel mention turn that keeps its history in the
+    /// message timeline.
     pub async fn enqueue_conversation_turn(
         &self,
         task: &Task,
+        turn: ConversationTurnRequest,
         requester: AssignmentRequester,
         origin: AssignmentOrigin,
         options: &CrewRunOptions,
-        messages: Vec<ChatMessage>,
-        channel_id: ChannelId,
-        agent_id: AgentId,
-        snapshot_context: SnapshotContext,
     ) -> CowResult<Assignment> {
+        let ConversationTurnRequest {
+            messages,
+            channel_id,
+            agent_id,
+            snapshot_context,
+            record_context,
+        } = turn;
         if let Ok(mut prepared) = self.prepared.lock() {
             prepared.insert(
                 task.id.clone(),
@@ -356,6 +455,7 @@ impl AssignmentScheduler {
                     channel_id,
                     agent_id,
                     snapshot_context,
+                    record_context,
                 },
             );
         }
@@ -725,38 +825,96 @@ impl AssignmentScheduler {
 
         let messages = prepared.as_ref().map(|turn| turn.messages.clone());
         let plan_mode = assignment.approval_level == ApprovalLevel::PlanOnly;
-        match executor
-            .execute(
-                &task,
-                &context,
-                self.assignments.bus(),
+
+        // Every assignment runs inside a turn and the runner owns its
+        // lifecycle, so chat, group, and task paths stop and settle the same
+        // way (ADR-0041).
+        let (spec, channel_id) = match &prepared {
+            Some(turn) => (
+                TurnSpec {
+                    target: TurnTarget::Conversation {
+                        channel_id: turn.channel_id.clone(),
+                        agent_id: turn.agent_id.clone(),
+                        message_id: String::new(),
+                    },
+                    agent_ids: vec![assignment.assignee.clone()],
+                    sink: TurnSink::Conversation {
+                        channel_id: turn.channel_id.clone(),
+                        agent_id: turn.agent_id.clone(),
+                        agent_name: executor.profile.name.clone(),
+                        record_context: turn.record_context,
+                    },
+                },
+                Some(turn.channel_id.clone()),
+            ),
+            None => (
+                TurnSpec {
+                    target: TurnTarget::Task {
+                        task_id: task.id.clone(),
+                        agent_id: assignment.assignee.clone(),
+                        run_id: run.id.clone(),
+                    },
+                    agent_ids: vec![assignment.assignee.clone()],
+                    // The assignment service stores the task output, so the
+                    // runner only publishes the terminal event.
+                    sink: TurnSink::Caller,
+                },
+                task.channel_id.clone(),
+            ),
+        };
+        let turn = self.turns.start(spec, channel_id);
+        let turn_id = turn.clone();
+        let result = executor
+            .execute(Execution {
+                task: &task,
+                context: &context,
+                bus: self.assignments.bus(),
                 gate,
                 recorder,
                 usage_recorder,
-                messages,
+                conversation: messages,
                 plan_mode,
                 memory,
-            )
-            .await
-        {
-            Ok((output, recorded)) => {
+                cancel: self.turns_turn(&turn_id),
+                observer: Some(self.turns.observer(&turn_id)),
+            })
+            .await;
+
+        let ExecutionResult {
+            output,
+            draft,
+            recorded,
+        } = result;
+
+        match output {
+            Ok(output) => {
                 if let (Some(turn), Some(messages)) = (&prepared, recorded) {
-                    let entries =
-                        context_entries_from_messages(&turn.channel_id, &turn.agent_id, &messages);
-                    if let Err(error) = self
-                        .assignments
-                        .store()
-                        .append_context_entries(&entries)
-                        .await
-                    {
-                        self.assignments
+                    if turn.record_context {
+                        let entries = context_entries_from_messages(
+                            &turn.channel_id,
+                            &turn.agent_id,
+                            &messages,
+                        );
+                        if let Err(error) = self
+                            .assignments
                             .store()
-                            .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
-                            .await?;
-                        self.assignments
-                            .fail(&assignment.id, error.to_string())
-                            .await?;
-                        return Err(error);
+                            .append_context_entries(&entries)
+                            .await
+                        {
+                            self.assignments
+                                .store()
+                                .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
+                                .await?;
+                            self.assignments
+                                .fail(&assignment.id, error.to_string())
+                                .await?;
+                            self.finish_turn(
+                                &turn_id,
+                                TurnCompletion::failed(error.to_string(), ""),
+                            )
+                            .await;
+                            return Err(error);
+                        }
                     }
                 }
                 self.assignments
@@ -782,19 +940,62 @@ impl AssignmentScheduler {
                             .publish(Event::new(EventPayload::TaskUpdated(updated)));
                     }
                 }
+                self.finish_turn(&turn_id, TurnCompletion::done(output.clone()))
+                    .await;
                 Ok((task.id.clone(), output))
             }
             Err(error) => {
-                self.assignments
-                    .store()
-                    .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
-                    .await?;
-                self.assignments
-                    .fail(&assignment.id, error.to_string())
-                    .await?;
+                // A stopped turn keeps the text it produced; a failed turn
+                // persists its partial reply too, so a reload shows what the
+                // user already saw (ADR-0041).
+                let partial = draft.trim().to_string();
+                let stopped = matches!(error, CowError::Cancelled);
+                let completion = if stopped {
+                    TurnCompletion::stopped(partial.clone())
+                } else {
+                    TurnCompletion::failed(error.to_string(), partial.clone())
+                };
+
+                // A stop with text keeps the partial reply as the assignment's
+                // cancellation reason, so task history shows what was produced
+                // without claiming the work finished: the run, the assignment,
+                // and the task all read as cancelled, which is what happened.
+                // A stop without text, or a failure, fails it.
+                if stopped && !partial.is_empty() {
+                    let partial_output = crate::turns::stopped_text(&partial);
+                    self.assignments
+                        .store()
+                        .update_run_status(&run.id, RunStatus::Cancelled, Some(Utc::now()))
+                        .await?;
+                    self.assignments
+                        .cancel(&assignment.id, partial_output)
+                        .await?;
+                } else {
+                    self.assignments
+                        .store()
+                        .update_run_status(&run.id, RunStatus::Failed, Some(Utc::now()))
+                        .await?;
+                    let failure = if stopped {
+                        "the turn was stopped".to_string()
+                    } else {
+                        error.to_string()
+                    };
+                    self.assignments.fail(&assignment.id, failure).await?;
+                }
+                self.finish_turn(&turn_id, completion).await;
                 Err(error)
             }
         }
+    }
+
+    /// Cancellation scope for a turn this scheduler opened.
+    fn turns_turn(&self, turn: &TurnId) -> cowbot_core::cancel::CancelSignal {
+        self.turns.turn(turn)
+    }
+
+    /// Publish a turn's terminal event after its reply is stored.
+    async fn finish_turn(&self, turn: &TurnId, completion: TurnCompletion) {
+        self.turns.finish(turn, completion).await;
     }
 
     async fn context_for(&self, assignment: &Assignment, task: &Task) -> CowResult<Vec<String>> {

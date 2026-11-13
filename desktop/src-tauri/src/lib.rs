@@ -272,6 +272,7 @@ pub fn run() {
             commands::discard_task_worktree,
             commands::list_task_overview,
             commands::cancel_task,
+            commands::cancel_turn,
             commands::archive_task,
             commands::unarchive_task,
             commands::approve_task_plan,

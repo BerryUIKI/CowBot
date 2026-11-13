@@ -431,6 +431,11 @@ export function cancelTask(taskId: string, reason: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId, reason });
 }
 
+/// Stop a running turn; returns whether a live turn was stopped (ADR-0041).
+export function cancelTurn(turnId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_turn", { turnId });
+}
+
 export function archiveTask(taskId: string): Promise<Task> {
   return invoke<Task>("archive_task", { taskId });
 }

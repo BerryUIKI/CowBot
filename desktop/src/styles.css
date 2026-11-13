@@ -5432,3 +5432,76 @@ button {
 .snapshot-settings .form-actions {
   margin: 0;
 }
+
+/* Streaming turn bubbles and the stop control (ADR-0041). */
+.composer-stop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink-hover);
+  color: var(--paper);
+  transition: background 140ms ease;
+}
+
+.composer-stop:hover {
+  background: var(--danger, #b3553d);
+}
+
+.composer-stop svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* A task turn streams to no chat, so the composer carries its label. */
+.composer-task-run {
+  flex: none;
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--paper-faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-bubble-streaming {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stream-reasoning {
+  color: var(--paper-faint);
+  font-size: 12px;
+}
+
+.stream-reasoning summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.stream-reasoning[open] {
+  padding-bottom: 4px;
+}
+
+.stream-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stream-tool {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--ink-hover);
+  color: var(--paper-dim);
+}
+
+.stream-tool-running {
+  color: var(--paper);
+}

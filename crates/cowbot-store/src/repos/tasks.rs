@@ -236,6 +236,17 @@ impl Store {
         row.map(TaskRow::into_domain).transpose()
     }
 
+    /// The output a completed task produced.
+    pub async fn task_output(&self, id: &TaskId) -> CowResult<Option<String>> {
+        Ok(match self.get_task(id).await? {
+            Some(task) => match task.status {
+                TaskStatus::Completed { output } => Some(output),
+                _ => None,
+            },
+            None => None,
+        })
+    }
+
     pub async fn update_task_status(&self, id: &TaskId, status: &TaskStatus) -> CowResult<()> {
         sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?")
             .bind(serde_json::to_string(status)?)

@@ -127,6 +127,10 @@ export type {
   WorkspaceId,
   WorkspacePolicy,
   WorktreeStatus,
+  PendingApproval,
+  ToolResult,
+  TurnEvent,
+  TurnTarget,
 } from "./generated/index";
 
 // Values that the generated surface does not carry: the desktop owns them.
