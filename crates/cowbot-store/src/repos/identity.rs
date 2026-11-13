@@ -280,6 +280,43 @@ impl Store {
         rows.into_iter().map(MembershipRow::into_domain).collect()
     }
 
+    /// Every workspace and role a user has.
+    pub async fn list_memberships(&self, user_id: &UserId) -> CowResult<Vec<Membership>> {
+        let rows = sqlx::query_as::<_, MembershipRow>(
+            "SELECT user_id, workspace_id, role FROM memberships
+             WHERE user_id = ? ORDER BY workspace_id",
+        )
+        .bind(&user_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(MembershipRow::into_domain).collect()
+    }
+
+    /// Replace a user's password hash.
+    ///
+    /// Session invalidation is the caller's job: the server drops every other
+    /// session when the password changes (ADR-0043).
+    pub async fn update_password(&self, id: &UserId, password_hash: &str) -> CowResult<()> {
+        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// Delete every session of a user.
+    pub async fn delete_user_sessions(&self, user_id: &UserId) -> CowResult<u64> {
+        let result = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(&user_id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn create_session(&self, session: &Session) -> CowResult<()> {
         sqlx::query(
             "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)

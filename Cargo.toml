@@ -10,6 +10,7 @@ members = [
     "crates/cowbot-package",
     "crates/cowbot-service",
     "crates/cowbot-cli",
+    "crates/cowbot-server",
 ]
 resolver = "2"
 
@@ -64,3 +65,4 @@ cowbot-store = { path = "crates/cowbot-store" }
 cowbot-client = { path = "crates/cowbot-client" }
 cowbot-package = { path = "crates/cowbot-package" }
 cowbot-service = { path = "crates/cowbot-service" }
+cowbot-server = { path = "crates/cowbot-server" }
