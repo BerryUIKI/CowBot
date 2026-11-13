@@ -38,12 +38,13 @@ tracked.
 
 ### Collaboration and hosting
 
-- **No server, no teams, no accounts.** Phase 2 — `cowbot-client` remote mode, a
-  server API, multi-user workspaces, and real authentication — has not started.
-  The local runtime auto-creates one user. The data model anticipates a server;
-  the server does not exist. See the [roadmap](ROADMAP.md).
+- **No teams yet.** Phase 2 has started: `cowbot-server` serves password
+  accounts and bearer sessions over HTTP (ADR-0043), but its workspace,
+  channel, and task routes, invitations, multi-user workspaces, and the
+  desktop's remote mode are not built. The local runtime still auto-creates one
+  user and remains the only way to use CowBot. See the [roadmap](ROADMAP.md).
 - **No remote or multi-device access.** A workspace lives in one local database
-  file on one machine.
+  file on one machine; there is no way to reach it from another device.
 - **No REST or WebSocket surface.** `cowbot-client` is the only API, and it is a
   Rust library.
 
