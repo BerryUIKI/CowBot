@@ -24,7 +24,11 @@ pub struct ModelRuntime {
 
 /// Shared state for Tauri commands.
 pub struct AppState {
-    pub client: Arc<LocalClient>,
+    /// The active transport: local SQLite or a remote server.
+    pub client: Arc<dyn Client>,
+    /// The same client when it is local, for file, worktree, and crew
+    /// operations that only the in-process runtime can do.
+    pub local_client: Option<Arc<LocalClient>>,
     pub tools: ToolRegistry,
     /// Active model provider; replaced when the user switches providers.
     pub model: RwLock<ModelRuntime>,
@@ -64,7 +68,7 @@ impl AppState {
     fn build_tools(
         workspace_dir: &std::path::Path,
         config_path: PathBuf,
-        client: Arc<LocalClient>,
+        client: Arc<dyn Client>,
     ) -> ToolRegistry {
         Self::rooted_tools(workspace_dir, config_path, client)
     }
@@ -78,7 +82,7 @@ impl AppState {
     pub fn rooted_tools(
         root: &std::path::Path,
         config_path: PathBuf,
-        client: Arc<LocalClient>,
+        client: Arc<dyn Client>,
     ) -> ToolRegistry {
         let sandbox = Arc::new(SubprocessSandbox::new(Some(root.to_path_buf())));
         let mut tools = Self::workspace_tools(config_path, client);
@@ -88,7 +92,7 @@ impl AppState {
         tools
     }
 
-    fn workspace_tools(config_path: PathBuf, client: Arc<LocalClient>) -> ToolRegistry {
+    fn workspace_tools(config_path: PathBuf, client: Arc<dyn Client>) -> ToolRegistry {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
             client.clone(),
@@ -203,7 +207,8 @@ pub fn run() {
 
             let tools = AppState::build_tools(&data_dir, config_path.clone(), client.clone());
             app.manage(AppState {
-                client,
+                local_client: Some(client.clone()),
+                client: client as Arc<dyn Client>,
                 tools,
                 model: RwLock::new(ModelRuntime {
                     llm: config::build_provider(&resolved),
