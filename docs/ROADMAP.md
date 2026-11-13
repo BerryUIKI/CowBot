@@ -126,6 +126,16 @@ Delivered:
 > per source, and the error model is one JSON body with a stable code (ADR-0043).
 > The WebSocket surface and API tokens arrive with the workspace routes in 2.2.
 | 2.2 | Multi-user workspaces | Workspace creation; invitations; Owner/Admin/Member roles; membership enforcement; audit integration | 2.1 |
+
+> **2.2 progress**: workspaces, membership, roles, and invitations are in place
+> in `cowbot-server` — list and create workspaces, list/update/remove members,
+> create/list/revoke/accept single-use invitations, and rename a workspace. The
+> role policy lives on `Role` in `cowbot-core` and is deliberately stricter than
+> rank ordering (an Admin cannot promote a peer or grant Owner), a non-member
+> gets `404` rather than `403` so workspace existence cannot be probed, and the
+> last Owner cannot be demoted or removed. Membership changes append audit
+> events with the acting user (ADR-0044). Channel, task, and approval routes
+> reuse `require_member` and land with 2.3.
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
 | 2.4 | Deployment and operations | Single binary and Docker image; Compose example; TLS via reverse proxy; health checks; backup/restore; configuration reference | 2.1 |
 | 2.5 | Migration and compatibility | `.cowpkg` import into the server; server-side schema migrations; version compatibility policy | 2.2, 2.4 |
