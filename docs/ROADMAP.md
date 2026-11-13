@@ -127,6 +127,15 @@ Delivered:
 > The WebSocket surface and API tokens arrive with the workspace routes in 2.2.
 | 2.2 | Multi-user workspaces | Workspace creation; invitations; Owner/Admin/Member roles; membership enforcement; audit integration | 2.1 |
 
+> **2.3 progress**: the collaboration surface is served — channels and messages,
+> tasks, assignments, runs, tool calls, approvals, permission rules, the
+> workspace policy, agents, audit, and API tokens — and `RemoteClient` implements
+> the `Client` trait over HTTP with a WebSocket event stream, so the desktop can
+> run against a server. Operations that need the local machine (worktrees,
+> in-process crew execution, local compaction) report server mode plainly, and
+> memory, prompt snapshots, context previews, and templates stay local until the
+> next milestone (ADR-0045).
+>
 > **2.2 progress**: workspaces, membership, roles, and invitations are in place
 > in `cowbot-server` — list and create workspaces, list/update/remove members,
 > create/list/revoke/accept single-use invitations, and rename a workspace. The
