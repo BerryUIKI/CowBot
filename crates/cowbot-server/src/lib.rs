@@ -14,6 +14,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod router;
+pub mod workspaces;
 
 pub use auth::{AuthService, AuthenticatedUser, IssuedSession};
 pub use config::ServerConfig;
