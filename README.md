@@ -238,6 +238,7 @@ Start with the [documentation index](docs/README.md), [developer guide](docs/DEV
 | [Architecture decisions](docs/ADR) | Recorded design decisions and tradeoffs |
 | [Template format](docs/TEMPLATE_FORMAT.md) | Agent and team template schema |
 | [Design references](docs/REFERENCES.md) | External references informing the platform |
+| [Server deployment](docs/SERVER.md) | Self-hosted team mode: configuration, Docker Compose, backup, and tokens |
 | [Brand assets](assets/README.md) | Canonical icon, exports, and asset maintenance |
 
 ## Development

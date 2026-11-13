@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cowbot_client::{Client, LocalClient, NewTask};
+use cowbot_client::{Client, NewTask};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::error::CowError;
 use cowbot_core::tool::{Tool, ToolCall, ToolResult};
@@ -40,10 +40,10 @@ fn agent_names(agents: &[cowbot_core::agent::AgentProfile]) -> String {
 /// List the agents in the workspace.
 #[derive(Clone)]
 pub struct ListAgentsTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 impl ListAgentsTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -85,11 +85,11 @@ impl Tool for ListAgentsTool {
 /// List the channels in the workspace.
 #[derive(Clone)]
 pub struct ListChannelsTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 
 impl ListChannelsTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -131,11 +131,11 @@ impl Tool for ListChannelsTool {
 /// Delete a group channel. Direct conversations cannot be deleted.
 #[derive(Clone)]
 pub struct DeleteChannelTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 
 impl DeleteChannelTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -213,11 +213,11 @@ impl Tool for DeleteChannelTool {
 /// List the built-in and stored templates available for starting a team.
 #[derive(Clone)]
 pub struct ListTemplatesTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 
 impl ListTemplatesTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -265,11 +265,11 @@ impl Tool for ListTemplatesTool {
 /// Create a group channel.
 #[derive(Clone)]
 pub struct CreateChannelTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 
 impl CreateChannelTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -319,12 +319,12 @@ impl Tool for CreateChannelTool {
 /// Create a pending task for a sub-agent, optionally in a git worktree.
 #[derive(Clone)]
 pub struct CreateTaskTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
     config_path: PathBuf,
 }
 
 impl CreateTaskTool {
-    pub fn new(client: Arc<LocalClient>, config_path: PathBuf) -> Self {
+    pub fn new(client: Arc<dyn Client>, config_path: PathBuf) -> Self {
         Self {
             client,
             config_path,
@@ -484,7 +484,7 @@ impl Tool for CreateTaskTool {
                 if let Some((project, base_branch)) = &worktree {
                     if let Err(error) = self
                         .client
-                        .request_worktree(&created.id, &project.id, &project.path, base_branch)
+                        .request_task_worktree(&created.id, &project.id, &project.path, base_branch)
                         .await
                     {
                         return Ok(ToolResult::failure(
@@ -520,11 +520,11 @@ impl Tool for CreateTaskTool {
 /// Add the agents from a template to the workspace.
 #[derive(Clone)]
 pub struct InstantiateTeamTool {
-    client: Arc<LocalClient>,
+    client: Arc<dyn Client>,
 }
 
 impl InstantiateTeamTool {
-    pub fn new(client: Arc<LocalClient>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -597,7 +597,7 @@ impl Tool for InstantiateTeamTool {
 
         match self.client.instantiate_agents(&template.id).await {
             Ok(added) => {
-                let channels = self.client.ensure_agent_channels().await?;
+                let channels = self.client.list_channels().await?;
                 let agents = added
                     .iter()
                     .map(|agent| {
@@ -628,6 +628,8 @@ impl Tool for InstantiateTeamTool {
 
 #[cfg(test)]
 mod tests {
+    use cowbot_client::LocalClient;
+
     use super::*;
     use cowbot_core::task::TaskId;
     use cowbot_core::tool::ToolCall;
@@ -649,7 +651,7 @@ mod tests {
         serde_json::from_str(&result.output).unwrap()
     }
 
-    fn create_task_tool(client: Arc<LocalClient>) -> (CreateTaskTool, tempfile::TempDir) {
+    fn create_task_tool(client: Arc<dyn Client>) -> (CreateTaskTool, tempfile::TempDir) {
         let root = tempfile::tempdir().unwrap();
         let tool = CreateTaskTool::new(client, root.path().join("config.json"));
         (tool, root)

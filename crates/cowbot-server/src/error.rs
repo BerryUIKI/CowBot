@@ -64,6 +64,20 @@ impl ApiError {
     }
 }
 
+/// Parse a request body after the role check has already run.
+///
+/// Axum runs the `Json` extractor before the handler body, so a typed body with
+/// an enum in it would tell an unprivileged caller which values are valid. A
+/// handler that must check a role first takes `Json<serde_json::Value>` and
+/// calls this, so the rejection cannot precede the authorization decision
+/// (ADR-0045).
+pub fn parse_body<T: serde::de::DeserializeOwned>(body: serde_json::Value) -> Result<T, ApiError> {
+    serde_json::from_value(body).map_err(|error| {
+        tracing::debug!(error = %error, "Rejected a request body after authorization");
+        ApiError::bad_request("the request body is not valid for this route")
+    })
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = Json(ErrorBody {
@@ -83,15 +97,23 @@ impl From<CowError> for ApiError {
                 "cancelled",
                 "the request was cancelled",
             ),
+            // A rejected domain state is the caller's to correct, and the
+            // message is written by our own service code, so it is safe to
+            // show.
+            CowError::Task(message) | CowError::Agent(message) => ApiError::conflict(message),
             // A storage failure can leak table and column names, so it is
             // logged for the operator and reported generically.
             CowError::Storage(message) => {
                 tracing::error!(error = %message, "Storage failure while serving a request");
                 ApiError::internal("the server could not complete the request")
             }
+            // Everything else is a server-side fault, and its `Display` names
+            // the error variant — and, for `Io` and `Serialization`, a path or
+            // a serde position. Log it and return the same generic body rather
+            // than echoing internals to the caller.
             other => {
-                tracing::warn!(error = %other, "Request failed");
-                ApiError::internal(other.to_string())
+                tracing::error!(error = %other, "Request failed");
+                ApiError::internal("the server could not complete the request")
             }
         }
     }

@@ -92,9 +92,34 @@ routes enforce roles:
   seven days, deleted on acceptance; its token is never returned by the listing.
 - Membership changes are audited with the acting user and `source: human`.
 
-What server mode does **not** have yet: channel, task, and approval routes; API
-tokens; TLS; and the WebSocket surface. Do not deploy it beyond localhost until
-those land.
+**The collaboration surface (ADR-0045).** Channels and messages, tasks,
+assignments, runs, tool calls, approvals, permission rules, the workspace
+policy, agents, audit, and API tokens are served. Every route resolves the
+channel or task's workspace and the caller's role *before* reading anything,
+and the sender of a message is always the authenticated user — a `sender` field
+in the body is ignored.
+
+- **API tokens** are bound to one user and one workspace, 256 random bits
+  stored only as a hash, revoked by stamping `revoked_at` so an audit still
+  names them. Only an Owner or Admin mints one, and a token acts as its owner,
+  so every request re-checks that owner's current role.
+- **The live stream** (`GET /workspaces/{id}/stream`) authenticates with the
+  same bearer token passed as a query parameter (a browser WebSocket cannot set
+  an `Authorization` header) and filters the process-wide bus to the
+  workspace's channels and tasks. A payload that cannot be placed is dropped;
+  in a shared deployment, omitting it is safer than leaking it.
+
+**Deployment (ADR-0046).** `deploy/compose.yaml` runs the server unprivileged
+behind Caddy, which terminates TLS; the server binds loopback inside the compose
+network and is never published. That placement is also what makes
+`X-Forwarded-For` trustworthy for the sign-in limiter — a deployment that
+publishes the port directly lets a client forge the header and dodge the limit.
+Configuration is environment-only, and a value that does not parse stops the
+server instead of silently falling back.
+
+What server mode does **not** have yet: server-hosted memory, prompt snapshots,
+context previews, and templates; TLS built into the binary (a proxy terminates
+it); and any defence against two users editing the same agent or rule at once.
 
 ## Known gaps
 
@@ -134,8 +159,10 @@ covers the ones with a security consequence.
 ### Before any self-hosted deployment
 
 - [ ] Treat every preceding item as still required.
-- [ ] Do not expose the server beyond localhost until the channel, task, and
-      approval routes land with the same enforcement.
+- [ ] Use `deploy/compose.yaml` (or put the server behind a TLS proxy yourself)
+      and never publish the server's port directly.
+- [ ] Do not rely on the server for memory, prompt snapshots, templates, or
+      context previews yet; those stay local.
 - [ ] Terminate TLS in front of the server; CowBot does not provide it.
 - [ ] Change the owner password the server prints on first start, and keep the
       generated one out of shell history.

@@ -128,6 +128,17 @@ impl Store {
         Ok(count > 0)
     }
 
+    /// The workspace that owns a channel.
+    pub async fn channel_workspace(&self, id: &ChannelId) -> CowResult<Option<WorkspaceId>> {
+        let id: Option<String> =
+            sqlx::query_scalar("SELECT workspace_id FROM channels WHERE id = ?")
+                .bind(&id.0)
+                .fetch_optional(self.pool())
+                .await
+                .map_err(db)?;
+        Ok(id.map(WorkspaceId))
+    }
+
     pub async fn list_channels(&self, workspace_id: &WorkspaceId) -> CowResult<Vec<Channel>> {
         let rows = sqlx::query_as::<_, ChannelRow>(
             "SELECT id, name, topic, created_at, agent_id, pinned, kind FROM channels
@@ -248,6 +259,32 @@ impl Store {
              ) ORDER BY created_at ASC",
         )
         .bind(&channel_id.0)
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(MessageRow::into_domain).collect()
+    }
+
+    /// The newest `limit` messages of one thread, oldest first.
+    ///
+    /// The thread is part of the `WHERE` clause so `limit` counts thread
+    /// messages, not unrelated channel traffic.
+    pub async fn list_thread_messages(
+        &self,
+        channel_id: &ChannelId,
+        thread_id: &str,
+        limit: u32,
+    ) -> CowResult<Vec<ChannelMessage>> {
+        let rows = sqlx::query_as::<_, MessageRow>(
+            "SELECT id, channel_id, sender, content, thread_id, created_at FROM (
+                 SELECT id, channel_id, sender, content, thread_id, created_at
+                 FROM messages WHERE channel_id = ? AND thread_id = ?
+                 ORDER BY created_at DESC LIMIT ?
+             ) ORDER BY created_at ASC",
+        )
+        .bind(&channel_id.0)
+        .bind(thread_id)
         .bind(i64::from(limit))
         .fetch_all(self.pool())
         .await

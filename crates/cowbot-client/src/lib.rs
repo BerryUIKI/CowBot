@@ -1,9 +1,9 @@
 //! Transport-neutral client boundary for CowBot.
 //!
-//! Local mode calls the core in-process. A future remote implementation will
-//! speak to `cowbot-server` over HTTP and WebSocket behind the same [`Client`]
-//! trait, so the desktop UI and CLI never depend on storage or service types
-//! directly (ADR-0001, ADR-0007).
+//! Local mode calls the core in-process; remote mode (`RemoteClient`) speaks to
+//! `cowbot-server` over HTTP and WebSocket behind the same [`Client`] trait, so
+//! the desktop UI and CLI never depend on storage or service types directly
+//! (ADR-0001, ADR-0007, ADR-0045).
 
 use async_trait::async_trait;
 use cowbot_core::agent::{AgentId, AgentProfile};
@@ -27,10 +27,12 @@ use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
+use cowbot_core::worktree::TaskWorktree;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
 mod local;
+mod remote;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
 pub use cowbot_service::{
@@ -38,6 +40,7 @@ pub use cowbot_service::{
     NewMemory, NoteSave, RecalledMemory, TaskRunPreview,
 };
 pub use local::LocalClient;
+pub use remote::RemoteClient;
 
 /// User identity as seen by the client.
 ///
@@ -422,6 +425,18 @@ pub trait Client: Send + Sync {
     async fn import_template(&self, json: &str) -> CowResult<TemplateDocument>;
     async fn export_template(&self, id: &str) -> CowResult<String>;
     async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>>;
+    /// Request a git worktree for a task.
+    ///
+    /// Local mode prepares one on disk; server mode has no filesystem to
+    /// prepare it on and reports that plainly.
+    async fn request_task_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree>;
+
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
     async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
 }

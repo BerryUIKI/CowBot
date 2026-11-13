@@ -71,6 +71,15 @@ pub struct ChannelReplyFinished {
     pub turn_id: Option<String>,
 }
 
+/// The client as a local runtime, for operations that need files, a worktree,
+/// or an in-process crew. Server mode answers with a clear error instead of
+/// pretending the operation worked.
+fn local(state: &AppState) -> Result<&cowbot_client::LocalClient, String> {
+    state.local_client.as_deref().ok_or_else(|| {
+        "this action needs the local runtime and is not available in server mode".to_string()
+    })
+}
+
 #[tauri::command]
 pub async fn get_session(
     state: State<'_, AppState>,
@@ -108,8 +117,7 @@ pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, S
 /// that does not have one yet.
 #[tauri::command]
 pub async fn ensure_agent_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
-    state
-        .client
+    local(&state)?
         .ensure_agent_channels()
         .await
         .map_err(|error| error.to_string())
@@ -231,8 +239,7 @@ pub async fn post_message(
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
-                    let outcome = state
-                        .client
+                    let outcome = local(&state)?
                         .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
                         .await
                         .map_err(|error| error.to_string())?;
@@ -279,7 +286,10 @@ pub async fn post_message(
 
     // Agents answer in the background so the composer stays responsive; the
     // timeline refreshes from MessagePosted events and the turn-finished event.
-    let client = state.client.clone();
+    // The reply runs in-process, so server mode posts without a local turn.
+    let Some(client) = state.local_client.clone() else {
+        return Ok(message);
+    };
     let tools = state.tools.clone();
     let channel = channel_id.clone();
     let posted = message.clone();
@@ -460,8 +470,7 @@ pub async fn create_task(
         .map_err(|error| error.to_string())?;
 
     if let Some((project, base_branch)) = requested_worktree {
-        state
-            .client
+        local(&state)?
             .request_worktree(&created.id, &project.id, &project.path, &base_branch)
             .await
             .map_err(|error| error.to_string())?;
@@ -486,16 +495,14 @@ pub async fn run_task(
 
     // A worktree task is prepared before spawning so a git failure rejects
     // the run and the task stays pending.
-    let worktree = match state
-        .client
+    let worktree = match local(&state)?
         .task_worktree(&task.id)
         .await
         .map_err(|error| error.to_string())?
     {
         Some(record) => match record.status {
             WorktreeStatus::Requested | WorktreeStatus::Ready => Some(
-                state
-                    .client
+                local(&state)?
                     .prepare_worktree(&task.id)
                     .await
                     .map_err(|error| format!("The worktree could not be prepared: {error}"))?,
@@ -521,7 +528,13 @@ pub async fn run_task(
         return Err(format!("task '{task_id}' is already running"));
     }
 
-    let client = state.client.clone();
+    let Some(client) = state.local_client.clone() else {
+        running.lock().remove(&task_id);
+        return Err(
+            "running a task needs the local runtime and is not available in server mode"
+                .to_string(),
+        );
+    };
     let (llm, model) = state.runtime_model();
     let tools = match &worktree {
         Some(record) => AppState::rooted_tools(
@@ -693,8 +706,7 @@ pub async fn get_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Option<TaskWorktree>, String> {
-    state
-        .client
+    local(&state)?
         .task_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -705,8 +717,7 @@ pub async fn task_worktree_diff(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<TaskWorktreeDiff, String> {
-    state
-        .client
+    local(&state)?
         .worktree_diff(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -717,8 +728,7 @@ pub async fn discard_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<TaskWorktree, String> {
-    state
-        .client
+    local(&state)?
         .discard_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -826,8 +836,7 @@ pub async fn list_task_overview(
         .list_tasks()
         .await
         .map_err(|error| error.to_string())?;
-    let worktree_by_task: HashMap<String, TaskWorktree> = state
-        .client
+    let worktree_by_task: HashMap<String, TaskWorktree> = local(&state)?
         .list_worktrees()
         .await
         .map_err(|error| error.to_string())?
@@ -848,8 +857,7 @@ pub async fn list_task_overview(
     let mut entries = Vec::new();
     for (run_id, group_tasks) in groups {
         let worktree = worktree_by_task.get(&run_id).cloned();
-        let assignments = state
-            .client
+        let assignments = local(&state)?
             .list_run_assignments(&TaskId::new(run_id.clone()))
             .await
             .map_err(|error| error.to_string())?;
@@ -890,8 +898,7 @@ pub async fn list_task_overview(
             .filter(|assignment| assignment.status.is_terminal())
             .count() as u32;
         let total = assignments.len() as u32;
-        let latest_tool_call = state
-            .client
+        let latest_tool_call = local(&state)?
             .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
             .await
             .map_err(|error| error.to_string())?;
@@ -1947,13 +1954,11 @@ pub async fn compact_conversation(
         .map_err(|error| error.to_string())?;
     let (llm, model) = conversation_runtime(&state, &settings);
     match agent_id {
-        Some(agent_id) => state
-            .client
+        Some(agent_id) => local(&state)?
             .compact_conversation_agent(&channel_id, &AgentId::new(agent_id), llm, &model)
             .await
             .map_err(|error| error.to_string()),
-        None => state
-            .client
+        None => local(&state)?
             .compact_conversation(&channel_id, llm, &model)
             .await
             .map_err(|error| error.to_string()),
@@ -2486,8 +2491,7 @@ fn remove_database_files(path: &Path) {
 #[tauri::command]
 pub async fn export_workspace(state: State<'_, AppState>, path: String) -> Result<String, String> {
     let path = package_output_path(&path)?;
-    let bytes = state
-        .client
+    let bytes = local(&state)?
         .export_workspace()
         .await
         .map_err(|error| error.to_string())?;
@@ -2838,12 +2842,10 @@ pub async fn ask_side_question(
         .filter(|model| !model.trim().is_empty())
         .unwrap_or(default_model);
 
-    let gate = state
-        .client
+    let gate = local(&state)?
         .side_question_gate(AssignmentId::new(format!("side-question-{}", channel_id.0)));
     let responder = agent_id.as_deref().map(AgentId::new);
-    let answer = state
-        .client
+    let answer = local(&state)?
         .ask_side_question(
             &channel_id,
             responder.as_ref(),

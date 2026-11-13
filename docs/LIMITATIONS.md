@@ -38,14 +38,14 @@ tracked.
 
 ### Collaboration and hosting
 
-- **No teams in the app yet.** Phase 2 has started: `cowbot-server` serves
-  password accounts and bearer sessions, workspaces, members with
-  Owner/Admin/Member roles, and single-use invitations over HTTP (ADR-0043,
-  ADR-0044). Its channel, task, and approval routes, API tokens, and the
-  desktop's remote mode are not built, so a team collaborates through `curl`
-  and not through the app. The local runtime still auto-creates one user and
-  remains the only way to use CowBot's actual features. See the
-  [roadmap](ROADMAP.md).
+- **Teams only through the server, and the app does not switch modes yet.**
+  `cowbot-server` serves accounts, sessions, workspaces, roles, invitations,
+  channels, messages, tasks, approvals, audit, API tokens, and a live event
+  stream over HTTP and WebSocket (ADR-0043 through ADR-0045). `RemoteClient`
+  implements the editor-side half, but the desktop's settings do not yet offer
+  switching to a server, and memory, prompt snapshots, context previews, and
+  templates stay local. The local runtime still auto-creates one user and
+  remains the default way to use CowBot. See the [roadmap](ROADMAP.md).
 - **No remote or multi-device access.** A workspace lives in one local database
   file on one machine; there is no way to reach it from another device.
 - **No REST or WebSocket surface.** `cowbot-client` is the only API, and it is a

@@ -25,6 +25,8 @@ pub enum EventPayload {
     ChannelUpdated(Channel),
     /// A channel was deleted
     ChannelDeleted { channel_id: ChannelId },
+    /// A channel's messages were cleared; its history is empty
+    ChannelCleared { channel_id: ChannelId },
     /// A group conversation message was routed to its responders
     ConversationRouted(ConversationTurn),
     /// An agent profile was updated

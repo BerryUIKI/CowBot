@@ -7,6 +7,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 | Users | [Desktop user guide](USER_GUIDE.md) and [what works today](LIMITATIONS.md) |
 | Operators | [Security, trust boundaries, and known gaps](../SECURITY.md) |
 | Developers | [Development and troubleshooting](DEVELOPMENT.md) |
+| Self-hosting | [Server deployment and operations](SERVER.md) |
 | Contributors | [Contributing](../CONTRIBUTING.md) |
 | Collaborators and reviewers | [Collaboration workflow](COLLABORATION.md) |
 | Maintainers | [Release checklist](RELEASING.md) |

@@ -460,6 +460,37 @@ impl Store {
         row.map(ApiTokenRow::into_domain).transpose()
     }
 
+    /// One API token by id.
+    pub async fn get_api_token(&self, id: &str) -> CowResult<Option<ApiToken>> {
+        let row = sqlx::query_as::<_, ApiTokenRow>(
+            "SELECT id, user_id, workspace_id, token_hash, scopes, revoked_at
+             FROM api_tokens WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(db)?;
+        row.map(ApiTokenRow::into_domain).transpose()
+    }
+
+    /// A user's tokens in one workspace, newest first.
+    pub async fn list_api_tokens(
+        &self,
+        user_id: &UserId,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<Vec<ApiToken>> {
+        let rows = sqlx::query_as::<_, ApiTokenRow>(
+            "SELECT id, user_id, workspace_id, token_hash, scopes, revoked_at
+             FROM api_tokens WHERE user_id = ? AND workspace_id = ? ORDER BY id",
+        )
+        .bind(&user_id.0)
+        .bind(&workspace_id.0)
+        .fetch_all(self.pool())
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(ApiTokenRow::into_domain).collect()
+    }
+
     pub async fn create_invite(&self, invite: &Invite) -> CowResult<()> {
         sqlx::query(
             "INSERT INTO invites (id, workspace_id, token_hash, role, expires_at)
