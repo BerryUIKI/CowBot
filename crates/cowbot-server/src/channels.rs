@@ -213,15 +213,17 @@ pub async fn list_messages(
     let channel_id = ChannelId::new(channel_id);
     channel_and_role(&state, &user, &channel_id).await?;
     let limit = query.limit.clamp(1, 500);
-    let messages = state.store.list_messages(&channel_id, limit).await?;
-    // Thread filtering is a view concern: the stored list already carries each
-    // message's thread id, so the server narrows it here.
+    // The thread is part of the store query, not a filter over the newest
+    // channel page: filtering afterwards would silently truncate a thread whose
+    // messages are older than the last `limit` messages of the channel.
     let messages = match &query.thread_id {
-        Some(thread_id) => messages
-            .into_iter()
-            .filter(|message| message.thread_id.as_deref() == Some(thread_id.as_str()))
-            .collect::<Vec<_>>(),
-        None => messages,
+        Some(thread_id) => {
+            state
+                .store
+                .list_thread_messages(&channel_id, thread_id, limit)
+                .await?
+        }
+        None => state.store.list_messages(&channel_id, limit).await?,
     };
     Ok(Json(messages.into_iter().map(MessageBody::from).collect()))
 }

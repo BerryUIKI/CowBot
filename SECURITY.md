@@ -109,10 +109,17 @@ in the body is ignored.
   workspace's channels and tasks. A payload that cannot be placed is dropped;
   in a shared deployment, omitting it is safer than leaking it.
 
-What server mode does **not** have yet: TLS, server-hosted memory, prompt
-snapshots, context previews, and templates, and any defence against two users
-editing the same agent or rule at once. Do not deploy it beyond localhost until
-the deployment milestone lands.
+**Deployment (ADR-0046).** `deploy/compose.yaml` runs the server unprivileged
+behind Caddy, which terminates TLS; the server binds loopback inside the compose
+network and is never published. That placement is also what makes
+`X-Forwarded-For` trustworthy for the sign-in limiter — a deployment that
+publishes the port directly lets a client forge the header and dodge the limit.
+Configuration is environment-only, and a value that does not parse stops the
+server instead of silently falling back.
+
+What server mode does **not** have yet: server-hosted memory, prompt snapshots,
+context previews, and templates; TLS built into the binary (a proxy terminates
+it); and any defence against two users editing the same agent or rule at once.
 
 ## Known gaps
 
@@ -152,8 +159,10 @@ covers the ones with a security consequence.
 ### Before any self-hosted deployment
 
 - [ ] Treat every preceding item as still required.
-- [ ] Do not expose the server beyond localhost until the deployment milestone
-      lands TLS guidance and the remaining server-hosted features.
+- [ ] Use `deploy/compose.yaml` (or put the server behind a TLS proxy yourself)
+      and never publish the server's port directly.
+- [ ] Do not rely on the server for memory, prompt snapshots, templates, or
+      context previews yet; those stay local.
 - [ ] Terminate TLS in front of the server; CowBot does not provide it.
 - [ ] Change the owner password the server prints on first start, and keep the
       generated one out of shell history.

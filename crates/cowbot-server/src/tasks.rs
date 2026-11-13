@@ -94,8 +94,17 @@ pub async fn create_task(
             "your role does not allow creating tasks",
         ));
     }
-    let task = Task::new(body.title.trim(), body.prompt.trim())
-        .assign_to(cowbot_core::agent::AgentId::new(body.assignee.clone()));
+    // The assignee comes from the body, so it must be an agent of this
+    // workspace; otherwise a task could name another tenant's agent.
+    let assignee = cowbot_core::agent::AgentId::new(body.assignee.clone());
+    if !state
+        .store
+        .agent_in_workspace(&assignee, &workspace_id)
+        .await?
+    {
+        return Err(ApiError::not_found("the agent was not found"));
+    }
+    let mut task = Task::new(body.title.trim(), body.prompt.trim()).assign_to(assignee);
     if let Some(channel_id) = &body.channel_id {
         // A channel named in the body must belong to this workspace, or a
         // caller could attach a task to another tenant's channel.
@@ -107,8 +116,12 @@ pub async fn create_task(
         {
             return Err(ApiError::not_found("the channel was not found"));
         }
+        // Carry the channel on the task itself: `Task::channel_id` is skipped
+        // when `None`, and the store reads the column from the same model, so
+        // without this the persisted row, the `201` body, and the published
+        // `TaskCreated` event would all disagree with local mode.
+        task = task.with_channel(channel_id);
     }
-    let channel_id = body.channel_id.clone().map(ChannelId::new);
     let approval_level = match body.approval_level.as_deref() {
         Some(value) => parse_approval_level(value)
             .ok_or_else(|| ApiError::bad_request(format!("unknown approval level '{value}'")))?,
@@ -118,7 +131,7 @@ pub async fn create_task(
         .tasks()
         .create(
             &workspace_id,
-            channel_id.as_ref(),
+            task.channel_id.as_ref(),
             &task,
             cowbot_core::assignment::AssignmentRequester::User(user.user.id.0.clone()),
             approval_level,
@@ -384,7 +397,7 @@ pub async fn create_permission_rule(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(workspace_id): Path<String>,
-    Json(body): Json<CreateRuleRequest>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<PermissionRule>), ApiError> {
     let workspace_id = WorkspaceId::new(workspace_id);
     let role = require_member(&state, &user, &workspace_id).await?;
@@ -393,6 +406,7 @@ pub async fn create_permission_rule(
             "your role does not allow changing permission rules",
         ));
     }
+    let body: CreateRuleRequest = crate::error::parse_body(raw)?;
     let rule = state
         .permissions(&workspace_id)
         .create(&body.tool, body.command.as_deref(), body.decision)
@@ -518,9 +532,28 @@ pub async fn update_agent(
         ));
     }
     let agent_id = cowbot_core::agent::AgentId::new(body.id);
+    // An agent id from the body must belong to the workspace in the path, or an
+    // admin of one workspace could rewrite another workspace's agent by id.
+    if !state
+        .store
+        .agent_in_workspace(&agent_id, &workspace_id)
+        .await?
+    {
+        return Err(ApiError::not_found("the agent was not found"));
+    }
     let Some(existing) = state.store.get_agent(&agent_id).await? else {
         return Err(ApiError::not_found("the agent was not found"));
     };
+    // The id comes from the body, so the agent's own row must prove it belongs
+    // to this workspace before its profile is rewritten: `upsert_agent` moves
+    // the row to the caller's workspace on conflict.
+    if !state
+        .store
+        .agent_in_workspace(&agent_id, &workspace_id)
+        .await?
+    {
+        return Err(ApiError::not_found("the agent was not found"));
+    }
     // `AgentUpdate` replaces the whole profile, so a field the caller omits
     // keeps its current value rather than being cleared.
     let agent = state

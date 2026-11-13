@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use cowbot_bus::EventBus;
+use cowbot_core::agent::AgentProfile;
 use cowbot_core::identity::{Membership, Role, WorkspaceId};
 use cowbot_server::auth::AuthService;
 use cowbot_server::config::ServerConfig;
@@ -470,4 +471,102 @@ async fn the_policy_route_requires_administration_to_change() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn an_admin_cannot_rewrite_another_workspaces_agent() {
+    let f = fixture().await;
+    // A second workspace, owned by someone else, with its own agent.
+    let other_owner = cowbot_core::identity::User::new("Other", "other@example.com", "");
+    f.store.create_user(&other_owner).await.unwrap();
+    let other = cowbot_core::identity::Workspace::new("Other Team");
+    f.store.create_workspace(&other).await.unwrap();
+    f.store
+        .add_member(&Membership::new(
+            other_owner.id.clone(),
+            other.id.clone(),
+            Role::Owner,
+        ))
+        .await
+        .unwrap();
+    let victim = AgentProfile::new("Secret", "Spy", "exfiltrate", "hidden");
+    f.store.upsert_agent(&other.id, &victim).await.unwrap();
+
+    // The fixture's owner administers only their own workspace and has no
+    // membership in `other`.
+    let (status, body) = call(
+        f.router.clone(),
+        "PATCH",
+        &format!("/api/v1/workspaces/{}/agents", f.workspace_id),
+        Some(json!({ "id": victim.id.0, "name": "Captured" })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+
+    let after = f.store.get_agent(&victim.id).await.unwrap().unwrap();
+    assert_eq!(after.name, "Secret", "the agent must not be rewritten");
+    assert!(f
+        .store
+        .agent_in_workspace(&victim.id, &other.id)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn an_api_token_authenticates_a_request_as_its_owner() {
+    let f = fixture().await;
+    let (status, created) = call(
+        f.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/tokens", f.workspace_id),
+        Some(json!({ "scopes": ["workspace"] })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {created}");
+    let secret = created["token"].as_str().unwrap().to_string();
+
+    // The token, not the session, authenticates `/me` and a workspace read.
+    let (status, me) = call(f.router.clone(), "GET", "/api/v1/me", None, Some(&secret)).await;
+    assert_eq!(status, StatusCode::OK, "body: {me}");
+    assert_eq!(me["user"]["email"], "owner@example.com");
+
+    let (status, members) = call(
+        f.router.clone(),
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", f.workspace_id),
+        None,
+        Some(&secret),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {members}");
+
+    // A token bound to one workspace cannot reach another.
+    let other = cowbot_core::identity::Workspace::new("Other");
+    f.store.create_workspace(&other).await.unwrap();
+    f.store
+        .add_member(&Membership::new(
+            cowbot_core::identity::UserId::new(me["user"]["id"].as_str().unwrap().to_string()),
+            other.id.clone(),
+            Role::Owner,
+        ))
+        .await
+        .unwrap();
+    let (status, _) = call(
+        f.router,
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", other.id.0),
+        None,
+        Some(&secret),
+    )
+    .await;
+    // A token is bound to the workspace it was minted for. `403` is correct
+    // here: the caller named the workspace explicitly, so telling them the
+    // binding refused it reveals nothing they did not already know.
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a token is bound to its workspace"
+    );
 }

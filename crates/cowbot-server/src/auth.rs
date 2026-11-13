@@ -16,18 +16,54 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use chrono::{DateTime, Duration, Utc};
 use cowbot_core::error::{CowError, CowResult};
-use cowbot_core::identity::{Membership, Role, Session, User, UserId, Workspace};
+use cowbot_core::identity::{Membership, Role, Session, User, UserId, Workspace, WorkspaceId};
 use cowbot_store::Store;
 use sha2::{Digest, Sha256};
 
 use crate::config::ServerConfig;
 
+/// How a request proved who it is.
+#[derive(Debug, Clone)]
+pub enum Credential {
+    /// A session minted by sign-in.
+    Session { id: String },
+    /// A long-lived API token, bound to one workspace (ADR-0045).
+    ApiToken {
+        id: String,
+        workspace_id: WorkspaceId,
+        scopes: Vec<String>,
+    },
+}
+
+impl Credential {
+    /// The session id, when this request came from a session rather than a
+    /// token.
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Credential::Session { id } => Some(id),
+            Credential::ApiToken { .. } => None,
+        }
+    }
+
+    /// The one workspace an API token may act in; `None` for a session, which
+    /// is not bound to a workspace.
+    pub fn bound_workspace(&self) -> Option<&WorkspaceId> {
+        match self {
+            Credential::Session { .. } => None,
+            Credential::ApiToken { workspace_id, .. } => Some(workspace_id),
+        }
+    }
+}
+
 /// The signed-in identity a request carries.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub user: User,
-    pub session_id: String,
-    pub expires_at: DateTime<Utc>,
+    /// What proved the identity; it decides what a request may scope to.
+    pub credential: Credential,
+    /// When the credential stops working. A token has no expiry: it lives until
+    /// it is revoked, so this is `None` for one.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// A newly minted session: the row is stored, and the token is returned once.
@@ -125,16 +161,42 @@ impl AuthService {
 
     /// Resolve a bearer token to a signed-in user.
     ///
-    /// An expired session is deleted on the way out, so a stale token is
-    /// cleaned up rather than accumulating.
+    /// A session and an API token are both bearer credentials and both resolve
+    /// here, so a token works everywhere a session does (ADR-0045). The two
+    /// are told apart by the table the hash is found in: sessions are cleaned
+    /// up when they expire, and a token must not be revoked. A token does not
+    /// outlive its owner's membership — the caller's role is re-read on every
+    /// request, so a demotion or removal narrows a token immediately.
     pub async fn authenticate(&self, token: &str) -> CowResult<Option<AuthenticatedUser>> {
-        let Some(session) = self
-            .store
-            .get_session_by_token_hash(&hash_token(token))
-            .await?
-        else {
+        let token_hash = hash_token(token);
+        if let Some(session) = self.store.get_session_by_token_hash(&token_hash).await? {
+            return self.session_identity(session).await;
+        }
+        let Some(api_token) = self.store.get_api_token_by_hash(&token_hash).await? else {
             return Ok(None);
         };
+        if api_token.revoked_at.is_some() {
+            return Ok(None);
+        }
+        let Some(user) = self.store.get_user(&api_token.user_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(AuthenticatedUser {
+            user,
+            credential: Credential::ApiToken {
+                id: api_token.id,
+                workspace_id: api_token.workspace_id,
+                scopes: api_token.scopes,
+            },
+            expires_at: None,
+        }))
+    }
+
+    /// Turn a stored session into the request identity.
+    ///
+    /// An expired session is deleted on the way out, so a stale token is
+    /// cleaned up rather than accumulating.
+    async fn session_identity(&self, session: Session) -> CowResult<Option<AuthenticatedUser>> {
         if session.expires_at <= Utc::now() {
             self.store.delete_session(&session.id).await?;
             return Ok(None);
@@ -144,8 +206,10 @@ impl AuthService {
         };
         Ok(Some(AuthenticatedUser {
             user,
-            session_id: session.id,
-            expires_at: session.expires_at,
+            credential: Credential::Session {
+                id: session.id.clone(),
+            },
+            expires_at: Some(session.expires_at),
         }))
     }
 

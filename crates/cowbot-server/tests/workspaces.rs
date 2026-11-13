@@ -534,3 +534,43 @@ async fn removing_a_member_keeps_their_account() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn an_unprivileged_caller_cannot_probe_valid_enum_values() {
+    let f = fixture().await;
+    // A member who cannot invite, sending a role the enum does not accept. If
+    // the body were parsed before the role check this would be a 400 naming the
+    // valid values; instead the role check answers first.
+    let member = cowbot_core::identity::User::new("Member", "member@example.com", "");
+    f.store.create_user(&member).await.unwrap();
+    f.store
+        .add_member(&cowbot_core::identity::Membership::new(
+            member.id.clone(),
+            cowbot_core::identity::WorkspaceId::new(f.workspace_id.clone()),
+            cowbot_core::identity::Role::Member,
+        ))
+        .await
+        .unwrap();
+    let issued = f.auth.issue(&member.id).await.unwrap();
+
+    let (status, body) = call(
+        f.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/invites", f.workspace_id),
+        Some(json!({ "role": "superuser" })),
+        Some(&issued.token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
+
+    // The privileged path still reports a bad value as a 400.
+    let (status, _) = call(
+        f.router,
+        "POST",
+        &format!("/api/v1/workspaces/{}/invites", f.workspace_id),
+        Some(json!({ "role": "superuser" })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

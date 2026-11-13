@@ -52,6 +52,33 @@ impl AgentService {
                 update.id.0
             )));
         };
+        // The id is caller-supplied, and `upsert_agent` moves an existing row to
+        // the workspace it is given. Without this check one workspace could
+        // rewrite another's agent and read back its goal, backstory, and model.
+        if !self
+            .store
+            .agent_in_workspace(&update.id, workspace_id)
+            .await?
+        {
+            return Err(CowError::Config(format!(
+                "agent '{}' was not found",
+                update.id.0
+            )));
+        }
+        // The id is caller-supplied, so the row itself must prove it belongs to
+        // this workspace: `upsert_agent` moves an existing row to the workspace
+        // it is given, which would otherwise let one workspace take over
+        // another's agent and read back its goal, backstory, and model.
+        if !self
+            .store
+            .agent_in_workspace(&update.id, workspace_id)
+            .await?
+        {
+            return Err(CowError::Config(format!(
+                "agent '{}' was not found",
+                update.id.0
+            )));
+        }
 
         let name = update.name.trim();
         if name.is_empty() {

@@ -136,7 +136,7 @@ pub async fn update_member(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((workspace_id, member_id)): Path<(String, String)>,
-    Json(body): Json<UpdateMemberRequest>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Result<Json<MemberBody>, ApiError> {
     let workspace_id = WorkspaceId::new(workspace_id);
     let actor = require_member(&state, &user, &workspace_id).await?;
@@ -148,6 +148,9 @@ pub async fn update_member(
             "your role does not allow changing this member",
         ));
     }
+    // Parsed after the role check so an unprivileged caller cannot learn which
+    // roles the enum accepts (ADR-0045).
+    let body: UpdateMemberRequest = crate::error::parse_body(raw)?;
     if !actor.can_grant(body.role) {
         return Err(ApiError::forbidden(
             "your role does not allow granting that role",
@@ -234,15 +237,18 @@ pub async fn create_invite(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(workspace_id): Path<String>,
-    Json(body): Json<CreateInviteRequest>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<InviteBody>), ApiError> {
     let workspace_id = WorkspaceId::new(workspace_id);
     let actor = require_member(&state, &user, &workspace_id).await?;
+    // The role check runs before the body is parsed, so an unprivileged caller
+    // cannot learn which role values the enum accepts (ADR-0045).
     if !actor.can_invite() {
         return Err(ApiError::forbidden(
             "your role does not allow inviting members",
         ));
     }
+    let body: CreateInviteRequest = crate::error::parse_body(raw)?;
     if !actor.can_grant(body.role) {
         return Err(ApiError::forbidden(
             "your role does not allow inviting at that role",
@@ -457,11 +463,23 @@ pub async fn rename_workspace(
 /// A non-member gets `404` rather than `403`: a `403` would confirm the
 /// workspace exists, which an unauthenticated probe could use to map a
 /// deployment.
+///
+/// An API token is bound to one workspace and answers `403` anywhere else, even
+/// where its owner is a member — the binding is part of the credential, not
+/// just of the role (ADR-0045). The owner's role is then read fresh from the
+/// store, so a demotion takes effect on the token's next request.
 pub(crate) async fn require_member(
     state: &AppState,
     user: &AuthenticatedUser,
     workspace_id: &WorkspaceId,
 ) -> Result<Role, ApiError> {
+    if let Some(bound) = user.credential.bound_workspace() {
+        if bound != workspace_id {
+            return Err(ApiError::forbidden(
+                "this API token is bound to a different workspace",
+            ));
+        }
+    }
     let membership = state
         .store
         .get_membership(&user.user.id, workspace_id)

@@ -917,6 +917,21 @@ export default function App() {
         setContextVersion((version) => version + 1);
         refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
       }
+      if (type === "ChannelCleared") {
+        // Another client cleared the history; the timeline must not keep
+        // showing messages that no longer exist.
+        const cleared = event.payload.payload as { channel_id?: string } | undefined;
+        if (cleared?.channel_id) {
+          setPreviews((current) => {
+            if (!(cleared.channel_id! in current)) return current;
+            const next = { ...current };
+            delete next[cleared.channel_id!];
+            return next;
+          });
+        }
+        setContextVersion((version) => version + 1);
+        refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
+      }
       if (
         type === "TaskCreated" ||
         type === "TaskUpdated" ||

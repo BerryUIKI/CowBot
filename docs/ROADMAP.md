@@ -147,6 +147,13 @@ Delivered:
 > reuse `require_member` and land with 2.3.
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
 | 2.4 | Deployment and operations | Single binary and Docker image; Compose example; TLS via reverse proxy; health checks; backup/restore; configuration reference | 2.1 |
+
+> **2.4 progress**: `cowbot-server` reads its configuration from the environment
+> and stops on a value that does not parse; `deploy/` holds a multi-stage
+> Dockerfile (unprivileged user, health check, one data volume) and a Compose
+> file with Caddy terminating TLS in front of a loopback-bound server;
+> `docs/SERVER.md` is the configuration, backup, restore, upgrade, and token
+> reference (ADR-0046). PostgreSQL and horizontal scaling remain out of scope.
 | 2.5 | Migration and compatibility | `.cowpkg` import into the server; server-side schema migrations; version compatibility policy | 2.2, 2.4 |
 
 ### 5.2 Phase 2 Exit Criteria

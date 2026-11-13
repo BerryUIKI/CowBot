@@ -28,7 +28,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let config = ServerConfig::default();
+    // A container sets the environment; a local run falls back to the defaults.
+    let config = match ServerConfig::from_env() {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("configuration error: {message}");
+            std::process::exit(2);
+        }
+    };
     let store = Store::connect(&config.database).await?;
     store.migrate().await?;
 

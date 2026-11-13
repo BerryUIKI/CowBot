@@ -172,7 +172,14 @@ impl ChannelService {
         if channel.is_conversation() {
             self.store.clear_context_entries(channel_id).await?;
         }
-        self.store.clear_channel_messages(channel_id).await
+        let cleared = self.store.clear_channel_messages(channel_id).await?;
+        // Subscribers (a second desktop, a server stream) need to know the
+        // history is gone; a silent clear leaves them showing messages that no
+        // longer exist.
+        self.bus.publish(Event::new(EventPayload::ChannelCleared {
+            channel_id: channel_id.clone(),
+        }));
+        Ok(cleared)
     }
 
     /// Return the agent's direct conversation, creating it on first use.

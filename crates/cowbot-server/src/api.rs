@@ -163,7 +163,9 @@ async fn workspaces_for(
 /// The signed-in user, refreshed from the store.
 #[derive(Debug, Serialize)]
 pub struct MeBody {
-    pub session_expires_at: DateTime<Utc>,
+    /// When the session expires. An API token has no expiry — it lives until it
+    /// is revoked — so this is `None` for one.
+    pub session_expires_at: Option<DateTime<Utc>>,
     pub user: UserBody,
     pub workspaces: Vec<WorkspaceBody>,
 }
@@ -181,11 +183,19 @@ pub async fn me(
 }
 
 /// End the current session.
+///
+/// An API token is not a session, so there is nothing here for it to end; it is
+/// revoked through the token route instead.
 pub async fn sign_out(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<StatusCode, ApiError> {
-    state.auth.sign_out(&user.session_id).await?;
+    let Some(session_id) = user.credential.session_id() else {
+        return Err(ApiError::bad_request(
+            "this request used an API token; revoke the token instead of signing out",
+        ));
+    };
+    state.auth.sign_out(session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

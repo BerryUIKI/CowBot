@@ -304,6 +304,25 @@ impl Client for RemoteClient {
                     continue;
                 };
                 let Ok(event) = serde_json::from_str::<Event>(&text) else {
+                    // A `Resync` notice says the subscriber fell behind. Surface
+                    // it as a system notice so a screen reloads instead of
+                    // going quietly stale.
+                    if let Ok(notice) = serde_json::from_str::<Value>(&text) {
+                        if notice.get("type").and_then(|t| t.as_str()) == Some("Resync") {
+                            let skipped =
+                                notice.get("skipped").and_then(|s| s.as_u64()).unwrap_or(0);
+                            tracing::warn!(skipped, "the live stream fell behind");
+                            let event =
+                                Event::new(cowbot_core::event::EventPayload::SystemNotice {
+                                    message: format!(
+                                        "The live stream fell behind and skipped {skipped} events; reload to catch up."
+                                    ),
+                                });
+                            if sender.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     continue;
                 };
                 if sender.send(event).await.is_err() {
