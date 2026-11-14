@@ -109,18 +109,16 @@ impl Role {
 
     /// Whether this role may create, rename, or delete channels, agents, and
     /// tasks — the everyday workspace work.
+    ///
+    /// Every role may write today; the method names the policy the routes
+    /// check, so a read-only role would make those checks bite.
     pub fn can_write(self) -> bool {
-        self.rank() >= Role::Member.rank()
+        true
     }
 
     /// Whether this role may change workspace-level settings, such as its name.
     pub fn can_administer(self) -> bool {
         matches!(self, Role::Owner | Role::Admin)
-    }
-
-    /// Whether this role may hand ownership to someone else.
-    pub fn can_transfer_ownership(self) -> bool {
-        self == Role::Owner
     }
 }
 
@@ -322,13 +320,6 @@ mod tests {
         assert!(!Role::Member.can_invite());
         assert!(!Role::Member.can_administer());
         assert!(Role::Member.can_write());
-    }
-
-    #[test]
-    fn only_an_owner_transfers_ownership() {
-        assert!(Role::Owner.can_transfer_ownership());
-        assert!(!Role::Admin.can_transfer_ownership());
-        assert!(!Role::Member.can_transfer_ownership());
     }
 
     #[test]

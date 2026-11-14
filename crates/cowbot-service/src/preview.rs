@@ -511,8 +511,7 @@ fn prompt_role(role: ContextRole) -> PromptRole {
 /// Runs do not persist the assignment that produced them. The assignment that
 /// produced the run already existed when it started, and `updated_at` moves at
 /// completion, so the best match is the assignment for the same task and agent
-/// created latest before the run started. When clock skew puts every
-/// assignment after the start, the earliest one is used.
+/// created latest before the run started.
 fn plan_mode_for_run(run: &Run, assignments: &[Assignment]) -> bool {
     assignments
         .iter()
@@ -521,14 +520,6 @@ fn plan_mode_for_run(run: &Run, assignments: &[Assignment]) -> bool {
         })
         .filter(|assignment| assignment.created_at <= run.started_at)
         .max_by_key(|assignment| assignment.created_at)
-        .or_else(|| {
-            assignments
-                .iter()
-                .filter(|assignment| {
-                    assignment.task_id == run.task_id && assignment.assignee == run.agent_id
-                })
-                .min_by_key(|assignment| assignment.created_at)
-        })
         .map(|assignment| assignment.approval_level == ApprovalLevel::PlanOnly)
         .unwrap_or(false)
 }
