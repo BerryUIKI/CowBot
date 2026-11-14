@@ -235,24 +235,22 @@ fn transport(error: reqwest::Error) -> CowError {
 /// The `code` decides the variant, so a caller handling `CowError` sees the
 /// same shape it would in local mode.
 fn map_error(status: StatusCode, body: &Value) -> CowError {
+    let code = body.get("code").and_then(|code| code.as_str()).unwrap_or("");
     let message = body
         .get("message")
         .and_then(|message| message.as_str())
         .unwrap_or("the server returned an error")
         .to_string();
     match status {
-        // A 401 on the sign-in route is a bad credential; on any other route
-        // it is an expired session. The message decides which one to report.
-        StatusCode::UNAUTHORIZED if message.contains("email or password") => {
-            CowError::Config(message)
-        }
+        StatusCode::UNAUTHORIZED if code == "invalid_credentials" => CowError::Config(message),
         StatusCode::UNAUTHORIZED => {
             CowError::Config("the session is no longer valid; sign in again".into())
         }
-        StatusCode::FORBIDDEN => CowError::Config(message),
-        StatusCode::NOT_FOUND => CowError::Config(message),
-        StatusCode::CONFLICT => CowError::Config(message),
-        StatusCode::BAD_REQUEST => CowError::Config(message),
+        StatusCode::TOO_MANY_REQUESTS => CowError::RateLimited(message),
+        StatusCode::NOT_FOUND => CowError::NotFound(message),
+        StatusCode::FORBIDDEN | StatusCode::CONFLICT | StatusCode::BAD_REQUEST => {
+            CowError::Config(message)
+        }
         _ => CowError::Storage(message),
     }
 }
@@ -349,7 +347,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(channel) => Ok(Some(channel.into_channel())),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -679,7 +677,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(task) => Ok(Some(task)),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -734,7 +732,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(run) => Ok(Some(run)),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }

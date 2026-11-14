@@ -123,9 +123,9 @@ impl AuthService {
         email: &str,
         password: &str,
         source: &str,
-    ) -> CowResult<IssuedSession> {
+    ) -> CowResult<(IssuedSession, User)> {
         if self.rate_limited(source) {
-            return Err(CowError::Config(
+            return Err(CowError::RateLimited(
                 "too many sign-in attempts; wait a moment and try again".into(),
             ));
         }
@@ -141,13 +141,13 @@ impl AuthService {
         };
         if !verified {
             self.record_failure(source);
-            return Err(CowError::Config(
+            return Err(CowError::InvalidCredentials(
                 "the email or password is not correct".into(),
             ));
         }
         let user = user.expect("a verified password implies a user");
         self.clear_failures(source);
-        self.issue(&user.id).await
+        Ok((self.issue(&user.id).await?, user))
     }
 
     /// Issue a fresh session for a known user.

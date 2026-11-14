@@ -43,6 +43,10 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
     }
 
+    pub fn invalid_credentials(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "invalid_credentials", message)
+    }
+
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, "forbidden", message)
     }
@@ -102,6 +106,8 @@ impl From<CowError> for ApiError {
             // show.
             CowError::Task(message) | CowError::Agent(message) => ApiError::conflict(message),
             CowError::NotFound(message) => ApiError::not_found(message),
+            CowError::RateLimited(message) => ApiError::too_many_requests(message),
+            CowError::InvalidCredentials(message) => ApiError::invalid_credentials(message),
             // A storage failure can leak table and column names, so it is
             // logged for the operator and reported generically.
             CowError::Storage(message) => {
