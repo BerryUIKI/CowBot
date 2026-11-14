@@ -100,10 +100,12 @@ impl PermissionService {
             .store
             .get_permission_rule(id)
             .await?
-            .ok_or_else(|| CowError::Task(format!("permission rule '{id}' was not found")))?;
+            .ok_or_else(|| CowError::NotFound(format!("permission rule '{id}' was not found")))?;
         if rule.workspace_id != self.workspace_id {
-            return Err(CowError::Task(format!(
-                "permission rule '{id}' belongs to another workspace"
+            // A rule in another workspace is reported the same way, so its
+            // existence cannot be probed from here.
+            return Err(CowError::NotFound(format!(
+                "permission rule '{id}' was not found"
             )));
         }
         Ok(rule)

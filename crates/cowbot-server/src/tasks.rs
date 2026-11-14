@@ -432,12 +432,13 @@ pub async fn set_permission_rule_enabled(
             "your role does not allow changing permission rules",
         ));
     }
-    let service = state.permissions(&workspace_id);
-    // A rule id from another workspace must not be reachable here.
-    if !service.list().await?.iter().any(|rule| rule.id == rule_id) {
-        return Err(ApiError::not_found("the rule was not found"));
-    }
-    Ok(Json(service.set_enabled(&rule_id, body.enabled).await?))
+    // The service resolves the rule against this workspace and reports one in
+    // another as not found.
+    let rule = state
+        .permissions(&workspace_id)
+        .set_enabled(&rule_id, body.enabled)
+        .await?;
+    Ok(Json(rule))
 }
 
 pub async fn delete_permission_rule(
@@ -452,11 +453,10 @@ pub async fn delete_permission_rule(
             "your role does not allow changing permission rules",
         ));
     }
-    let service = state.permissions(&workspace_id);
-    if !service.list().await?.iter().any(|rule| rule.id == rule_id) {
-        return Err(ApiError::not_found("the rule was not found"));
-    }
-    service.delete(&rule_id).await?;
+    state
+        .permissions(&workspace_id)
+        .delete(&rule_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
