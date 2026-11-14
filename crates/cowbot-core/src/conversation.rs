@@ -622,6 +622,10 @@ pub struct CompactionOutcome {
     /// nothing-to-summarize paths.
     #[serde(default)]
     pub reason: Option<String>,
+    /// The branch's stored sequence numbers are not usable for compaction, so
+    /// nothing happened and the branch needs a new conversation or a re-import.
+    #[serde(default)]
+    pub invalid_sequences: bool,
 }
 
 /// Result of the guarded store write behind one compaction.
