@@ -153,3 +153,14 @@ mod tests {
         assert!(parse_model_ids(&json!({"object": "list"})).is_err());
     }
 }
+
+/// Read a value's numeric usage field, saturating at `u32::MAX`.
+///
+/// Providers report counts as JSON numbers of varying width; every protocol
+/// normalizes them the same way.
+pub(crate) fn token_field(value: &Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
+}

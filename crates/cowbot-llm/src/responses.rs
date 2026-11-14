@@ -4,7 +4,7 @@
 //! top-level `function_call` items and tool results are `function_call_output`
 //! items rather than chat messages.
 
-use crate::endpoint::{endpoint_url, models_url, parse_model_ids};
+use crate::endpoint::{endpoint_url, models_url, parse_model_ids, token_field};
 use crate::provider::LlmProvider;
 use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
@@ -192,13 +192,6 @@ fn parse_response(value: Value) -> CowResult<ChatCompletionResponse> {
         usage: raw_usage.as_ref().and_then(parse_usage),
         raw_usage,
     })
-}
-
-fn token_field(value: &Value, key: &str) -> Option<u32> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
 }
 
 /// Responses input tokens include cached tokens, so the uncached share is the

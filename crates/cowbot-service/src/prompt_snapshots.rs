@@ -5,7 +5,6 @@
 //! explicit operation: the caller asks for it and sees how many rows went.
 
 use chrono::{Duration, Utc};
-use cowbot_core::channel::ChannelId;
 use cowbot_core::error::CowResult;
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::prompt::{PromptMemory, PromptSlot};
@@ -120,11 +119,6 @@ impl PromptSnapshotService {
         Ok(true)
     }
 
-    /// Read one stored snapshot, verified against its content hash.
-    pub async fn get(&self, llm_call_id: &str) -> CowResult<Option<LlmPromptSnapshot>> {
-        self.store.get_prompt_snapshot(llm_call_id).await
-    }
-
     /// Read one stored snapshot with the call links and a hash-mismatch flag.
     pub async fn detail(&self, llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
         self.store.get_prompt_snapshot_detail(llm_call_id).await
@@ -139,13 +133,6 @@ impl PromptSnapshotService {
     pub async fn list_recent(&self, limit: u32) -> CowResult<Vec<PromptSnapshotSummary>> {
         self.store
             .list_recent_prompt_snapshots(&self.workspace_id, limit)
-            .await
-    }
-
-    /// Remove every snapshot recorded for a channel that is being deleted.
-    pub async fn delete_for_channel(&self, channel_id: &ChannelId) -> CowResult<u64> {
-        self.store
-            .delete_prompt_snapshots_for_channel(channel_id)
             .await
     }
 

@@ -1,4 +1,4 @@
-use crate::endpoint::parse_model_ids;
+use crate::endpoint::{parse_model_ids, token_field};
 use crate::provider::LlmProvider;
 use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
@@ -88,13 +88,6 @@ struct OpenAiRawToolCall {
 struct OpenAiRawFunction {
     name: String,
     arguments: String,
-}
-
-fn token_field(value: &Value, key: &str) -> Option<u32> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|tokens| tokens.min(u32::MAX as u64) as u32)
 }
 
 /// Normalize an OpenAI-compatible usage object.
