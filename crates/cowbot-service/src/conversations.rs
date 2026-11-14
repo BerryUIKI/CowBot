@@ -12,10 +12,10 @@ use cowbot_core::conversation::{
     compaction_split_by, context_entry_tokens, context_usage_state, next_rotation, project_context,
     CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextProjection, ContextRole, ConversationContext,
-    ConversationMode,
-    ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn, RouteSource, RoutingMode, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS,
-    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode, TurnId,
+    CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS,
+    MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
@@ -96,6 +96,16 @@ pub struct ConversationService {
     compaction_locks: Arc<CompactionLocks>,
     /// Shared turn registry for every turn this service spawns (ADR-0041).
     turns: Arc<TurnRunner>,
+}
+
+/// The conversation and roster one reply works against.
+///
+/// Loaded once by `ConversationService::reply`, so neither reply path re-reads
+/// the roster.
+struct ReplyContext<'a> {
+    channel: &'a Channel,
+    settings: &'a ConversationSettings,
+    participants: &'a [AgentProfile],
 }
 
 impl ConversationService {
@@ -457,11 +467,21 @@ impl ConversationService {
                 Ok(report)
             }
             1 => {
-                self.reply_single(&channel, &settings, &participants, message, llm, tools, options)
+                let context = ReplyContext {
+                    channel: &channel,
+                    settings: &settings,
+                    participants: &participants,
+                };
+                self.reply_single(&context, message, llm, tools, options)
                     .await
             }
             _ => {
-                self.reply_group(&channel, &settings, &participants, message, llm, tools, options)
+                let context = ReplyContext {
+                    channel: &channel,
+                    settings: &settings,
+                    participants: &participants,
+                };
+                self.reply_group(&context, message, llm, tools, options)
                     .await
             }
         }
@@ -469,14 +489,15 @@ impl ConversationService {
 
     async fn reply_single(
         &self,
-        channel: &Channel,
-        settings: &ConversationSettings,
-        participants: &[AgentProfile],
+        context: &ReplyContext<'_>,
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
+        let channel = context.channel;
+        let settings = context.settings;
+        let participants = context.participants;
         let Some(agent) = participants.first() else {
             self.channels
                 .post_system_notice(
@@ -510,7 +531,7 @@ impl ConversationService {
             .await;
         let assembled = assemble_conversation_messages(
             counter.as_ref(),
-            &agent,
+            agent,
             &agents,
             &entries,
             memory.as_ref().map(|memory| memory.block.as_str()),
@@ -609,14 +630,15 @@ impl ConversationService {
     /// answers; the model router arrives in M3.4 behind `router_enabled`.
     async fn reply_group(
         &self,
-        channel: &Channel,
-        settings: &ConversationSettings,
-        participants: &[AgentProfile],
+        context: &ReplyContext<'_>,
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
+        let channel = context.channel;
+        let settings = context.settings;
+        let participants = context.participants;
         let counter = token_counter_for_model(&settings.model);
         if participants.is_empty() {
             self.channels
@@ -650,7 +672,7 @@ impl ConversationService {
             self.store.append_context_entry(&entry).await?;
         }
 
-        let resolution = resolve_mentions(&message.content, &participants);
+        let resolution = resolve_mentions(&message.content, participants);
         let unknown = resolution.unknown.clone();
         let mut turn =
             ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Silent);
@@ -661,13 +683,13 @@ impl ConversationService {
         let selected = if !resolution.agents.is_empty() {
             turn.source = RouteSource::Mention;
             if !resolution.unknown.is_empty() {
-                self.post_participant_notice(channel, &resolution.unknown, &participants)
+                self.post_participant_notice(channel, &resolution.unknown, participants)
                     .await?;
             }
             resolution.agents
         } else if !resolution.unknown.is_empty() {
             turn.source = RouteSource::Unmatched;
-            self.post_participant_notice(channel, &resolution.unknown, &participants)
+            self.post_participant_notice(channel, &resolution.unknown, participants)
                 .await?;
             self.record_turn(&turn).await?;
             return Ok(ChannelTurnReport {
@@ -681,9 +703,9 @@ impl ConversationService {
             // the conversation's routing mode (ADR-0042).
             let mut routed = None;
             if settings.routing_mode == RoutingMode::Rotation {
-                let last = last_group_speaker(&self.store, channel, &participants).await?;
+                let last = last_group_speaker(&self.store, channel, participants).await?;
                 match next_rotation(
-                    &participants,
+                    participants,
                     |agent| agent.id.clone(),
                     &settings.muted_participants,
                     last.as_ref(),
@@ -708,18 +730,12 @@ impl ConversationService {
                 }
             } else if settings.routing_mode.uses_router(settings.router_enabled) {
                 let decision = self
-                    .route_with_model(
-                        channel,
-                        &participants,
-                        message,
-                        llm.clone(),
-                        &settings.model,
-                    )
+                    .route_with_model(channel, participants, message, llm.clone(), &settings.model)
                     .await?;
                 turn.router_call_id = Some(decision.call_id.clone());
                 if let Some(failure) = decision.failure {
                     turn.reason = Some(failure.clone());
-                    let fallback = if resolve_default_responder(settings, &participants)
+                    let fallback = if resolve_default_responder(settings, participants)
                         .0
                         .is_some()
                     {
@@ -743,7 +759,7 @@ impl ConversationService {
             match routed {
                 Some(agents) => agents,
                 None => {
-                    let (responder, stale) = resolve_default_responder(settings, &participants);
+                    let (responder, stale) = resolve_default_responder(settings, participants);
                     let Some(responder) = responder else {
                         turn.source = RouteSource::Silent;
                         self.record_turn(&turn).await?;
@@ -772,7 +788,7 @@ impl ConversationService {
             }
         };
 
-        let default_name = resolve_default_responder(settings, &participants)
+        let default_name = resolve_default_responder(settings, participants)
             .0
             .map(|agent| agent.name.clone());
         let capacities: HashMap<&AgentId, &ParticipantCapacity> = options
@@ -795,7 +811,7 @@ impl ConversationService {
                         counter.as_ref(),
                         channel,
                         agent,
-                        &participants,
+                        participants,
                         default_name.as_deref(),
                         options.platform_context.as_deref(),
                         &agents,
@@ -803,7 +819,8 @@ impl ConversationService {
                     )
                     .await?;
                 let percent = context_usage_state(projection.total_tokens(), Some(window)).0;
-                let crosses = percent.is_some_and(|percent| percent >= settings.compact_threshold as f32);
+                let crosses =
+                    percent.is_some_and(|percent| percent >= settings.compact_threshold as f32);
                 if settings.auto_compact && crosses {
                     match self
                         .compact_branch(channel, agent, llm.clone(), &settings.model, false)
@@ -819,7 +836,7 @@ impl ConversationService {
                                         counter.as_ref(),
                                         channel,
                                         agent,
-                                        &participants,
+                                        participants,
                                         default_name.as_deref(),
                                         options.platform_context.as_deref(),
                                         &agents,
@@ -959,7 +976,7 @@ impl ConversationService {
             let assembled = assemble_group_messages(
                 counter.as_ref(),
                 agent,
-                &participants,
+                participants,
                 default_name.as_deref(),
                 platform,
                 &agents,
@@ -1244,7 +1261,12 @@ impl ConversationService {
             )
             .text,
         );
-        Ok(project_context(counter, system_tokens, tool_tokens, &entries))
+        Ok(project_context(
+            counter,
+            system_tokens,
+            tool_tokens,
+            &entries,
+        ))
     }
 
     /// Ask the conversation's fixed model which participants should answer.

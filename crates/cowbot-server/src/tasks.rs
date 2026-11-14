@@ -456,10 +456,7 @@ pub async fn delete_permission_rule(
             "your role does not allow changing permission rules",
         ));
     }
-    state
-        .permissions(&workspace_id)
-        .delete(&rule_id)
-        .await?;
+    state.permissions(&workspace_id).delete(&rule_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

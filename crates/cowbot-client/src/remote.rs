@@ -230,7 +230,10 @@ fn transport(error: reqwest::Error) -> CowError {
 /// The `code` decides the variant, so a caller handling `CowError` sees the
 /// same shape it would in local mode.
 fn map_error(status: StatusCode, body: &Value) -> CowError {
-    let code = body.get("code").and_then(|code| code.as_str()).unwrap_or("");
+    let code = body
+        .get("code")
+        .and_then(|code| code.as_str())
+        .unwrap_or("");
     let message = body
         .get("message")
         .and_then(|message| message.as_str())

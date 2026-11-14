@@ -942,7 +942,6 @@ mod tests {
     fn scope_reports_all_four_scopes() {
         let channel = ChannelId::new("channel-1");
         let agent = AgentId::new("agent-1");
-        let other_agent = AgentId::new("agent-2");
 
         let shared = MemoryEntry::new(
             workspace(),
@@ -1141,7 +1140,6 @@ mod tests {
         assert_eq!(plan.candidates[2].skip_reason, None);
         assert_eq!(plan.candidates[2].score, Some(0.2));
         assert!(plan.candidates[2].tokens > 0);
-
     }
 
     #[test]

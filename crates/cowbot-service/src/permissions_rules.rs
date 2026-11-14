@@ -96,11 +96,10 @@ impl PermissionService {
     }
 
     async fn load(&self, id: &str) -> CowResult<PermissionRule> {
-        let rule = self
-            .store
-            .get_permission_rule(id)
-            .await?
-            .ok_or_else(|| CowError::NotFound(format!("permission rule '{id}' was not found")))?;
+        let rule =
+            self.store.get_permission_rule(id).await?.ok_or_else(|| {
+                CowError::NotFound(format!("permission rule '{id}' was not found"))
+            })?;
         if rule.workspace_id != self.workspace_id {
             // A rule in another workspace is reported the same way, so its
             // existence cannot be probed from here.

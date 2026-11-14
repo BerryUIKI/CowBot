@@ -151,8 +151,7 @@ impl Scope {
             EventPayload::MessagePosted(message) => {
                 self.channel_admitted(state, &message.channel_id.0).await
             }
-            EventPayload::ChannelCreated(channel)
-            | EventPayload::ChannelUpdated(channel) => {
+            EventPayload::ChannelCreated(channel) | EventPayload::ChannelUpdated(channel) => {
                 self.channel_admitted(state, &channel.id.0).await
             }
             EventPayload::ChannelDeleted { channel_id }
@@ -165,8 +164,9 @@ impl Scope {
             EventPayload::UserPrompt { channel_id, .. } => {
                 self.channel_admitted(state, &channel_id.0).await
             }
-            EventPayload::TaskCreated(task)
-            | EventPayload::TaskUpdated(task) => self.task_admitted(state, &task.id.0).await,
+            EventPayload::TaskCreated(task) | EventPayload::TaskUpdated(task) => {
+                self.task_admitted(state, &task.id.0).await
+            }
             EventPayload::TaskAssigned { task_id, .. }
             | EventPayload::TaskCompleted { task_id, .. }
             | EventPayload::TaskFailed { task_id, .. }
@@ -185,9 +185,7 @@ impl Scope {
                     TurnTarget::Conversation { channel_id, .. } => {
                         self.channel_admitted(state, &channel_id.0).await
                     }
-                    TurnTarget::Task { task_id, .. } => {
-                        self.task_admitted(state, &task_id.0).await
-                    }
+                    TurnTarget::Task { task_id, .. } => self.task_admitted(state, &task_id.0).await,
                 },
                 // Every later event in a turn is placed by its turn; it carries
                 // no channel or task, so the socket cannot place it on its own.

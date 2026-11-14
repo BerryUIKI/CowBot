@@ -34,7 +34,10 @@ impl EventBus {
     ///
     /// Tests use this to assert on the full event sequence after the work has
     /// finished; production code has no reader for one.
-    pub fn recording(channel_capacity: usize, sink: impl Fn(&Event) + Send + Sync + 'static) -> Self {
+    pub fn recording(
+        channel_capacity: usize,
+        sink: impl Fn(&Event) + Send + Sync + 'static,
+    ) -> Self {
         let (sender, _) = broadcast::channel(channel_capacity);
         Self {
             sender,
@@ -125,9 +128,11 @@ mod tests {
     fn the_recording_bus_keeps_every_event() {
         let recording = RecordingBus::new();
         for index in 0..3 {
-            recording.bus().publish(Event::new(EventPayload::SystemNotice {
-                message: format!("Notice {index}"),
-            }));
+            recording
+                .bus()
+                .publish(Event::new(EventPayload::SystemNotice {
+                    message: format!("Notice {index}"),
+                }));
         }
         assert_eq!(recording.events().len(), 3);
     }
