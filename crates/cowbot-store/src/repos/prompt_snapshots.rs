@@ -336,7 +336,7 @@ impl Store {
         )
         .bind(&settings.workspace_id.0)
         .bind(bool_int(settings.enabled))
-        .bind(i64::from(clamp_retention_days(settings.retention_days)))
+        .bind(i64::from(settings.retention_days))
         .bind(settings.updated_at.to_rfc3339())
         .execute(self.pool())
         .await

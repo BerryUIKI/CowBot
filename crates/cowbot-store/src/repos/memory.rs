@@ -573,10 +573,8 @@ impl Store {
             0i64
         })
         .bind(if settings.recall_enabled { 1i64 } else { 0i64 })
-        .bind(i64::from(clamp_memory_budget(settings.notes_budget_tokens)))
-        .bind(i64::from(clamp_memory_budget(
-            settings.recall_budget_tokens,
-        )))
+        .bind(i64::from(settings.notes_budget_tokens))
+        .bind(i64::from(settings.recall_budget_tokens))
         .bind(settings.updated_at.to_rfc3339())
         .execute(self.pool())
         .await
