@@ -11,7 +11,8 @@ use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     compaction_split_by, context_entry_tokens, context_usage_state, next_rotation, project_context,
     CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
-    ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
+    ContextEvent, ContextEventKind, ContextProjection, ContextRole, ConversationContext,
+    ConversationMode,
     ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
     ConversationTurn, RouteSource, RoutingMode, TurnId, CONTEXT_SUMMARY_INPUT_TOKENS,
     MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
@@ -789,22 +790,21 @@ impl ConversationService {
             if let Some(window) = window {
                 let tool_tokens = capacity.map(|capacity| capacity.tool_tokens).unwrap_or(0);
                 let mut compaction_notice = None;
-                if settings.auto_compact
-                    && self
-                        .branch_crosses_threshold(
-                            channel,
-                            agent,
-                            &participants,
-                            default_name.as_deref(),
-                            options.platform_context.as_deref(),
-                            &agents,
-                            counter.as_ref(),
-                            tool_tokens,
-                            window,
-                            settings.compact_threshold,
-                        )
-                        .await?
-                {
+                let mut projection = self
+                    .branch_projection(
+                        counter.as_ref(),
+                        channel,
+                        agent,
+                        &participants,
+                        default_name.as_deref(),
+                        options.platform_context.as_deref(),
+                        &agents,
+                        tool_tokens,
+                    )
+                    .await?;
+                let percent = context_usage_state(projection.total_tokens(), Some(window)).0;
+                let crosses = percent.is_some_and(|percent| percent >= settings.compact_threshold as f32);
+                if settings.auto_compact && crosses {
                     match self
                         .compact_branch(channel, agent, llm.clone(), &settings.model, false)
                         .await
@@ -812,6 +812,20 @@ impl ConversationService {
                         Ok(outcome) => {
                             if outcome.compacted {
                                 auto_compacted.push(agent.name.clone());
+                                // The branch changed under us; the capacity
+                                // check below needs the new size.
+                                projection = self
+                                    .branch_projection(
+                                        counter.as_ref(),
+                                        channel,
+                                        agent,
+                                        &participants,
+                                        default_name.as_deref(),
+                                        options.platform_context.as_deref(),
+                                        &agents,
+                                        tool_tokens,
+                                    )
+                                    .await?;
                             } else if outcome.in_progress {
                                 compaction_notice = Some(
                                     "its context is being compacted; try again shortly".to_string(),
@@ -836,23 +850,6 @@ impl ConversationService {
                         }
                     }
                 }
-                let entries = self
-                    .store
-                    .list_context_entries(&channel.id, &agent.id)
-                    .await?;
-                let system_tokens = counter.count_message(
-                    &group_system_prompt(
-                        counter.as_ref(),
-                        agent,
-                        &participants,
-                        default_name.as_deref(),
-                        options.platform_context.as_deref(),
-                        &agents,
-                    )
-                    .text,
-                );
-                let projection =
-                    project_context(counter.as_ref(), system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
                     skipped.push(agent.id.clone());
                     let notice = match compaction_notice {
@@ -1218,20 +1215,20 @@ impl ConversationService {
         Ok(participants)
     }
 
+    /// The participant's next-request projection: its active branch plus the
+    /// system prompt it will be sent with.
     #[allow(clippy::too_many_arguments)]
-    async fn branch_crosses_threshold(
+    async fn branch_projection(
         &self,
+        counter: &dyn TokenCounter,
         channel: &Channel,
         agent: &AgentProfile,
         participants: &[AgentProfile],
         default_name: Option<&str>,
         platform_context: Option<&str>,
         agents: &[AgentProfile],
-        counter: &dyn TokenCounter,
         tool_tokens: u32,
-        window: u32,
-        compact_threshold: u32,
-    ) -> CowResult<bool> {
+    ) -> CowResult<ContextProjection> {
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
@@ -1247,11 +1244,7 @@ impl ConversationService {
             )
             .text,
         );
-        let projection = project_context(counter, system_tokens, tool_tokens, &entries);
-        let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
-        Ok(percent
-            .map(|percent| percent >= compact_threshold as f32)
-            .unwrap_or(false))
+        Ok(project_context(counter, system_tokens, tool_tokens, &entries))
     }
 
     /// Ask the conversation's fixed model which participants should answer.

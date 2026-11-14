@@ -40,6 +40,15 @@ pub enum CowError {
     #[error("{0}")]
     NotFound(String),
 
+    /// Too many attempts in a short window; the caller should retry later.
+    #[error("{0}")]
+    RateLimited(String),
+
+    /// An email and password pair did not match. Distinct from a missing or
+    /// expired session, which the API reports as unauthorized too.
+    #[error("{0}")]
+    InvalidCredentials(String),
+
     /// The work was stopped on purpose, for example by a turn cancellation.
     ///
     /// A cancelled turn is not a failure: callers persist what was produced and

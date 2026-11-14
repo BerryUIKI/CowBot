@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::{DateTime, Utc};
-use cowbot_core::identity::{Role, UserId};
+use cowbot_core::identity::{Role, User, UserId};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{AuthenticatedUser, IssuedSession};
@@ -98,34 +98,23 @@ pub async fn sign_in(
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
         .to_string();
-    let issued = match state
+    let (issued, user) = match state
         .auth
         .sign_in(body.email.trim(), &body.password, &source)
         .await
     {
-        Ok(issued) => issued,
-        Err(cowbot_core::error::CowError::Config(message))
-            if message.contains("too many sign-in attempts") =>
-        {
-            return Err(ApiError::too_many_requests(message));
+        Ok(signed_in) => signed_in,
+        Err(cowbot_core::error::CowError::RateLimited(message)) => {
+            return Err(ApiError::too_many_requests(message))
         }
         Err(_) => {
-            return Err(ApiError::unauthorized(
+            return Err(ApiError::invalid_credentials(
                 "the email or password is not correct",
             ))
         }
     };
-    let authenticated = state
-        .auth
-        .authenticate(&issued.token)
-        .await?
-        .ok_or_else(|| ApiError::internal("the new session could not be read back"))?;
-    let workspaces = workspaces_for(&state, &authenticated).await?;
-    Ok(Json(sign_in_body(
-        issued,
-        UserBody::from(&authenticated.user),
-        workspaces,
-    )))
+    let workspaces = workspaces_for(&state, &user).await?;
+    Ok(Json(sign_in_body(issued, UserBody::from(&user), workspaces)))
 }
 
 fn sign_in_body(
@@ -143,10 +132,10 @@ fn sign_in_body(
 
 async fn workspaces_for(
     state: &AppState,
-    user: &AuthenticatedUser,
+    user: &User,
 ) -> Result<Vec<WorkspaceBody>, ApiError> {
     let mut result = Vec::new();
-    for membership in state.auth.memberships(&user.user.id).await? {
+    for membership in state.auth.memberships(&user.id).await? {
         let Some(workspace) = state.store.get_workspace(&membership.workspace_id).await? else {
             continue;
         };
@@ -174,7 +163,7 @@ pub async fn me(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<MeBody>, ApiError> {
-    let workspaces = workspaces_for(&state, &user).await?;
+    let workspaces = workspaces_for(&state, &user.user).await?;
     Ok(Json(MeBody {
         session_expires_at: user.expires_at,
         user: UserBody::from(&user.user),
@@ -219,7 +208,7 @@ pub async fn change_password(
         .change_password(&user.user, &body.current_password, &body.new_password)
         .await?;
     let issued = state.auth.issue(&UserId(user.user.id.0.clone())).await?;
-    let workspaces = workspaces_for(&state, &user).await?;
+    let workspaces = workspaces_for(&state, &user.user).await?;
     Ok(Json(sign_in_body(
         issued,
         UserBody::from(&user.user),

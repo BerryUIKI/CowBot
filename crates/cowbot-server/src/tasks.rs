@@ -23,14 +23,17 @@ use crate::error::ApiError;
 use crate::router::AppState;
 use crate::workspaces::require_member;
 
-/// Parse the approval level names the CLI and desktop use.
+/// Parse the approval level names the CLI and the remote client send.
+///
+/// The enum's serde name is the canonical spelling; the hyphenated form is the
+/// one `RemoteClient` writes, so both are accepted and nothing else is.
 fn parse_approval_level(value: &str) -> Option<cowbot_core::approval::ApprovalLevel> {
     use cowbot_core::approval::ApprovalLevel;
     match value {
-        "ask" | "manual" => Some(ApprovalLevel::Ask),
-        "accept-edits" | "accept_edits" => Some(ApprovalLevel::AcceptEdits),
-        "safe-auto" | "safe_auto" => Some(ApprovalLevel::SafeAuto),
-        "plan-only" | "plan_only" | "plan" => Some(ApprovalLevel::PlanOnly),
+        "ask" => Some(ApprovalLevel::Ask),
+        "accept_edits" | "accept-edits" => Some(ApprovalLevel::AcceptEdits),
+        "safe_auto" | "safe-auto" => Some(ApprovalLevel::SafeAuto),
+        "plan_only" | "plan-only" => Some(ApprovalLevel::PlanOnly),
         "trusted" => Some(ApprovalLevel::Trusted),
         _ => None,
     }
