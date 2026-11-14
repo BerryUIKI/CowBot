@@ -815,11 +815,7 @@ impl ConversationService {
                                 compaction_notice = Some(
                                     "its context is being compacted; try again shortly".to_string(),
                                 );
-                            } else if outcome
-                                .reason
-                                .as_deref()
-                                .is_some_and(|reason| reason.contains("invalid sequence numbers"))
-                            {
+                            } else if outcome.invalid_sequences {
                                 compaction_notice = Some(
                                     "its context branch cannot be compacted; start a new \
                                      conversation or re-import the workspace"
@@ -1517,6 +1513,7 @@ impl ConversationService {
                      conversation or re-import the workspace."
                         .to_string(),
                 ),
+                invalid_sequences: true,
                 ..CompactionOutcome::default()
             });
         }
@@ -1635,6 +1632,7 @@ impl ConversationService {
                     summary: Some(summary_text),
                     in_progress: false,
                     reason: None,
+                    invalid_sequences: false,
                 })
             }
             CompactionWrite::Stale => Ok(CompactionOutcome {
@@ -2029,7 +2027,8 @@ async fn last_group_speaker(
 pub(crate) fn rotation_reason(muted: usize) -> String {
     if muted > 0 {
         format!(
-            "The rotation picked the next participant after the last speaker,              skipping {muted} muted participant(s)."
+            "The rotation picked the next participant after the last speaker, \
+             skipping {muted} muted participant(s)."
         )
     } else {
         "The rotation picked the next participant after the last speaker.".to_string()
