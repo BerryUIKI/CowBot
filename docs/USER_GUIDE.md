@@ -111,7 +111,9 @@ automatically; **Settings → Workspace** manages the rest.
   with SHA-256 checksums; credentials are never included.
 - **Import package** — verifies a `.cowpkg` package, creates a new workspace
   database named `<name> (imported)`, registers it, and restarts into it. Import
-  never merges with or overwrites existing data.
+  never merges with or overwrites existing data; the desktop always imports into
+  a new database, and the CLI refuses a package whose ids collide with the
+  target database.
 
 Creating, importing, and switching restart the app; finish running tasks first,
 or CowBot refuses the change. Workspace databases and `config.json` live in the
@@ -656,7 +658,10 @@ cowbot import --input my-workspace.cowpkg --db other.db
   `-wal`/`-shm` sidecars and report the message; do not delete rows from
   `_sqlx_migrations` by hand.
 - **Package import fails** — the package may be corrupt, from an unsupported
-  schema version, or larger than 512 MB.
+  schema version, larger than 512 MB, or it reuses ids that already exist in the
+  target database (a second import of the same package, or an import into the
+  database it was exported from); import it into a database that has not seen
+  the source workspace.
 - **An update check fails** — CowBot needs to reach `github.com`. Check the
   network or proxy; automatic checks stay silent when offline. A manual check
   reports an error when the newest published release has no `latest.json` yet.
