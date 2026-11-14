@@ -122,12 +122,6 @@ pub enum TurnOutcome {
     Failed { error: String, partial: String },
 }
 
-impl TurnOutcome {
-    pub fn is_stopped(&self) -> bool {
-        matches!(self, Self::Done { stopped: true, .. })
-    }
-}
-
 /// Turn-level cancellation.
 ///
 /// One runner owns the lifecycle of every turn: chat, group, and task paths

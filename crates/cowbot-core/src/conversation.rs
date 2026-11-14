@@ -117,21 +117,6 @@ impl std::str::FromStr for ConversationMode {
     }
 }
 
-impl ConversationMode {
-    /// The mode implied by a participant count.
-    ///
-    /// One participant is a single conversation; two or more are a group. The
-    /// service validates bounds separately because zero is invalid for a
-    /// conversation.
-    pub fn for_participant_count(count: usize) -> Self {
-        if count >= MIN_GROUP_PARTICIPANTS {
-            Self::Group
-        } else {
-            Self::Single
-        }
-    }
-}
-
 /// Default automatic compaction threshold, as a percentage of the usable window.
 pub const DEFAULT_COMPACT_THRESHOLD: u32 = 80;
 
@@ -790,8 +775,7 @@ pub fn next_rotation<'a, T>(
             .find(|participant| is_unmuted(participant));
     };
     // Walk forward from the last speaker's roster slot, wrapping, and skip
-    // muted participants. The full-ring bound keeps an all-muted tail from
-    // spinning.
+    // muted participants. An unmuted participant exists, so the walk finds one.
     let mut index = position;
     for _ in 0..total {
         index = (index + 1) % total;
@@ -799,7 +783,7 @@ pub fn next_rotation<'a, T>(
             return participants.get(index);
         }
     }
-    None
+    unreachable!("an unmuted participant was checked above")
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
@@ -957,9 +941,6 @@ pub fn context_usage_state(
     let Some(window) = window else {
         return (None, ContextUsageState::Unknown);
     };
-    if window == 0 {
-        return (None, ContextUsageState::Unknown);
-    }
     let percent = used_tokens as f32 * 100.0 / window as f32;
     let state = if percent >= 100.0 {
         ContextUsageState::Full
@@ -981,18 +962,6 @@ pub const CONTEXT_SUMMARY_INPUT_TOKENS: u32 = 24_000;
 
 /// Where a compaction splits the active branch.
 ///
-/// Entries before the returned index are summarized; entries from it onwards
-/// are kept. The split keeps the most recent [`CONTEXT_KEEP_RECENT_TOKENS`],
-/// at least the last two entries, and never separates a tool result from the
-/// assistant message that requested it.
-///
-/// This wrapper prices entries with the persisted estimate. Callers that know
-/// the conversation's model use [`compaction_split_by`] with the model counter
-/// instead (ADR-0035).
-pub fn compaction_split(entries: &[ContextEntry]) -> usize {
-    compaction_split_by(entries, |entry| entry.tokens)
-}
-
 /// Where a compaction splits the branch when every entry costs `cost`.
 ///
 /// The cost function lets a caller price entries for the conversation's model,
@@ -1138,7 +1107,7 @@ mod tests {
         // The tail budget reaches the first tool result; the split moves back
         // so the assistant that requested those tools is also summarized only
         // when the whole pair group moves together.
-        let split = compaction_split(&entries);
+        let split = compaction_split_by(&entries, |entry| entry.tokens);
         assert!(split <= entries.len() - 2);
         assert_ne!(entries[split].role, ContextRole::Tool);
     }
@@ -1150,8 +1119,8 @@ mod tests {
             entry(ContextRole::Assistant, 5_000),
             entry(ContextRole::User, 5_000),
         ];
-        assert_eq!(compaction_split(&entries), 1);
-        assert_eq!(compaction_split(&entries[..2]), 0);
+        assert_eq!(compaction_split_by(&entries, |entry| entry.tokens), 1);
+        assert_eq!(compaction_split_by(&entries[..2], |entry| entry.tokens), 0);
     }
 
     #[test]
@@ -1302,7 +1271,7 @@ mod tests {
 
         // The persisted estimates are one token each, so the estimator path
         // finds nothing worth summarizing.
-        assert_eq!(compaction_split(&entries), 0);
+        assert_eq!(compaction_split_by(&entries, |entry| entry.tokens), 0);
         // A model counter that charges 500 tokens per entry keeps the recent
         // window and summarizes the older half.
         assert_eq!(compaction_split_by(&entries, |_| 500), 2);
@@ -1324,22 +1293,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.position, 0);
-    }
-
-    #[test]
-    fn conversation_mode_follows_participant_count() {
-        assert_eq!(
-            ConversationMode::for_participant_count(1),
-            ConversationMode::Single
-        );
-        assert_eq!(
-            ConversationMode::for_participant_count(MIN_GROUP_PARTICIPANTS),
-            ConversationMode::Group
-        );
-        assert_eq!(
-            ConversationMode::for_participant_count(MAX_GROUP_PARTICIPANTS),
-            ConversationMode::Group
-        );
     }
 
     #[test]
@@ -1493,13 +1446,16 @@ mod tests {
 
         // A summary plus the two kept entries: only the summary is old.
         assert_eq!(
-            compaction_split(&[summary.clone(), first.clone(), second.clone()]),
+            compaction_split_by(&[summary.clone(), first.clone(), second.clone()], |entry| entry.tokens),
             0
         );
 
         // A summary with an older message and two kept entries: there is new
         // material to fold into the next summary.
-        assert_eq!(compaction_split(&[summary, first, second, third]), 2);
+        assert_eq!(
+            compaction_split_by(&[summary, first, second, third], |entry| entry.tokens),
+            2
+        );
     }
 
     fn roster(ids: &[&str]) -> Vec<AgentId> {

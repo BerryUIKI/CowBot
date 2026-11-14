@@ -85,18 +85,8 @@ impl SnapshotMessage {
         }
     }
 
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
     pub fn with_tool_calls(mut self, tool_calls: Vec<SnapshotToolCall>) -> Self {
         self.tool_calls = tool_calls;
-        self
-    }
-
-    pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
-        self.tool_call_id = Some(tool_call_id.into());
         self
     }
 }

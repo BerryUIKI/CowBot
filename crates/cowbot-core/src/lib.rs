@@ -40,7 +40,7 @@ pub use command::{
     CommandParse, CommandSpec, CommandTarget, APPROVAL_CHOICES, COMMANDS, SETTINGS_CHOICES,
 };
 pub use conversation::{
-    clean_group_reply, compaction_split, compaction_split_by, context_entry_tokens,
+    clean_group_reply, compaction_split_by, context_entry_tokens,
     context_usage_state, next_rotation, project_context, usable_window, CacheUsageSummary,
     ChannelKind, ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind,
     ContextEvent, ContextEventKind, ContextProjection, ContextRole, ContextToolCall,
@@ -56,7 +56,7 @@ pub use identity::{
 };
 pub use memory::{
     clamp_memory_budget, plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,
-    render_memory_entry, render_notes_for_prompt, select_recalled_entries, truncate_to_tokens,
+    render_memory_entry, render_notes_for_prompt, truncate_to_tokens,
     MemoryEntry, MemoryKind, MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note,
     RecallCandidate, RecallPlan, RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome,
     ScoredMemory, CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS,
