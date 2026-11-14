@@ -101,6 +101,7 @@ impl From<CowError> for ApiError {
             // message is written by our own service code, so it is safe to
             // show.
             CowError::Task(message) | CowError::Agent(message) => ApiError::conflict(message),
+            CowError::NotFound(message) => ApiError::not_found(message),
             // A storage failure can leak table and column names, so it is
             // logged for the operator and reported generically.
             CowError::Storage(message) => {
