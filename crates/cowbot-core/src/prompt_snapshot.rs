@@ -314,7 +314,8 @@ impl LlmPromptSnapshot {
         let messages = self.messages.iter().fold(0_u32, |total, message| {
             total.saturating_add(counter.count_message(&message.content))
         });
-        let tools = counter.count(&serde_json::to_string(&self.tools).expect("tool schemas serialize"));
+        let tools =
+            counter.count(&serde_json::to_string(&self.tools).expect("tool schemas serialize"));
         messages.saturating_add(tools)
     }
 

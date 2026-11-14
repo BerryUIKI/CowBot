@@ -1446,7 +1446,9 @@ mod tests {
 
         // A summary plus the two kept entries: only the summary is old.
         assert_eq!(
-            compaction_split_by(&[summary.clone(), first.clone(), second.clone()], |entry| entry.tokens),
+            compaction_split_by(&[summary.clone(), first.clone(), second.clone()], |entry| {
+                entry.tokens
+            }),
             0
         );
 

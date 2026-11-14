@@ -114,7 +114,11 @@ pub async fn sign_in(
         }
     };
     let workspaces = workspaces_for(&state, &user).await?;
-    Ok(Json(sign_in_body(issued, UserBody::from(&user), workspaces)))
+    Ok(Json(sign_in_body(
+        issued,
+        UserBody::from(&user),
+        workspaces,
+    )))
 }
 
 fn sign_in_body(
@@ -130,10 +134,7 @@ fn sign_in_body(
     }
 }
 
-async fn workspaces_for(
-    state: &AppState,
-    user: &User,
-) -> Result<Vec<WorkspaceBody>, ApiError> {
+async fn workspaces_for(state: &AppState, user: &User) -> Result<Vec<WorkspaceBody>, ApiError> {
     let mut result = Vec::new();
     for membership in state.auth.memberships(&user.id).await? {
         let Some(workspace) = state.store.get_workspace(&membership.workspace_id).await? else {
