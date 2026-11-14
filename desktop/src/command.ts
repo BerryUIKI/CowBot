@@ -1,5 +1,5 @@
-import { listCommands, parseCommand } from "./api";
-import type { CommandInfo, CommandParseResult } from "./types";
+import { listCommands } from "./api";
+import type { CommandInfo } from "./types";
 
 /// The menu is open only while the whole draft is a single slash token:
 /// `/` followed by zero or more name characters and nothing else. Once the
@@ -55,14 +55,6 @@ export function acceptedDraft(command: CommandInfo): string | null {
   return requiredArgument(command) ? `/${command.name} ` : null;
 }
 
-/// Read a draft through the shared Rust parser.
-///
-/// This is the only IPC round trip in the command path, and it happens once
-/// per Enter press.
-export function parseCommandDraft(input: string): Promise<CommandParseResult> {
-  return parseCommand(input);
-}
-
 let cataloguePromise: Promise<CommandInfo[]> | null = null;
 
 /// Fetch the catalogue once per frontend session.
@@ -77,9 +69,4 @@ export function loadCommands(): Promise<CommandInfo[]> {
     });
   }
   return cataloguePromise;
-}
-
-/// Forget the cached catalogue. Only tests and workspace switches need this.
-export function resetCommandCatalogue(): void {
-  cataloguePromise = null;
 }
