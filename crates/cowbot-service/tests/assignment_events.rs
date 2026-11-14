@@ -1,4 +1,4 @@
-use cowbot_bus::EventBus;
+use cowbot_bus::bus::RecordingBus;
 use cowbot_core::agent::AgentId;
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{
@@ -10,15 +10,15 @@ use cowbot_core::task::Task;
 use cowbot_service::{bootstrap_local, AssignmentService};
 use cowbot_store::Store;
 
-async fn setup() -> (Store, EventBus, AssignmentService, WorkspaceId, AgentId) {
+async fn setup() -> (Store, RecordingBus, AssignmentService, WorkspaceId, AgentId) {
     let store = Store::connect_in_memory().await.unwrap();
     store.migrate().await.unwrap();
     let context = bootstrap_local(&store).await.unwrap();
-    let bus = EventBus::default_bus();
-    let service = AssignmentService::new(store.clone(), bus.clone());
+    let recorder = RecordingBus::new();
+    let service = AssignmentService::new(store.clone(), recorder.bus().clone());
     (
         store,
-        bus,
+        recorder,
         service,
         context.workspace.id,
         AgentId::new("agent-1"),
@@ -36,8 +36,12 @@ async fn make_task(
     task
 }
 
-fn assignment_events(bus: &EventBus, task: &Task) -> Vec<(AssignmentStatus, AssignmentEventKind)> {
-    bus.history()
+fn assignment_events(
+    recorder: &RecordingBus,
+    task: &Task,
+) -> Vec<(AssignmentStatus, AssignmentEventKind)> {
+    recorder
+        .events()
         .iter()
         .filter_map(|event| match &event.payload {
             EventPayload::AssignmentUpdated {
@@ -53,7 +57,7 @@ fn assignment_events(bus: &EventBus, task: &Task) -> Vec<(AssignmentStatus, Assi
 
 #[tokio::test]
 async fn assignment_transitions_publish_events() {
-    let (store, bus, service, workspace_id, agent) = setup().await;
+    let (store, recorder, service, workspace_id, agent) = setup().await;
     let task = make_task(&store, &workspace_id, &agent, "Implement login").await;
 
     let assignment = service
@@ -76,7 +80,7 @@ async fn assignment_transitions_publish_events() {
         .unwrap();
 
     assert_eq!(
-        assignment_events(&bus, &task),
+        assignment_events(&recorder, &task),
         vec![
             (AssignmentStatus::Queued, AssignmentEventKind::Enqueued),
             (AssignmentStatus::Running, AssignmentEventKind::Started),
@@ -90,7 +94,7 @@ async fn assignment_transitions_publish_events() {
 
 #[tokio::test]
 async fn failure_cancellation_and_reconcile_publish_events() {
-    let (store, bus, service, workspace_id, agent) = setup().await;
+    let (store, recorder, service, workspace_id, agent) = setup().await;
 
     let failed_task = make_task(&store, &workspace_id, &agent, "Fail").await;
     let failed = service
@@ -106,7 +110,7 @@ async fn failure_cancellation_and_reconcile_publish_events() {
     service.start(&failed.id).await.unwrap();
     service.fail(&failed.id, "boom").await.unwrap();
     assert_eq!(
-        assignment_events(&bus, &failed_task).last(),
+        assignment_events(&recorder, &failed_task).last(),
         Some(&(AssignmentStatus::Failed, AssignmentEventKind::Failed))
     );
 
@@ -127,7 +131,7 @@ async fn failure_cancellation_and_reconcile_publish_events() {
         .await
         .unwrap();
     assert_eq!(
-        assignment_events(&bus, &cancelled_task).last(),
+        assignment_events(&recorder, &cancelled_task).last(),
         Some(&(AssignmentStatus::Cancelled, AssignmentEventKind::Cancelled))
     );
 
@@ -145,7 +149,7 @@ async fn failure_cancellation_and_reconcile_publish_events() {
     service.start(&reconciled.id).await.unwrap();
     service.reconcile_on_startup().await.unwrap();
     assert_eq!(
-        assignment_events(&bus, &reconciled_task).last(),
+        assignment_events(&recorder, &reconciled_task).last(),
         Some(&(AssignmentStatus::Queued, AssignmentEventKind::Restarted))
     );
 }

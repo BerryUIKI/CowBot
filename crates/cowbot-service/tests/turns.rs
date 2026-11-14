@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cowbot_agent::StandardRoles;
+use cowbot_bus::bus::RecordingBus;
 use cowbot_bus::EventBus;
 use cowbot_core::agent::AgentId;
 use cowbot_core::conversation::TurnId;
@@ -36,9 +37,10 @@ fn options(max_concurrency: usize) -> CrewRunOptions {
     }
 }
 
-/// Collects the turn events published on a bus.
-fn turn_events(bus: &EventBus) -> Vec<TurnEvent> {
-    bus.history()
+/// Collects the turn events published on a recording bus.
+fn turn_events(recorder: &RecordingBus) -> Vec<TurnEvent> {
+    recorder
+        .events()
         .into_iter()
         .filter_map(|event| match event.payload {
             EventPayload::Turn(turn) => Some(turn),
@@ -75,7 +77,8 @@ fn the_stopped_marker_is_appended_once() {
 #[tokio::test]
 async fn a_runner_publishes_started_deltas_and_a_persisted_done() {
     let (store, _) = setup().await;
-    let bus = EventBus::default_bus();
+    let recorder = RecordingBus::new();
+    let bus = recorder.bus().clone();
     let runner = TurnRunner::new(store.clone(), bus.clone());
     let turn = runner.start(
         TurnSpec {
@@ -94,7 +97,7 @@ async fn a_runner_publishes_started_deltas_and_a_persisted_done() {
         .finish(&turn, TurnCompletion::done("the answer"))
         .await;
 
-    let events = turn_events(&bus);
+    let events = turn_events(&recorder);
     assert!(matches!(
         events.first(),
         Some(TurnEvent::TurnStarted { .. })
@@ -113,7 +116,8 @@ async fn a_runner_publishes_started_deltas_and_a_persisted_done() {
 #[tokio::test]
 async fn a_provider_streams_deltas_into_the_turn() {
     let (store, workspace_id) = setup().await;
-    let bus = EventBus::default_bus();
+    let recorder = RecordingBus::new();
+    let bus = recorder.bus().clone();
     let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
         chunks: vec![
             StreamChunk::Text("Hello ".to_string()),
@@ -141,7 +145,7 @@ async fn a_provider_streams_deltas_into_the_turn() {
         .unwrap();
     scheduler.run_until_idle().await.unwrap();
 
-    let events = turn_events(&bus);
+    let events = turn_events(&recorder);
     assert_eq!(texts(&events), "Hello world");
     match get_terminal(&events) {
         TurnEvent::TurnDone { message, .. } => assert_eq!(message, "Hello world"),
@@ -160,7 +164,8 @@ async fn a_provider_streams_deltas_into_the_turn() {
 #[tokio::test]
 async fn cancelling_a_task_turn_keeps_its_partial_output() {
     let (store, workspace_id) = setup().await;
-    let bus = EventBus::default_bus();
+    let recorder = RecordingBus::new();
+    let bus = recorder.bus().clone();
     let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
         chunks: vec![
             StreamChunk::Text("half an ".to_string()),
@@ -189,10 +194,17 @@ async fn cancelling_a_task_turn_keeps_its_partial_output() {
 
     // Wait for the first delta, then stop the turn by id.
     let stopper = scheduler.clone();
-    let watcher = bus.clone();
+    let watcher = recorder.bus().clone();
     tokio::spawn(async move {
+        let mut seen = Vec::new();
+        let mut subscription = watcher.subscribe();
         for _ in 0..100 {
-            let started = turn_events(&watcher)
+            while let Ok(event) = subscription.try_recv() {
+                if let EventPayload::Turn(turn) = event.payload {
+                    seen.push(turn);
+                }
+            }
+            let started = seen
                 .iter()
                 .find(|event| matches!(event, TurnEvent::TextDelta { .. }))
                 .map(|event| event.turn_id().clone());
@@ -208,7 +220,7 @@ async fn cancelling_a_task_turn_keeps_its_partial_output() {
 
     let _ = scheduler.run_until_idle().await;
 
-    let events = turn_events(&bus);
+    let events = turn_events(&recorder);
     assert_eq!(texts(&events), "half an ");
     match get_terminal(&events) {
         TurnEvent::TurnDone {
@@ -248,7 +260,8 @@ async fn cancelling_an_unknown_turn_is_idempotent_and_reports_false() {
 #[tokio::test]
 async fn a_provider_error_after_partial_text_reports_what_was_produced() {
     let (store, workspace_id) = setup().await;
-    let bus = EventBus::default_bus();
+    let recorder = RecordingBus::new();
+    let bus = recorder.bus().clone();
     let llm = Arc::new(MockLlmProvider::with_turns(vec![MockTurn {
         chunks: vec![StreamChunk::Text("partial".to_string())],
         finish_reason: None,
@@ -273,7 +286,7 @@ async fn a_provider_error_after_partial_text_reports_what_was_produced() {
         .unwrap();
     assert!(scheduler.run_until_idle().await.is_err());
 
-    let events = turn_events(&bus);
+    let events = turn_events(&recorder);
     assert_eq!(texts(&events), "partial");
     match get_terminal(&events) {
         TurnEvent::TurnError { error, partial, .. } => {
@@ -287,7 +300,8 @@ async fn a_provider_error_after_partial_text_reports_what_was_produced() {
 #[tokio::test]
 async fn a_tool_call_reports_start_and_finish_around_the_result() {
     let (store, workspace_id) = setup().await;
-    let bus = EventBus::default_bus();
+    let recorder = RecordingBus::new();
+    let bus = recorder.bus().clone();
     let llm = Arc::new(MockLlmProvider::with_turns(vec![
         MockTurn {
             chunks: vec![StreamChunk::ToolCall(LlmToolCall {
@@ -319,7 +333,7 @@ async fn a_tool_call_reports_start_and_finish_around_the_result() {
         .unwrap();
     scheduler.run_until_idle().await.unwrap();
 
-    let events = turn_events(&bus);
+    let events = turn_events(&recorder);
     let started = events
         .iter()
         .position(|event| matches!(event, TurnEvent::ToolCallStarted { .. }))
