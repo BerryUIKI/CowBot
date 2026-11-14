@@ -115,3 +115,33 @@ async fn blank_agent_names_are_rejected() {
         .unwrap_err();
     assert!(error.to_string().contains("cannot be empty"));
 }
+
+#[tokio::test]
+async fn an_agent_of_another_workspace_cannot_be_updated() {
+    let (store, agents, _channels, workspace) = setup().await;
+    let other = cowbot_core::identity::Workspace::new("Other Team");
+    store.create_workspace(&other).await.unwrap();
+    let victim = AgentProfile::new("Secret", "Spy", "exfiltrate", "hidden");
+    store.upsert_agent(&other.id, &victim).await.unwrap();
+
+    let error = agents
+        .update_agent(
+            &workspace,
+            &AgentUpdate {
+                id: victim.id.clone(),
+                name: "Captured".to_string(),
+                role: "Spy".to_string(),
+                tools: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("was not found"));
+
+    let stored = store.get_agent(&victim.id).await.unwrap().unwrap();
+    assert_eq!(stored.name, "Secret");
+    assert!(store
+        .agent_in_workspace(&victim.id, &other.id)
+        .await
+        .unwrap());
+}

@@ -108,6 +108,15 @@ pub fn inspect(bytes: &[u8]) -> Result<Manifest, PackageError> {
 
 /// Import a workspace package. The archive is fully verified before any
 /// write happens, so a bad package leaves no partial state.
+///
+/// A package keeps the ids it was exported with, so a package whose channel,
+/// agent, or task id already exists in the target database is refused before
+/// anything is written. Substituting new ids would break every participant,
+/// context entry, task assignee, and memory row that names them; accepting the
+/// collision would either take over another workspace's row or, since
+/// `upsert_agent` refuses a foreign id, silently import a workspace that
+/// refers to agents it does not own. Import into a fresh database, or into one
+/// that has never seen the source workspace.
 pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSummary, PackageError> {
     let (manifest, entries) = read_verified_entries(bytes)?;
     if manifest.kind != PackageKind::Workspace {
@@ -142,6 +151,37 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         optional_jsonl(&entries, MEMORY_ENTRIES_PATH)?.unwrap_or_default();
     let memory_settings: Option<PackagedMemorySettings> =
         optional_jsonl(&entries, MEMORY_SETTINGS_PATH)?.and_then(|rows| rows.into_iter().next());
+
+    // Ids travel with the package, and everything that points at them travels
+    // too, so a collision has no safe resolution after the fact. Refuse it
+    // while the database is still untouched. Channels and tasks are checked
+    // because their inserts would otherwise fail partway through an import
+    // that has already created a workspace; agents are checked because an
+    // upsert that refused the row would leave participants and memory naming
+    // an agent the imported workspace does not own.
+    let mut collisions = Vec::new();
+    for channel in &channels {
+        if store.get_channel(&channel.id).await?.is_some() {
+            collisions.push(format!("channel '{}'", channel.id.0));
+        }
+    }
+    for agent in &agents {
+        if store.get_agent(&agent.id).await?.is_some() {
+            collisions.push(format!("agent '{}'", agent.id.0));
+        }
+    }
+    for task in &tasks {
+        if store.get_task(&task.id).await?.is_some() {
+            collisions.push(format!("task '{}'", task.id.0));
+        }
+    }
+    if !collisions.is_empty() {
+        return Err(PackageError::Invalid(format!(
+            "the package reuses ids that already exist in this database ({}); \
+             import it into a database that has not seen this workspace",
+            collisions.join(", ")
+        )));
+    }
 
     // Give the import a fresh identity so it never collides with local rows.
     let workspace_id = WorkspaceId::random();
@@ -178,7 +218,14 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
         .await?;
 
     for agent in &agents {
-        store.upsert_agent(&workspace_id, agent).await?;
+        // The collision check above guarantees the slot is free, so a refused
+        // write here would mean the check and the store disagree.
+        if !store.upsert_agent(&workspace_id, agent).await? {
+            return Err(PackageError::Invalid(format!(
+                "agent '{}' could not be written",
+                agent.id.0
+            )));
+        }
     }
     for document in &templates {
         store
