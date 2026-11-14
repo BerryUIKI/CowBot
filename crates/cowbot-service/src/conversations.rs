@@ -433,7 +433,7 @@ impl ConversationService {
     ) -> CowResult<ChannelTurnReport> {
         let channel = self.conversation_channel(channel_id).await?;
         let settings = self.settings(channel_id).await?;
-        let participants = self.store.list_channel_participants(&channel.id).await?;
+        let participants = self.load_participants(&channel).await?;
         match participants.len() {
             0 => {
                 self.channels
@@ -456,11 +456,11 @@ impl ConversationService {
                 Ok(report)
             }
             1 => {
-                self.reply_single(&channel, &settings, message, llm, tools, options)
+                self.reply_single(&channel, &settings, &participants, message, llm, tools, options)
                     .await
             }
             _ => {
-                self.reply_group(&channel, &settings, message, llm, tools, options)
+                self.reply_group(&channel, &settings, &participants, message, llm, tools, options)
                     .await
             }
         }
@@ -470,12 +470,13 @@ impl ConversationService {
         &self,
         channel: &Channel,
         settings: &ConversationSettings,
+        participants: &[AgentProfile],
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
-        let Some(agent) = self.participant_or_none(channel).await? else {
+        let Some(agent) = participants.first() else {
             self.channels
                 .post_system_notice(
                     &channel.id,
@@ -594,7 +595,7 @@ impl ConversationService {
         }
 
         Ok(ChannelTurnReport {
-            agents: vec![agent.id],
+            agents: vec![agent.id.clone()],
             unknown_mentions: Vec::new(),
             tasks: vec![task_id],
             ..ChannelTurnReport::default()
@@ -609,12 +610,12 @@ impl ConversationService {
         &self,
         channel: &Channel,
         settings: &ConversationSettings,
+        participants: &[AgentProfile],
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
-        let participants = self.load_participants(channel).await?;
         let counter = token_counter_for_model(&settings.model);
         if participants.is_empty() {
             self.channels
@@ -637,7 +638,7 @@ impl ConversationService {
 
         // Every participant stays current for later turns, including the ones
         // that do not answer this message.
-        for participant in &participants {
+        for participant in participants {
             let mut entry = ContextEntry::new(
                 channel.id.clone(),
                 participant.id.clone(),
@@ -1015,7 +1016,7 @@ impl ConversationService {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let consumer = tokio::spawn(self.clone().consume_group_settlements(
             channel.clone(),
-            participants.clone(),
+            participants.to_vec(),
             receiver,
         ));
         let outcome = scheduler.run_until_idle_observed(sender).await;
@@ -1776,14 +1777,6 @@ impl ConversationService {
             )));
         }
         Ok(channel)
-    }
-
-    async fn participant_or_none(&self, channel: &Channel) -> CowResult<Option<AgentProfile>> {
-        let participants = self.store.list_channel_participants(&channel.id).await?;
-        let Some(participant) = participants.first() else {
-            return Ok(None);
-        };
-        self.store.get_agent(&participant.agent_id).await
     }
 
     async fn single_participant(&self, channel: &Channel) -> CowResult<AgentProfile> {
