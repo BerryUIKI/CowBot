@@ -231,11 +231,6 @@ impl AuthService {
                 "the current password is not correct".into(),
             ));
         }
-        if new_password.chars().count() < MIN_PASSWORD_CHARS {
-            return Err(CowError::Config(format!(
-                "the new password must be at least {MIN_PASSWORD_CHARS} characters"
-            )));
-        }
         let hash = hash_password(new_password)?;
         self.store.update_password(&user.id, &hash).await?;
         // The caller re-issues a session; every older token dies here.
