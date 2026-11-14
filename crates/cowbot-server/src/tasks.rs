@@ -533,7 +533,8 @@ pub async fn update_agent(
     }
     let agent_id = cowbot_core::agent::AgentId::new(body.id);
     // An agent id from the body must belong to the workspace in the path, or an
-    // admin of one workspace could rewrite another workspace's agent by id.
+    // admin of one workspace could rewrite another workspace's agent by id:
+    // `upsert_agent` moves an existing row to the caller's workspace on conflict.
     if !state
         .store
         .agent_in_workspace(&agent_id, &workspace_id)
@@ -544,16 +545,6 @@ pub async fn update_agent(
     let Some(existing) = state.store.get_agent(&agent_id).await? else {
         return Err(ApiError::not_found("the agent was not found"));
     };
-    // The id comes from the body, so the agent's own row must prove it belongs
-    // to this workspace before its profile is rewritten: `upsert_agent` moves
-    // the row to the caller's workspace on conflict.
-    if !state
-        .store
-        .agent_in_workspace(&agent_id, &workspace_id)
-        .await?
-    {
-        return Err(ApiError::not_found("the agent was not found"));
-    }
     // `AgentUpdate` replaces the whole profile, so a field the caller omits
     // keeps its current value rather than being cleared.
     let agent = state
