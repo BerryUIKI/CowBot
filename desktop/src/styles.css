@@ -1942,8 +1942,8 @@ button {
 
 .chat-bubble-user {
   border-bottom-right-radius: 5px;
-  background: var(--paper);
-  color: var(--ink);
+  background: var(--brass);
+  color: #24221d;
 }
 
 .chat-bubble-agent {
@@ -5619,13 +5619,14 @@ button {
   height: 38px;
   border: 0;
   border-radius: 50%;
-  background: var(--ink-hover);
-  color: var(--paper);
+  background: var(--brass);
+  color: #24221d;
   transition: background 140ms ease;
 }
 
 .composer-stop:hover {
   background: var(--danger, #b3553d);
+  color: #fff;
 }
 
 .composer-stop svg {

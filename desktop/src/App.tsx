@@ -3874,23 +3874,25 @@ export default function App() {
                       {taskStream.tools.some((tool) => tool.running) ? " · tool running" : ""}
                     </span>
                   ) : null}
-                  <button
-                    type="submit"
-                    className="composer-send"
-                    disabled={!draft.trim() || sending || conversationFull}
-                    aria-label="Send message"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      aria-hidden="true"
+                  {taskStream || channelIsStreaming ? null : (
+                    <button
+                      type="submit"
+                      className="composer-send"
+                      disabled={!draft.trim() || sending || conversationFull}
+                      aria-label="Send message"
                     >
-                      <path d="M12 19V5" />
-                      <path d="m6 11 6-6 6 6" />
-                    </svg>
-                  </button>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 19V5" />
+                        <path d="m6 11 6-6 6 6" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
                 <div className="composer-footer">
                   <span className="composer-footer-spacer" />
