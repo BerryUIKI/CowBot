@@ -421,6 +421,7 @@ export default function App() {
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);  const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1053,6 +1054,22 @@ export default function App() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, pendingReply]);
+
+  // Streaming text, approval cards, and late-loading images all grow the
+  // thread without changing `messages`, so follow the content height itself.
+  // A reader who scrolled up keeps their place until they return to the end.
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    const follow = () => {
+      const distance =
+        thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+      if (distance < 120) endRef.current?.scrollIntoView({ block: "end" });
+    };
+    const observer = new ResizeObserver(follow);
+    for (const child of Array.from(thread.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [selectedId, messages.length]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -3461,6 +3478,7 @@ export default function App() {
 
               <section
                 className="chat-thread"
+                ref={threadRef}
                 aria-label={`Messages in ${selectedChannel.name}`}
                 key={selectedChannel.id}
               >
@@ -3835,13 +3853,23 @@ export default function App() {
                     disabled={conversationFull}
                     rows={1}
                   />
-                  {taskStream ? (
+                  {taskStream || channelIsStreaming ? (
                     <button
                       type="button"
                       className="composer-stop"
-                      title={`Stop ${taskStream.name}'s task run`}
-                      aria-label={`Stop ${taskStream.name}'s task run`}
-                      onClick={() => void stopTurn(taskStream.id)}
+                      title={
+                        taskStream
+                          ? `Stop ${taskStream.name}'s task run`
+                          : "Stop the running reply"
+                      }
+                      aria-label={
+                        taskStream
+                          ? `Stop ${taskStream.name}'s task run`
+                          : "Stop the running reply"
+                      }
+                      onClick={() =>
+                        void (taskStream ? stopTurn(taskStream.id) : stopCurrentTurn())
+                      }
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -3851,30 +3879,7 @@ export default function App() {
                         <rect x="7" y="7" width="10" height="10" rx="2" />
                       </svg>
                     </button>
-                  ) : channelIsStreaming ? (
-                    <button
-                      type="button"
-                      className="composer-stop"
-                      title="Stop the running reply"
-                      aria-label="Stop the running reply"
-                      onClick={() => void stopCurrentTurn()}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <rect x="7" y="7" width="10" height="10" rx="2" />
-                      </svg>
-                    </button>
-                  ) : null}
-                  {taskStream ? (
-                    <span className="composer-task-run">
-                      {taskStream.name} is working on a task
-                      {taskStream.tools.some((tool) => tool.running) ? " · tool running" : ""}
-                    </span>
-                  ) : null}
-                  {taskStream || channelIsStreaming ? null : (
+                  ) : (
                     <button
                       type="submit"
                       className="composer-send"
@@ -3895,6 +3900,14 @@ export default function App() {
                   )}
                 </div>
                 <div className="composer-footer">
+                  {taskStream ? (
+                    <span className="composer-task-run">
+                      {taskStream.name} is working on a task
+                      {taskStream.tools.some((tool) => tool.running)
+                        ? " · tool running"
+                        : ""}
+                    </span>
+                  ) : null}
                   <span className="composer-footer-spacer" />
                   {agents.length > 0 ? (
                     <ApprovalModeMenu

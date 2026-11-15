@@ -2267,7 +2267,8 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 0 6px 2px;
+  min-height: 26px;
+  padding: 0 10px 3px 12px;
 }
 
 .composer-footer-spacer {
@@ -2276,12 +2277,12 @@ button {
 
 .composer-model {
   max-width: 220px;
-  padding: 3px 8px;
-  border: 0;
+  padding: 4px 9px;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
   color: var(--paper-faint);
-  font-size: 11px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
