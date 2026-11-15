@@ -28,6 +28,7 @@ import type {
   MemoryNotes,
   MemorySave,
   MemorySettings,
+  RecalledMemory,
   MemorySettingsUpdate,
   ModelMetadata,
   ModelSettings,
@@ -307,6 +308,18 @@ export function postMessage(
 
 export function onCowbotEvent(handler: (event: CowEvent) => void): Promise<UnlistenFn> {
   return listen<CowEvent>("cowbot-event", (event) => handler(event.payload));
+}
+
+export function previewMemoryRecall(
+  agentId: string,
+  query: string,
+  channelId: string | null,
+): Promise<RecalledMemory | null> {
+  return invoke<RecalledMemory | null>("preview_memory_recall", {
+    agentId,
+    query,
+    channelId,
+  });
 }
 
 export function listAgents(): Promise<AgentProfile[]> {
