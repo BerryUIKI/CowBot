@@ -18,6 +18,9 @@
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
 
+  --sidebar-width: 296px;
+  --titlebar-height: 44px;
+
   font-family: var(--sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -70,10 +73,103 @@ button {
   background-clip: content-box;
 }
 
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  height: var(--titlebar-height);
+  flex: 0 0 auto;
+  background: linear-gradient(
+    90deg,
+    #2b2924 0%,
+    #2b2924 var(--sidebar-width),
+    #262521 var(--sidebar-width)
+  );
+  border-bottom: 1px solid var(--rule);
+  user-select: none;
+}
+
+.titlebar-leading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: var(--sidebar-width);
+  flex: 0 0 var(--sidebar-width);
+  padding: 0 14px;
+}
+
+.titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.titlebar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.titlebar-title {
+  overflow: hidden;
+  color: var(--paper-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  border: none;
+  background: transparent;
+  color: var(--paper-dim);
+  padding: 0;
+  border-radius: 0;
+}
+
+.titlebar-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.titlebar-button:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.titlebar-close:hover {
+  background: #c24b3a;
+  color: #fff;
+}
+
 .app {
   display: grid;
-  grid-template-columns: 296px minmax(0, 1fr);
-  height: 100%;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  flex: 1;
   min-height: 0;
 }
 
@@ -84,7 +180,7 @@ button {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: 18px 14px 14px;
+  padding: 12px 14px 14px;
   background: linear-gradient(180deg, #2b2924 0%, #262521 100%);
   border-right: 1px solid var(--rule);
 }
@@ -4175,6 +4271,19 @@ button {
     padding: 16px 20px;
     border-right: 0;
     border-bottom: 1px solid var(--rule);
+  }
+
+  .titlebar {
+    background: #2b2924;
+  }
+
+  .titlebar-leading {
+    width: auto;
+    flex: 1;
+  }
+
+  .titlebar-center {
+    display: none;
   }
 
   .wordmark {
