@@ -65,14 +65,6 @@ impl AppState {
         runtime.remote = remote;
     }
 
-    fn build_tools(
-        workspace_dir: &std::path::Path,
-        config_path: PathBuf,
-        client: Arc<dyn Client>,
-    ) -> ToolRegistry {
-        Self::rooted_tools(workspace_dir, config_path, client)
-    }
-
     /// Build a registry whose file, code, and working directory tools are
     /// rooted at `root`, plus the client-backed workspace tools.
     ///
@@ -205,7 +197,7 @@ pub fn run() {
                 }
             });
 
-            let tools = AppState::build_tools(&data_dir, config_path.clone(), client.clone());
+            let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
             app.manage(AppState {
                 local_client: Some(client.clone()),
                 client: client as Arc<dyn Client>,

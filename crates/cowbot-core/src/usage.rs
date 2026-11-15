@@ -326,9 +326,7 @@ fn is_cjk(character: char) -> bool {
 
 /// Estimate the tokens in a JSON value by serializing it deterministically.
 pub fn estimate_json_tokens(value: &serde_json::Value) -> u32 {
-    serde_json::to_string(value)
-        .map(|text| estimate_tokens(&text))
-        .unwrap_or(0)
+    estimate_tokens(&serde_json::to_string(value).expect("a JSON value always serializes"))
 }
 
 #[cfg(test)]

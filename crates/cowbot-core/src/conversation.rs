@@ -385,9 +385,9 @@ impl ContextEntry {
     pub fn recount(&mut self) {
         let mut tokens = estimate_tokens(&self.content);
         if let Some(tool_calls) = &self.tool_calls {
-            if let Ok(serialized) = serde_json::to_string(tool_calls) {
-                tokens = tokens.saturating_add(estimate_tokens(&serialized));
-            }
+            let serialized =
+                serde_json::to_string(tool_calls).expect("tool calls always serialize");
+            tokens = tokens.saturating_add(estimate_tokens(&serialized));
         }
         if let Some(tool_call_id) = &self.tool_call_id {
             tokens = tokens.saturating_add(estimate_tokens(tool_call_id));
@@ -469,9 +469,8 @@ impl ContextEvent {
 pub fn context_entry_tokens(counter: &dyn TokenCounter, entry: &ContextEntry) -> u32 {
     let mut tokens = counter.count_message(&entry.content);
     if let Some(tool_calls) = &entry.tool_calls {
-        if let Ok(serialized) = serde_json::to_string(tool_calls) {
-            tokens = tokens.saturating_add(counter.count(&serialized));
-        }
+        let serialized = serde_json::to_string(tool_calls).expect("tool calls always serialize");
+        tokens = tokens.saturating_add(counter.count(&serialized));
     }
     if let Some(tool_call_id) = &entry.tool_call_id {
         tokens = tokens.saturating_add(counter.count(tool_call_id));

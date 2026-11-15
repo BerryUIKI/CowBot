@@ -129,15 +129,11 @@ pub enum TurnOutcome {
 /// stop path. `turn` is the cancellation scope the agent loop and provider
 /// stream observe.
 pub trait TurnControl: Send + Sync {
-    /// Register a turn before anything is published for it.
-    fn open(&self, turn: TurnId, channel_id: Option<ChannelId>);
     /// Trip the turn's cancel signal, if it is still open. Idempotent: an
     /// unknown or finished turn is a no-op that reports `false`.
     fn cancel(&self, turn: &TurnId) -> bool;
-    /// The cancellation scope for a turn opened by [`Self::open`].
+    /// The cancellation scope for a registered turn.
     fn turn(&self, turn: &TurnId) -> CancelSignal;
-    /// Forget a turn once its terminal event has been published.
-    fn close(&self, turn: &TurnId);
     /// Whether the turn has been stopped.
     fn is_cancelled(&self, turn: &TurnId) -> bool;
 }

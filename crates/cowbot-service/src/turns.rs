@@ -19,8 +19,6 @@ use cowbot_core::channel::{ChannelId, Sender};
 use cowbot_core::conversation::{clean_group_reply, ContextEntry, ContextRole, TurnId};
 use cowbot_core::error::CowResult;
 use cowbot_core::event::{Event, EventPayload};
-use cowbot_core::run::RunId;
-use cowbot_core::task::TaskId;
 use cowbot_core::tool::{ToolCall, ToolResult};
 use cowbot_core::turn::{PendingApproval, TurnControl, TurnEvent, TurnOutcome, TurnTarget};
 use cowbot_store::Store;
@@ -386,26 +384,6 @@ impl TurnCompletion {
 }
 
 impl TurnControl for TurnRunner {
-    fn open(&self, turn: TurnId, channel_id: Option<ChannelId>) {
-        // A turn is normally opened by [`TurnRunner::start`]; this keeps the
-        // trait contract for callers that already own the id.
-        if let Ok(mut open) = self.open.lock() {
-            open.entry(turn).or_insert_with(|| OpenTurn {
-                spec: TurnSpec {
-                    target: TurnTarget::Task {
-                        task_id: TaskId::new(String::new()),
-                        agent_id: AgentId(String::new()),
-                        run_id: RunId::new(String::new()),
-                    },
-                    agent_ids: Vec::new(),
-                    sink: TurnSink::Caller,
-                },
-                cancel: CancelSignal::new(),
-                channel_id,
-            });
-        }
-    }
-
     fn cancel(&self, turn: &TurnId) -> bool {
         let signal = self
             .open
@@ -427,12 +405,6 @@ impl TurnControl for TurnRunner {
             .ok()
             .and_then(|open| open.get(turn).map(|entry| entry.cancel.clone()))
             .unwrap_or_default()
-    }
-
-    fn close(&self, turn: &TurnId) {
-        if let Ok(mut open) = self.open.lock() {
-            open.remove(turn);
-        }
     }
 
     fn is_cancelled(&self, turn: &TurnId) -> bool {

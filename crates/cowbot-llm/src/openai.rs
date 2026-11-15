@@ -164,7 +164,7 @@ fn request_body(request: &ChatCompletionRequest, stream: bool) -> Value {
         temperature: request.temperature,
         stream,
     })
-    .unwrap_or_else(|_| json!({}))
+    .expect("an OpenAI chat request always serializes")
 }
 
 /// One `tool_calls` entry of a streamed delta.

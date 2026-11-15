@@ -2005,8 +2005,8 @@ export default function App() {
           ...current,
           [id]:
             turn.type === "text_delta"
-              ? { ...existing, text: existing.text + (turn.text ?? "") }
-              : { ...existing, reasoning: existing.reasoning + (turn.text ?? "") },
+              ? { ...existing, text: existing.text + turn.text }
+              : { ...existing, reasoning: existing.reasoning + turn.text },
         };
       });
       return;

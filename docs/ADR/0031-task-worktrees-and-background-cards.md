@@ -8,7 +8,7 @@
 ## Context
 
 The desktop runtime gives every agent the same tool registry rooted at the
-app-data directory (`AppState::build_tools`). Agents can read, write, and run
+app-data directory (`AppState::rooted_tools`). Agents can read, write, and run
 code, but only in a scratch folder: a registered workspace database is not a
 code repository, and nothing tells an agent which repository a task belongs to.
 Users who want isolated code work must edit files outside CowBot.
@@ -92,7 +92,7 @@ turns.
 
 ### 5. Per-run tools are rooted at the worktree
 
-`AppState::build_tools` splits into client-backed workspace tools and a rooted
+`AppState::rooted_tools` splits into client-backed workspace tools and a rooted
 builder. A worktree run builds a registry from the worktree path
 (`SubprocessSandbox`, `ReadFileTool`, `WriteFileTool`) plus the client-backed
 workspace tools, and passes the worktree into crew construction so every crew
