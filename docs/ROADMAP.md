@@ -28,7 +28,7 @@ This roadmap sequences the work from the current foundation to a self-hosted, ch
 | **Phase 2** | Self-Hosted Team Mode | Multi-user server, shared workspaces, remote desktop client, Docker deployment |
 | **Phase 3** | Extensibility and Ecosystem | Docker sandbox, knowledge bases, integrations, plugins/MCP, marketplace, enterprise features |
 
-No calendar dates are committed; a phase ships when its exit criteria are met. Phase 0 and Phase 1 are complete; Phase 2 has not started.
+No calendar dates are committed; a phase ships when its exit criteria are met. Phase 0 and Phase 1 are complete. Phase 2 is in progress: milestones 2.1–2.5 are implemented, and the open items are tracked in the section below.
 
 ---
 
@@ -155,6 +155,14 @@ Delivered:
 > `docs/SERVER.md` is the configuration, backup, restore, upgrade, and token
 > reference (ADR-0046). PostgreSQL and horizontal scaling remain out of scope.
 | 2.5 | Migration and compatibility | `.cowpkg` import into the server; server-side schema migrations; version compatibility policy | 2.2, 2.4 |
+
+> **2.5 progress**: the workspace data surfaces are served: memory notes, entries,
+> settings and recall; conversation creation, settings, context meters, turns,
+> and clearing; the two read-only context previews; prompt snapshots with their
+> settings and purge; templates, now workspace-scoped by migration `0019`; and
+> `.cowpkg` import and export. `RemoteClient` serves every `Client` method except
+> the four that need the machine it runs on. Schema migrations run on open and a
+> backup is one file ([ADR-0047](ADR/0047-hosting-the-workspace-data-surfaces.md)).
 
 ### 5.2 Phase 2 Exit Criteria
 

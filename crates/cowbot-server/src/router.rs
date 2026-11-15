@@ -6,7 +6,7 @@ use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use cowbot_core::identity::WorkspaceId;
 use cowbot_store::Store;
@@ -14,9 +14,15 @@ use cowbot_store::Store;
 use crate::api;
 use crate::auth::{AuthService, AuthenticatedUser};
 use crate::channels;
+use crate::conversation_list;
+use crate::conversations;
 use crate::error::ApiError;
+use crate::memory;
+use crate::packages;
+use crate::snapshots;
 use crate::stream;
 use crate::tasks;
+use crate::templates;
 use crate::tokens;
 use crate::workspaces;
 
@@ -69,6 +75,38 @@ impl AppState {
     /// The agent service.
     pub fn agents(&self) -> cowbot_service::AgentService {
         cowbot_service::AgentService::new(self.store.clone(), self.bus.clone())
+    }
+
+    /// The conversation service for one workspace (milestone 2.5).
+    pub fn conversations(&self, workspace_id: &WorkspaceId) -> cowbot_service::ConversationService {
+        cowbot_service::ConversationService::new(
+            self.store.clone(),
+            self.bus.clone(),
+            workspace_id.clone(),
+        )
+    }
+
+    /// The read-only context preview service for one workspace.
+    pub fn previews(&self, workspace_id: &WorkspaceId) -> cowbot_service::PreviewService {
+        cowbot_service::PreviewService::new(self.store.clone(), workspace_id.clone())
+    }
+
+    /// The template service for one workspace (milestone 2.5).
+    pub fn templates(&self, workspace_id: &WorkspaceId) -> cowbot_service::TemplateService {
+        cowbot_service::TemplateService::new(self.store.clone(), workspace_id.clone())
+    }
+
+    /// The prompt-snapshot service for one workspace (milestone 2.5).
+    pub fn prompt_snapshots(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> cowbot_service::PromptSnapshotService {
+        cowbot_service::PromptSnapshotService::new(self.store.clone(), workspace_id.clone())
+    }
+
+    /// The memory service for one workspace (milestone 2.5).
+    pub fn memory(&self, workspace_id: &WorkspaceId) -> cowbot_service::MemoryService {
+        cowbot_service::MemoryService::new(self.store.clone(), workspace_id.clone())
     }
 }
 
@@ -198,6 +236,116 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/v1/workspaces/{workspace_id}/stream",
             get(stream::stream),
+        )
+        // Memory and notes (milestone 2.5)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/notes",
+            get(memory::get_notes).put(memory::save_workspace_note),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/notes/{channel_id}",
+            put(memory::save_conversation_note).delete(memory::delete_conversation_note),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/settings",
+            get(memory::get_memory_settings).patch(memory::update_memory_settings),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/entries",
+            get(memory::list_memory_entries).post(memory::add_memory_entry),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/entries/{entry_id}",
+            patch(memory::update_memory_entry).delete(memory::delete_memory_entry),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/entries/{entry_id}/{action}",
+            post(memory::set_memory_status),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/memory/recall",
+            get(memory::preview_memory_recall),
+        )
+        // Conversation creation and listing (milestone 2.5)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations",
+            get(conversation_list::list_summaries).post(conversation_list::create_conversation),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}/participants",
+            get(conversation_list::list_participants),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}/turns",
+            get(conversation_list::list_turns),
+        )
+        // Conversation settings, context, and previews (milestone 2.5)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}",
+            get(conversations::get_settings).patch(conversations::update_settings),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}/context",
+            get(conversations::get_context).delete(conversations::clear_context),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}/context/{agent_id}",
+            axum::routing::delete(conversations::clear_participant_context),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/conversations/{channel_id}/preview",
+            get(conversations::conversation_preview),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/preview",
+            get(conversations::task_run_preview),
+        )
+        // Prompt snapshots (milestone 2.5)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/snapshots",
+            get(snapshots::list_recent_snapshots),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/snapshots/settings",
+            get(snapshots::get_settings).patch(snapshots::update_settings),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/snapshots/purge",
+            post(snapshots::purge),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/snapshots/{llm_call_id}",
+            get(snapshots::get_snapshot),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/snapshots",
+            get(snapshots::list_run_snapshots),
+        )
+        // Templates (milestone 2.5)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/templates",
+            get(templates::list_templates).post(templates::save_template),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/templates/{template_id}",
+            get(templates::get_template).delete(templates::delete_template),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/templates/{template_id}/export",
+            get(templates::export_template),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/templates/{template_id}/instantiate",
+            post(templates::instantiate_template),
+        );
+
+    // Package transfer is workspace-level, not inside one workspace, so it
+    // sits beside the workspace routes rather than under a path id.
+    let authenticated = authenticated
+        .route("/api/v1/packages/import", post(packages::import_workspace))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/packages/export",
+            get(packages::export_workspace),
         );
 
     public

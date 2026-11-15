@@ -93,7 +93,7 @@ async fn a_conversation_turn_records_a_sealed_snapshot_with_slots() {
     assert_eq!(calls[0].call_kind, LlmCallKind::Agent);
 
     let detail = store
-        .get_prompt_snapshot_detail(&calls[0].id)
+        .get_prompt_snapshot_detail(&workspace_id, &calls[0].id)
         .await
         .unwrap()
         .expect("the call has a snapshot");
@@ -214,7 +214,7 @@ async fn a_task_run_records_a_snapshot_linked_to_its_run() {
     assert_eq!(summaries[0].agent_id, Some(agent.id.clone()));
 
     let detail = store
-        .get_prompt_snapshot_detail(&summaries[0].llm_call_id)
+        .get_prompt_snapshot_detail(&workspace_id, &summaries[0].llm_call_id)
         .await
         .unwrap()
         .unwrap();

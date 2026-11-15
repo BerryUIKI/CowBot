@@ -302,20 +302,34 @@ async fn agents_and_templates_roundtrip() {
         json!({ "role": "reviewer", "tools": ["read_file"] }),
     );
     template.description = "Code review agent".to_string();
-    store.upsert_template(&template).await.unwrap();
+    store
+        .upsert_template(&workspace.id, &template)
+        .await
+        .unwrap();
 
-    let loaded_template = store.get_template(&template.id).await.unwrap().unwrap();
+    let loaded_template = store
+        .get_template(&workspace.id, &template.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(loaded_template.kind, TemplateKind::Agent);
     assert_eq!(loaded_template.payload["role"], "reviewer");
 
     let templates = store
-        .list_templates(Some(TemplateKind::Agent))
+        .list_templates(&workspace.id, Some(TemplateKind::Agent))
         .await
         .unwrap();
     assert_eq!(templates.len(), 1);
 
-    store.delete_template(&template.id).await.unwrap();
-    assert!(store.get_template(&template.id).await.unwrap().is_none());
+    store
+        .delete_template(&workspace.id, &template.id)
+        .await
+        .unwrap();
+    assert!(store
+        .get_template(&workspace.id, &template.id)
+        .await
+        .unwrap()
+        .is_none());
 
     store.delete_agent(&agent.id).await.unwrap();
     assert!(store.get_agent(&agent.id).await.unwrap().is_none());

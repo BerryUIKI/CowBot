@@ -882,7 +882,7 @@ impl AssignmentScheduler {
                 conversation: messages,
                 plan_mode,
                 memory,
-                cancel: self.turns_turn(&turn_id),
+                cancel: self.turns.turn(&turn_id),
                 observer: Some(self.turns.observer(&turn_id)),
             })
             .await;
@@ -993,11 +993,6 @@ impl AssignmentScheduler {
                 Err(error)
             }
         }
-    }
-
-    /// Cancellation scope for a turn this scheduler opened.
-    fn turns_turn(&self, turn: &TurnId) -> cowbot_core::cancel::CancelSignal {
-        self.turns.turn(turn)
     }
 
     /// Publish a turn's terminal event after its reply is stored.

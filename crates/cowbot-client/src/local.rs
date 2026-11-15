@@ -109,7 +109,7 @@ impl LocalClient {
             ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
                 .with_session_decisions(Some(session_decisions.clone()))
                 .with_compaction_locks(compaction_locks);
-        let templates = TemplateService::new(store.clone());
+        let templates = TemplateService::new(store.clone(), context.workspace.id.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());

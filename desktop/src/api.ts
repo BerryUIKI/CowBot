@@ -18,7 +18,6 @@ import type {
   CompactionOutcome,
   ContextPreview,
   ConversationContext,
-  ConversationParticipant,
   ConversationSummary,
   ConversationTurn,
   CowEvent,
@@ -42,7 +41,6 @@ import type {
   PromptSnapshotSettings,
   PromptSnapshotSummary,
   ProviderProtocol,
-  RecalledMemory,
   RuleDecision,
   Run,
   SessionDecisionEntry,
@@ -104,12 +102,6 @@ export function listMessages(channelId: string, limit = 200): Promise<ChannelMes
   return invoke<ChannelMessage[]>("list_messages", { channelId, limit });
 }
 
-export function createConversation(
-  title: string | null,
-  agentId: string,
-): Promise<Channel> {
-  return invoke<Channel>("create_conversation", { title, agentId });
-}
 
 /** Create a group conversation with an ordered participant list. */
 export function createGroupConversation(
@@ -130,13 +122,6 @@ export function listConversationSummaries(): Promise<ConversationSummary[]> {
   return invoke<ConversationSummary[]>("list_conversation_summaries");
 }
 
-export function listConversationParticipants(
-  channelId: string,
-): Promise<ConversationParticipant[]> {
-  return invoke<ConversationParticipant[]>("list_conversation_participants", {
-    channelId,
-  });
-}
 
 export function listConversationTurns(
   channelId: string,
@@ -311,17 +296,6 @@ export function deleteMemoryEntry(entryId: string): Promise<number> {
   return invoke<number>("delete_memory_entry", { entryId });
 }
 
-export function previewMemoryRecall(
-  agentId: string,
-  query: string,
-  channelId?: string,
-): Promise<RecalledMemory | null> {
-  return invoke<RecalledMemory | null>("preview_memory_recall", {
-    channelId,
-    agentId,
-    query,
-  });
-}
 
 export function postMessage(
   channelId: string,

@@ -4,12 +4,15 @@ CowBot runs two ways from one codebase: a **local** desktop app (one person, one
 machine, SQLite in the app data folder) and a **self-hosted server** (a small
 team sharing a workspace over HTTPS). This page covers the server.
 
-> **Status.** The server is Phase 2 and under active development. It has
+> **Status.** The server is Phase 2 and under active development. It hosts
 > accounts, workspaces, roles, channels, messages, tasks, approvals, audit, API
-> tokens, and a live event stream. It does **not** yet host memory, prompt
-> snapshots, context previews, or templates, and the desktop cannot switch to a
-> server from its settings — a client speaks to it directly for now. Treat it as
-> a small-team deployment on a network you control, not a public service.
+> tokens, a live event stream, memory, conversations and their context,
+> previews, recorded prompts, templates, and package transfer. The desktop
+> cannot switch to a server from its settings yet — a client speaks to it
+> directly for now — and agent turns still run in the desktop's process with its
+> model provider, so the server stores and serves state rather than executing
+> work. Treat it as a small-team deployment on a network you control, not a
+> public service.
 
 ## What it needs
 
@@ -132,6 +135,33 @@ them narrows their tokens immediately. Revoke with
 `GET /api/v1/workspaces/{ws}/stream?token=…` upgrades to a WebSocket and sends
 each workspace event as JSON. A client that falls behind receives
 `{"type":"Resync"}` and should reload the affected view.
+
+## Workspace data: memory, conversations, templates, packages
+
+Milestone 2.5 serves the rest of the workspace. Every route resolves the
+workspace first, then the caller's role in it; a row from another workspace
+reads as `404`.
+
+| Area | Routes | Role |
+| --- | --- | --- |
+| Notes | `GET/PUT /workspaces/{ws}/memory/notes`, `PUT/DELETE .../notes/{channel}` | read: member; write: Member |
+| Memory entries | `GET/POST /workspaces/{ws}/memory/entries`, `PATCH/DELETE .../entries/{id}`, `POST .../entries/{id}/{approve,dismiss,archive}` | read: member; write: Member |
+| Memory settings | `GET/PATCH /workspaces/{ws}/memory/settings` | administer |
+| Recall preview | `GET /workspaces/{ws}/memory/recall` | member |
+| Conversations | `GET/POST /workspaces/{ws}/conversations`, `GET/PATCH .../{ch}`, `GET .../{ch}/context`, `DELETE .../{ch}/context[/{agent}]`, `GET .../{ch}/participants`, `GET .../{ch}/turns`, `GET .../{ch}/preview` | read: member; write: Member |
+| Previews | `GET /runs/{run}/preview?model=…&tools=…` | member |
+| Recorded prompts | `GET /workspaces/{ws}/snapshots`, `GET /snapshots/settings`, `PATCH /snapshots/settings`, `POST /snapshots/purge`, `GET /snapshots/{llm_call_id}`, `GET /runs/{run}/snapshots` | administer |
+| Templates | `GET/POST /workspaces/{ws}/templates`, `GET/DELETE .../{id}`, `GET .../{id}/export`, `POST .../{id}/instantiate` | read: member; write: administer |
+| Packages | `POST /packages/import` (body: the archive), `GET /workspaces/{ws}/packages/export` | import: any signed-in user; export: administer |
+
+Two details an operator should know:
+
+- **Templates are workspace-scoped** since migration `0019`. A template written
+  by an older build belongs to the first workspace in the database.
+- **Import creates a new workspace owned by the importing user.** The package
+  never carries credentials, so the exporting owner is not recreated as an
+  account. Import into a database that has not seen the source workspace: a
+  package whose ids collide is refused rather than merged.
 
 ## Troubleshooting
 

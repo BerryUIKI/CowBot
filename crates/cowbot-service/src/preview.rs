@@ -33,7 +33,7 @@ use crate::memory::MemoryService;
 use crate::scheduler::PLAN_MODE_INSTRUCTION;
 
 /// What one group or conversation participant would send next.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationPreview {
     pub channel_id: ChannelId,
     pub agent_id: AgentId,
@@ -42,7 +42,7 @@ pub struct ConversationPreview {
 }
 
 /// What a task run sent on its first iteration.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskRunPreview {
     pub run_id: RunId,
     pub task_id: TaskId,

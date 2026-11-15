@@ -40,7 +40,7 @@ export function filterCommands(
 }
 
 /// The first argument the command still needs, if any.
-export function requiredArgument(
+function requiredArgument(
   command: CommandInfo,
 ): CommandInfo["args"][number] | null {
   return command.args.find((arg) => arg.required) ?? null;

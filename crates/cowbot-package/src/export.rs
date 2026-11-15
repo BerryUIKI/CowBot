@@ -42,7 +42,7 @@ pub async fn export_workspace(
 
     let agents = store.list_agents(workspace_id).await?;
     let templates: Vec<TemplateDocument> = store
-        .list_templates(None)
+        .list_templates(workspace_id, None)
         .await?
         .into_iter()
         .filter_map(|stored| TemplateDocument::from_stored(&stored).ok())

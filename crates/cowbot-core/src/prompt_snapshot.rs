@@ -19,10 +19,7 @@ use crate::agent::AgentId;
 use crate::channel::ChannelId;
 use crate::conversation::ContextProjection;
 use crate::identity::WorkspaceId;
-use crate::memory::{
-    bearer_token_span, is_secret_token, is_sensitive_key, trim_quotes, word_spans,
-    TRUNCATION_MARKER,
-};
+use crate::memory::{bearer_token_span, is_secret_token, is_sensitive_key, TRUNCATION_MARKER};
 use crate::prompt::{PromptMemory, PromptRole, PromptSlot};
 use crate::run::RunId;
 use crate::task::TaskId;
@@ -437,30 +434,9 @@ fn redact_snapshot_text(text: &mut String) -> bool {
     let (stripped, pem) = redact_pem_blocks(text);
     *text = stripped;
     let mut changed = pem;
-    changed |= map_lines(text, redact_sensitive_pairs);
-    changed |= map_lines(text, redact_bearer_tokens);
-    changed |= map_lines(text, redact_secret_tokens);
-    changed
-}
-
-/// Apply one line-scoped redactor, preserving the original line endings.
-fn map_lines(text: &mut String, redact: fn(&str) -> (String, bool)) -> bool {
-    let mut changed = false;
-    let mut rebuilt = String::with_capacity(text.len());
-    for piece in text.split_inclusive('\n') {
-        let (body, ending) = match piece.strip_suffix("\r\n") {
-            Some(body) => (body, "\r\n"),
-            None => match piece.strip_suffix('\n') {
-                Some(body) => (body, "\n"),
-                None => (piece, ""),
-            },
-        };
-        let (line, line_changed) = redact(body);
-        changed |= line_changed;
-        rebuilt.push_str(&line);
-        rebuilt.push_str(ending);
-    }
-    *text = rebuilt;
+    changed |= crate::memory::redact_lines(text, redact_sensitive_pairs);
+    changed |= crate::memory::redact_lines(text, redact_bearer_tokens);
+    changed |= crate::memory::redact_lines(text, redact_secret_tokens);
     changed
 }
 
@@ -475,27 +451,15 @@ fn redact_bearer_tokens(line: &str) -> (String, bool) {
 }
 
 /// Replace words that carry a known credential prefix or shape.
+///
+/// A word an earlier pass already replaced is skipped, so the marker is not
+/// rescanned.
 fn redact_secret_tokens(line: &str) -> (String, bool) {
-    let mut rebuilt = String::with_capacity(line.len());
-    let mut cursor = 0;
-    let mut changed = false;
-    for (start, end) in word_spans(line) {
-        let word = &line[start..end];
-        let inner = trim_quotes(word);
-        if inner.is_empty() || inner == "[redacted]" || !is_secret_token(inner) {
-            continue;
-        }
-        let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
-        rebuilt.push_str(&line[cursor..inner_start]);
-        rebuilt.push_str("[redacted]");
-        cursor = inner_start + inner.len();
-        changed = true;
-    }
-    if !changed {
-        return (line.to_string(), false);
-    }
-    rebuilt.push_str(&line[cursor..]);
-    (rebuilt, true)
+    let mut value = line.to_string();
+    let changed = crate::memory::replace_token_spans(&mut value, |inner| {
+        !inner.is_empty() && inner != "[redacted]" && is_secret_token(inner)
+    });
+    (value, changed)
 }
 
 /// Replace every `key=value` or `key: value` whose key looks like a credential.

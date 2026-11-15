@@ -121,7 +121,9 @@ impl PromptSnapshotService {
 
     /// Read one stored snapshot with the call links and a hash-mismatch flag.
     pub async fn detail(&self, llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
-        self.store.get_prompt_snapshot_detail(llm_call_id).await
+        self.store
+            .get_prompt_snapshot_detail(&self.workspace_id, llm_call_id)
+            .await
     }
 
     /// Snapshots recorded for a run, oldest first.

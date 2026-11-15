@@ -13,10 +13,16 @@ pub mod api;
 pub mod auth;
 pub mod channels;
 pub mod config;
+pub mod conversation_list;
+pub mod conversations;
 pub mod error;
+pub mod memory;
+pub mod packages;
 pub mod router;
+pub mod snapshots;
 pub mod stream;
 pub mod tasks;
+pub mod templates;
 pub mod tokens;
 pub mod workspaces;
 

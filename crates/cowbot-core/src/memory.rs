@@ -424,10 +424,23 @@ pub struct RedactionOutcome {
 /// (`api_key = …`, `Authorization: …`), a bearer token, a known token prefix,
 /// or a JWT-shaped token is replaced. Ordinary prose is left alone.
 pub fn redact_secrets(content: &str) -> RedactionOutcome {
-    let mut output = String::with_capacity(content.len());
-    let mut redacted = false;
+    let mut content = content.to_string();
+    let redacted = redact_lines(&mut content, redact_line);
+    RedactionOutcome { content, redacted }
+}
 
-    for piece in content.split_inclusive('\n') {
+/// Apply one line-scoped redactor, preserving the original line endings.
+///
+/// Both redaction paths — memory text and prompt snapshots — walk the text the
+/// same way and differ only in what they replace on a line, so the walk lives
+/// here and each caller passes its own line rule. Keeping it in one place is
+/// the point: a new credential shape must not be added to one copy and missed
+/// by the other, because one copy redacts agent memory and the other redacts
+/// audit evidence (ADR-0033, ADR-0037).
+pub(crate) fn redact_lines(text: &mut String, redact: fn(&str) -> (String, bool)) -> bool {
+    let mut changed = false;
+    let mut rebuilt = String::with_capacity(text.len());
+    for piece in text.split_inclusive('\n') {
         let (body, ending) = match piece.strip_suffix("\r\n") {
             Some(body) => (body, "\r\n"),
             None => match piece.strip_suffix('\n') {
@@ -435,16 +448,13 @@ pub fn redact_secrets(content: &str) -> RedactionOutcome {
                 None => (piece, ""),
             },
         };
-        let (line, changed) = redact_line(body);
-        redacted |= changed;
-        output.push_str(&line);
-        output.push_str(ending);
+        let (line, line_changed) = redact(body);
+        changed |= line_changed;
+        rebuilt.push_str(&line);
+        rebuilt.push_str(ending);
     }
-
-    RedactionOutcome {
-        content: output,
-        redacted,
-    }
+    *text = rebuilt;
+    changed
 }
 
 fn redact_line(line: &str) -> (String, bool) {
@@ -460,24 +470,40 @@ fn redact_line(line: &str) -> (String, bool) {
         changed = true;
     }
 
-    let mut rebuilt = String::with_capacity(value.len());
+    changed |= replace_token_spans(&mut value, |inner| {
+        !inner.is_empty() && is_secret_token(inner)
+    });
+    (value, changed)
+}
+
+/// Replace the words a predicate accepts with `[redacted]`, keeping the rest of
+/// the line as it was.
+///
+/// The word span and its surrounding quotes are resolved once here so the
+/// memory and snapshot paths cannot drift apart on which bytes count as part of
+/// a token.
+pub(crate) fn replace_token_spans(line: &mut String, accept: fn(&str) -> bool) -> bool {
+    let mut rebuilt = String::with_capacity(line.len());
     let mut cursor = 0;
-    for (start, end) in word_spans(&value) {
-        let word = &value[start..end];
+    let mut changed = false;
+    for (start, end) in word_spans(line) {
+        let word = &line[start..end];
         let inner = trim_quotes(word);
-        if !inner.is_empty() && is_secret_token(inner) {
-            let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
-            rebuilt.push_str(&value[cursor..inner_start]);
-            rebuilt.push_str("[redacted]");
-            cursor = inner_start + inner.len();
-            changed = true;
+        if !accept(inner) {
+            continue;
         }
+        let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
+        rebuilt.push_str(&line[cursor..inner_start]);
+        rebuilt.push_str("[redacted]");
+        cursor = inner_start + inner.len();
+        changed = true;
     }
-    if cursor == 0 {
-        return (value, changed);
+    if !changed {
+        return false;
     }
-    rebuilt.push_str(&value[cursor..]);
-    (rebuilt, changed)
+    rebuilt.push_str(&line[cursor..]);
+    *line = rebuilt;
+    true
 }
 
 /// Span of the value after a sensitive `key = value` or `key: value`.

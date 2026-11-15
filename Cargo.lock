@@ -526,6 +526,7 @@ dependencies = [
  "chrono",
  "cowbot-bus",
  "cowbot-core",
+ "cowbot-package",
  "cowbot-service",
  "cowbot-store",
  "http-body-util",
