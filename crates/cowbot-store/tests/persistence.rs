@@ -322,6 +322,38 @@ async fn agents_and_templates_roundtrip() {
 }
 
 #[tokio::test]
+async fn an_agent_id_cannot_move_a_row_between_workspaces() {
+    let store = test_store().await;
+    let (_user, mine) = seed_workspace(&store).await;
+    let other = Workspace::new("Someone Else");
+    store.create_workspace(&other).await.unwrap();
+
+    let mut agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    store.upsert_agent(&mine.id, &agent).await.unwrap();
+
+    // The same id, offered as if it belonged to the other workspace with a
+    // different profile, must not write anything anywhere.
+    agent.name = "Captured".to_string();
+    let written = store.upsert_agent(&other.id, &agent).await.unwrap();
+    assert!(!written, "a foreign agent id must not be written");
+
+    let stored = store.get_agent(&agent.id).await.unwrap().unwrap();
+    assert_eq!(stored.name, "Planner");
+    assert!(store.agent_in_workspace(&agent.id, &mine.id).await.unwrap());
+    assert!(!store
+        .agent_in_workspace(&agent.id, &other.id)
+        .await
+        .unwrap());
+
+    // Updating inside its own workspace still works and reports the write.
+    let mut renamed = stored;
+    renamed.name = "Chief".to_string();
+    assert!(store.upsert_agent(&mine.id, &renamed).await.unwrap());
+    let stored = store.get_agent(&agent.id).await.unwrap().unwrap();
+    assert_eq!(stored.name, "Chief");
+}
+
+#[tokio::test]
 async fn tasks_runs_approvals_and_audit_roundtrip() {
     let store = test_store().await;
     let (user, workspace) = seed_workspace(&store).await;

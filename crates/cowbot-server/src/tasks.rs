@@ -533,8 +533,9 @@ pub async fn update_agent(
     }
     let agent_id = cowbot_core::agent::AgentId::new(body.id);
     // An agent id from the body must belong to the workspace in the path, or an
-    // admin of one workspace could rewrite another workspace's agent by id:
-    // `upsert_agent` moves an existing row to the caller's workspace on conflict.
+    // admin of one workspace could rewrite another workspace's agent by id.
+    // This is also what makes the refusal a `404`: `AgentService::update_agent`
+    // enforces the same rule, but reports it as a bad request.
     if !state
         .store
         .agent_in_workspace(&agent_id, &workspace_id)

@@ -294,6 +294,66 @@ async fn non_zip_input_is_rejected() {
 }
 
 #[tokio::test]
+async fn a_second_import_of_the_same_package_is_refused_before_it_writes() {
+    // Package entity ids travel with the package, so a second import would
+    // either take over the first workspace's rows or leave the new workspace
+    // naming agents and channels it does not own. It must be refused while the
+    // database is still untouched.
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+
+    let target = test_store().await;
+    let first = import_workspace(&target, &bytes).await.unwrap();
+    let workspaces_before = target.list_workspaces().await.unwrap().len();
+    let agents_before = target.list_agents(&first.workspace_id).await.unwrap().len();
+    assert!(agents_before > 0);
+
+    let error = import_workspace(&target, &bytes).await.unwrap_err();
+    assert!(
+        error.to_string().contains("already exist"),
+        "unexpected error: {error}"
+    );
+
+    // Nothing was written: no second workspace, no orphaned rows, and the
+    // first import is intact.
+    assert_eq!(
+        target.list_workspaces().await.unwrap().len(),
+        workspaces_before
+    );
+    assert_eq!(
+        target.list_agents(&first.workspace_id).await.unwrap().len(),
+        agents_before
+    );
+}
+
+#[tokio::test]
+async fn importing_into_the_database_the_workspace_came_from_is_refused() {
+    // The CLI imports with `--db`, which may be the database the package was
+    // exported from. Ids collide there too, and the export source must survive
+    // unchanged.
+    let source = test_store().await;
+    let workspace = seed(&source).await;
+    let bytes = export_workspace(&source, &workspace.id).await.unwrap();
+    let agents_before = source.list_agents(&workspace.id).await.unwrap().len();
+    let workspaces_before = source.list_workspaces().await.unwrap().len();
+
+    let error = import_workspace(&source, &bytes).await.unwrap_err();
+    assert!(
+        error.to_string().contains("already exist"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        source.list_workspaces().await.unwrap().len(),
+        workspaces_before
+    );
+    assert_eq!(
+        source.list_agents(&workspace.id).await.unwrap().len(),
+        agents_before
+    );
+}
+
+#[tokio::test]
 async fn conversation_context_round_trips() {
     let source = test_store().await;
     let workspace = seed(&source).await;

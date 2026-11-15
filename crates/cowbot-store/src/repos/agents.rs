@@ -85,18 +85,24 @@ fn template_kind_from_str(value: &str) -> CowResult<TemplateKind> {
 }
 
 impl Store {
+    /// Insert an agent, or update it when its id already exists.
+    ///
+    /// An id that already belongs to a *different* workspace matches no row:
+    /// the profile is not written and the call returns `false`. The conflict
+    /// clause deliberately never assigns `workspace_id`, so an agent id can
+    /// never move a row across workspaces and a caller that accepts an id from
+    /// outside its workspace gets a no-op instead of a silent takeover.
     pub async fn upsert_agent(
         &self,
         workspace_id: &WorkspaceId,
         profile: &AgentProfile,
-    ) -> CowResult<()> {
-        sqlx::query(
+    ) -> CowResult<bool> {
+        let result = sqlx::query(
             "INSERT INTO agent_profiles
                 (id, workspace_id, name, role, goal, backstory, model, tools,
                  allow_delegation, max_iterations, verbose, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO UPDATE SET
-                workspace_id = excluded.workspace_id,
                 name = excluded.name,
                 role = excluded.role,
                 goal = excluded.goal,
@@ -105,7 +111,8 @@ impl Store {
                 tools = excluded.tools,
                 allow_delegation = excluded.allow_delegation,
                 max_iterations = excluded.max_iterations,
-                verbose = excluded.verbose",
+                verbose = excluded.verbose
+             WHERE agent_profiles.workspace_id = excluded.workspace_id",
         )
         .bind(&profile.id.0)
         .bind(&workspace_id.0)
@@ -122,7 +129,7 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Whether an agent belongs to the given workspace.

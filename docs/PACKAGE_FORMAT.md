@@ -139,6 +139,13 @@ file is rejected as an unexpected path, like any other path outside this layout.
 - The importing user is created as the owner of the new workspace, with an
   address of the form `<user id>@imported.local` and no password.
 - Existing local workspaces are never modified or merged.
+- A package keeps the ids it was exported with, so import refuses one whose
+  channel, agent, or task id already exists in the target database, before it
+  writes anything. Importing the same package twice, or importing into the
+  database the package was exported from, therefore fails with an error naming
+  the colliding ids rather than producing a workspace whose participants and
+  memory point at another workspace's rows. Import into a database that has not
+  seen the source workspace.
 
 ## Limits
 
