@@ -9,10 +9,10 @@ use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split_by, context_entry_tokens, context_usage_state, next_rotation, project_context,
-    CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
-    ContextEvent, ContextEventKind, ContextProjection, ContextRole, ConversationContext,
-    ConversationMode, ConversationParticipantContext, ConversationSettings,
+    compaction_sequences_are_valid, compaction_split_by, context_entry_tokens, context_usage_state,
+    next_rotation, project_context, CacheUsageSummary, CompactionOutcome, CompactionWrite,
+    ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextProjection, ContextRole,
+    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
     ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode, TurnId,
     CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS,
     MIN_GROUP_PARTICIPANTS,
@@ -1515,18 +1515,19 @@ impl ConversationService {
             .iter()
             .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
 
-        // The store's renumber uses negative sequences as a staging range.
-        // Reject a branch with non-positive rows before paying for a summary;
-        // the store still guards the write for a cross-process import or edit.
-        if entries.iter().any(|entry| entry.seq <= 0) {
+        // A paid summary is the first thing this method does, so refuse a
+        // branch the write could not stage before spending on one. The rule
+        // lives in `cowbot_core`; the store checks it again inside its
+        // transaction, which is a different job — a cross-process import or a
+        // hand-edited database can change the rows between here and the write.
+        if !compaction_sequences_are_valid(&entries) {
             return Ok(CompactionOutcome {
                 compacted: false,
                 summarized_entries: 0,
                 tokens_before,
                 tokens_after: tokens_before,
                 reason: Some(
-                    "This context branch has invalid sequence numbers; start a new \
-                     conversation or re-import the workspace."
+                    "This context branch has invalid sequence numbers; start a new                      conversation or re-import the workspace."
                         .to_string(),
                 ),
                 invalid_sequences: true,
@@ -1671,6 +1672,21 @@ impl ConversationService {
                     "The context was cleared while it was being summarized; nothing was written."
                         .to_string(),
                 ),
+                ..CompactionOutcome::default()
+            }),
+            // The pre-check saw a valid branch, so rows changed under it. The
+            // summary was already paid for; report the branch as unfixable
+            // rather than retrying.
+            CompactionWrite::InvalidSequences => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "This context branch has invalid sequence numbers; start a new                      conversation or re-import the workspace."
+                        .to_string(),
+                ),
+                invalid_sequences: true,
                 ..CompactionOutcome::default()
             }),
         }

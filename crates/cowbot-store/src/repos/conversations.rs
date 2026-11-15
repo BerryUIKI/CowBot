@@ -715,9 +715,7 @@ impl Store {
         .map_err(db)?;
         if non_positive > 0 {
             transaction.rollback().await.map_err(db)?;
-            return Err(CowError::Config(
-                "cannot compact a branch with non-positive context sequence numbers".to_string(),
-            ));
+            return Ok(CompactionWrite::InvalidSequences);
         }
 
         // A clear can remove every row while the summary is being generated.
