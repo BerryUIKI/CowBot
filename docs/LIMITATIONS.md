@@ -38,14 +38,21 @@ tracked.
 
 ### Collaboration and hosting
 
-- **Teams only through the server, and the app does not switch modes yet.**
+- **The app does not switch to a server from its settings yet.**
   `cowbot-server` serves accounts, sessions, workspaces, roles, invitations,
-  channels, messages, tasks, approvals, audit, API tokens, and a live event
-  stream over HTTP and WebSocket (ADR-0043 through ADR-0045). `RemoteClient`
-  implements the editor-side half, but the desktop's settings do not yet offer
-  switching to a server, and memory, prompt snapshots, context previews, and
-  templates stay local. The local runtime still auto-creates one user and
-  remains the default way to use CowBot. See the [roadmap](ROADMAP.md).
+  channels, messages, tasks, approvals, audit, API tokens, a live event stream,
+  memory, conversations and their context, previews, recorded prompts,
+  workspace-scoped templates, and package import/export over HTTP and WebSocket
+  (ADR-0043 through ADR-0047). `RemoteClient` implements the same `Client` trait,
+  so every surface except worktrees, in-process crew execution, live-turn
+  cancellation, and process-local session decisions works against a server —
+  but the desktop's settings do not yet offer choosing one. The local runtime
+  still auto-creates one user and remains the default way to use CowBot. See the
+  [roadmap](ROADMAP.md).
+- **Only one machine runs agent turns.** A remote client can read a conversation
+  and its context, but a turn still executes in the desktop's process with its
+  model provider, so a team member without that provider configured cannot make
+  an agent answer.
 - **No remote or multi-device access.** A workspace lives in one local database
   file on one machine; there is no way to reach it from another device.
 - **No REST or WebSocket surface.** `cowbot-client` is the only API, and it is a

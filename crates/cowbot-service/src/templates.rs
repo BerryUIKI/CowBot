@@ -32,17 +32,21 @@ pub fn builtin_templates() -> CowResult<Vec<TemplateDocument>> {
 #[derive(Clone)]
 pub struct TemplateService {
     store: Store,
+    workspace_id: WorkspaceId,
 }
 
 impl TemplateService {
-    pub fn new(store: Store) -> Self {
-        Self { store }
+    pub fn new(store: Store, workspace_id: WorkspaceId) -> Self {
+        Self {
+            store,
+            workspace_id,
+        }
     }
 
     /// List built-in templates followed by user templates, sorted by name.
     pub async fn list(&self) -> CowResult<Vec<TemplateDocument>> {
         let mut documents = builtin_templates()?;
-        for stored in self.store.list_templates(None).await? {
+        for stored in self.store.list_templates(&self.workspace_id, None).await? {
             let document = TemplateDocument::from_stored(&stored)?;
             if !documents.iter().any(|existing| existing.id == document.id) {
                 documents.push(document);
@@ -65,7 +69,7 @@ impl TemplateService {
             return Ok(Some(document));
         }
         self.store
-            .get_template(id)
+            .get_template(&self.workspace_id, id)
             .await?
             .as_ref()
             .map(TemplateDocument::from_stored)
@@ -85,7 +89,10 @@ impl TemplateService {
             )));
         }
         let stored = document.to_stored()?;
-        self.store.upsert_template(&stored).await
+        self.store
+            .upsert_template(&self.workspace_id, &stored)
+            .await?;
+        Ok(())
     }
 
     /// Delete a user template. Built-in templates cannot be deleted.
@@ -98,7 +105,7 @@ impl TemplateService {
                 "cannot delete built-in template '{id}'"
             )));
         }
-        self.store.delete_template(id).await
+        self.store.delete_template(&self.workspace_id, id).await
     }
 
     /// Parse, validate, and persist a `.cowtemplate` JSON document.

@@ -68,7 +68,7 @@ async fn a_snapshot_round_trips_and_joins_its_call() {
         .unwrap();
 
     let loaded = store
-        .get_prompt_snapshot(&call.id)
+        .get_prompt_snapshot(&workspace.id, &call.id)
         .await
         .unwrap()
         .expect("the snapshot is stored");
@@ -174,7 +174,11 @@ async fn recording_a_call_twice_replaces_its_snapshot() {
         .await
         .unwrap();
 
-    let loaded = store.get_prompt_snapshot(&call.id).await.unwrap().unwrap();
+    let loaded = store
+        .get_prompt_snapshot(&workspace.id, &call.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(loaded.messages[1].content.contains("second"));
     assert_eq!(
         store
@@ -222,9 +226,13 @@ async fn retention_removes_old_snapshots_and_keeps_usage_rows() {
         .await
         .unwrap();
     assert_eq!(deleted, 1);
-    assert!(store.get_prompt_snapshot(&old.id).await.unwrap().is_none());
     assert!(store
-        .get_prompt_snapshot(&recent.id)
+        .get_prompt_snapshot(&workspace.id, &old.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .get_prompt_snapshot(&workspace.id, &recent.id)
         .await
         .unwrap()
         .is_some());
@@ -260,7 +268,11 @@ async fn deleting_a_run_cascades_to_its_snapshots() {
         .await
         .unwrap();
 
-    assert!(store.get_prompt_snapshot(&call.id).await.unwrap().is_none());
+    assert!(store
+        .get_prompt_snapshot(&workspace.id, &call.id)
+        .await
+        .unwrap()
+        .is_none());
     assert!(store
         .list_recent_prompt_snapshots(&workspace.id, 10)
         .await
@@ -278,7 +290,7 @@ async fn unknown_calls_have_no_snapshot() {
     let store = test_store().await;
     let workspace = seed_workspace(&store).await;
     assert!(store
-        .get_prompt_snapshot("missing-call")
+        .get_prompt_snapshot(&workspace.id, "missing-call")
         .await
         .unwrap()
         .is_none());
@@ -307,7 +319,7 @@ async fn a_detail_read_carries_the_call_links_and_an_intact_hash() {
         .unwrap();
 
     let detail = store
-        .get_prompt_snapshot_detail(&call.id)
+        .get_prompt_snapshot_detail(&workspace.id, &call.id)
         .await
         .unwrap()
         .expect("the detail is stored");
@@ -363,12 +375,12 @@ async fn deleting_a_channel_removes_only_its_snapshots() {
         .unwrap();
     assert_eq!(removed, 1);
     assert!(store
-        .get_prompt_snapshot(&first_call.id)
+        .get_prompt_snapshot(&workspace.id, &first_call.id)
         .await
         .unwrap()
         .is_none());
     assert!(store
-        .get_prompt_snapshot(&second_call.id)
+        .get_prompt_snapshot(&workspace.id, &second_call.id)
         .await
         .unwrap()
         .is_some());

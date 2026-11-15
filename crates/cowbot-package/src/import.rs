@@ -229,11 +229,14 @@ pub async fn import_workspace(store: &Store, bytes: &[u8]) -> Result<ImportSumma
     }
     for document in &templates {
         store
-            .upsert_template(&cowbot_core::template::Template::new(
-                document.kind,
-                document.name.clone(),
-                serde_json::to_value(document)?,
-            ))
+            .upsert_template(
+                &workspace_id,
+                &cowbot_core::template::Template::new(
+                    document.kind,
+                    document.name.clone(),
+                    serde_json::to_value(document)?,
+                ),
+            )
             .await?;
     }
 

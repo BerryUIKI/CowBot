@@ -160,7 +160,7 @@ pub struct ConversationSummary {
 }
 
 /// The workspace note and, when one conversation is selected, its note.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct MemoryNotes {
     pub workspace: Option<Note>,
     pub conversation: Option<Note>,

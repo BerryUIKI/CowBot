@@ -639,7 +639,7 @@ async fn prompt_snapshots_are_excluded_from_workspace_packages() {
         .await
         .unwrap();
     assert!(source
-        .get_prompt_snapshot(&call.id)
+        .get_prompt_snapshot(&workspace.id, &call.id)
         .await
         .unwrap()
         .is_some());

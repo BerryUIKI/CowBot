@@ -200,13 +200,25 @@ impl RemoteClient {
     }
 
     async fn send_empty(&self, method: Method, path: String) -> CowResult<()> {
-        let response = self
+        self.send_empty_with(method, path, None).await
+    }
+
+    /// Send a body and discard the response, for writes the caller does not
+    /// need the server's echo of.
+    async fn send_empty_with(
+        &self,
+        method: Method,
+        path: String,
+        body: Option<Value>,
+    ) -> CowResult<()> {
+        let mut request = self
             .http
             .request(method, self.url(&path))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(transport)?;
+            .bearer_auth(&self.token);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().await.map_err(transport)?;
         let status = response.status();
         if status.is_success() {
             return Ok(());
@@ -458,188 +470,337 @@ impl Client for RemoteClient {
         .await
     }
 
-    async fn create_conversation(&self, _conversation: &NewConversation) -> CowResult<Channel> {
-        Err(local_only("creating a conversation"))
+    async fn create_conversation(&self, conversation: &NewConversation) -> CowResult<Channel> {
+        let path = self.workspace_path("/conversations");
+        self.request(
+            Method::POST,
+            path,
+            Some(json!({
+                "title": conversation.title,
+                "agent_ids": conversation
+                    .agent_ids
+                    .iter()
+                    .map(|id| id.0.clone())
+                    .collect::<Vec<_>>(),
+                "provider_id": conversation.provider_id,
+                "model": conversation.model,
+                "router_enabled": conversation.router_enabled,
+                "default_responder": conversation
+                    .default_responder
+                    .as_ref()
+                    .map(|id| id.0.clone()),
+            })),
+        )
+        .await
     }
 
     async fn list_conversation_summaries(&self) -> CowResult<Vec<crate::ConversationSummary>> {
-        Err(local_only("conversation summaries"))
+        let path = self.workspace_path("/conversations");
+        let bodies: Vec<ServerConversationSummary> = self.request(Method::GET, path, None).await?;
+        Ok(bodies
+            .into_iter()
+            .map(ServerConversationSummary::into_summary)
+            .collect())
     }
 
     async fn list_conversation_participants(
         &self,
-        _channel_id: &ChannelId,
+        channel_id: &ChannelId,
     ) -> CowResult<Vec<ChannelParticipant>> {
-        Err(local_only("listing conversation participants"))
+        let path = self.workspace_path(&format!("/conversations/{}/participants", channel_id.0));
+        self.request(Method::GET, path, None).await
     }
 
     async fn list_conversation_turns(
         &self,
-        _channel_id: &ChannelId,
-        _limit: u32,
+        channel_id: &ChannelId,
+        limit: u32,
     ) -> CowResult<Vec<ConversationTurn>> {
-        Err(local_only("listing conversation turns"))
+        let path = self.workspace_path(&format!(
+            "/conversations/{}/turns?limit={limit}",
+            channel_id.0
+        ));
+        self.request(Method::GET, path, None).await
     }
 
     async fn conversation_settings(
         &self,
-        _channel_id: &ChannelId,
+        channel_id: &ChannelId,
     ) -> CowResult<ConversationSettings> {
-        Err(local_only("reading conversation settings"))
+        let path = self.workspace_path(&format!("/conversations/{}", channel_id.0));
+        self.request(Method::GET, path, None).await
     }
 
     async fn update_conversation_settings(
         &self,
-        _channel_id: &ChannelId,
-        _update: &ConversationSettingsUpdate,
+        channel_id: &ChannelId,
+        update: &ConversationSettingsUpdate,
     ) -> CowResult<ConversationSettings> {
-        Err(local_only("changing conversation settings"))
+        let path = self.workspace_path(&format!("/conversations/{}", channel_id.0));
+        self.request(
+            Method::PATCH,
+            path,
+            Some(json!({
+                "auto_compact": update.auto_compact,
+                "compact_threshold": update.compact_threshold,
+                "router_enabled": update.router_enabled,
+                "routing_mode": update.routing_mode,
+                "muted_participants": update
+                    .muted_participants
+                    .as_ref()
+                    .map(|ids| ids.iter().map(|id| id.0.clone()).collect::<Vec<_>>()),
+                "reply_cleanup": update.reply_cleanup,
+                "default_responder": update
+                    .default_responder
+                    .as_ref()
+                    .map(|id| id.0.clone()),
+            })),
+        )
+        .await
     }
 
-    async fn conversation_context(
-        &self,
-        _channel_id: &ChannelId,
-    ) -> CowResult<ConversationContext> {
-        Err(local_only("the conversation context meter"))
+    async fn conversation_context(&self, channel_id: &ChannelId) -> CowResult<ConversationContext> {
+        let path = self.workspace_path(&format!("/conversations/{}/context", channel_id.0));
+        self.request(Method::GET, path, None).await
     }
 
     async fn conversation_context_preview(
         &self,
-        _channel_id: &ChannelId,
-        _agent_id: &AgentId,
-        _draft: Option<&str>,
-        _platform_context: Option<&str>,
-        _plan_mode: bool,
-        _tools: &[ToolDefinition],
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
+        draft: Option<&str>,
+        platform_context: Option<&str>,
+        plan_mode: bool,
+        tools: &[ToolDefinition],
     ) -> CowResult<ConversationPreview> {
-        Err(local_only("the context inspector"))
+        let mut path = self.workspace_path(&format!("/conversations/{}/preview", channel_id.0));
+        path.push_str(&format!(
+            "?agent_id={}&plan_mode={plan_mode}&tools={}",
+            agent_id.0,
+            urlencode(&serde_json::to_string(tools)?)
+        ));
+        if let Some(draft) = draft {
+            path.push_str(&format!("&draft={}", urlencode(draft)));
+        }
+        if let Some(context) = platform_context {
+            path.push_str(&format!("&platform_context={}", urlencode(context)));
+        }
+        self.request(Method::GET, path, None).await
     }
 
     async fn task_run_context_preview(
         &self,
-        _run_id: &RunId,
-        _model: &str,
-        _tools: &[ToolDefinition],
+        run_id: &RunId,
+        model: &str,
+        tools: &[ToolDefinition],
     ) -> CowResult<Option<TaskRunPreview>> {
-        Err(local_only("the context inspector"))
+        let path = format!(
+            "/api/v1/runs/{}/preview?model={}&tools={}",
+            run_id.0,
+            urlencode(model),
+            urlencode(&serde_json::to_string(tools)?)
+        );
+        self.request(Method::GET, path, None).await
     }
 
     async fn list_run_prompt_snapshots(
         &self,
-        _run_id: &RunId,
+        run_id: &RunId,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
-        Err(local_only("recorded prompts"))
+        self.request(
+            Method::GET,
+            format!("/api/v1/runs/{}/snapshots", run_id.0),
+            None,
+        )
+        .await
     }
 
     async fn list_recent_prompt_snapshots(
         &self,
-        _limit: u32,
+        limit: u32,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
-        Err(local_only("recorded prompts"))
+        let path = self.workspace_path(&format!("/snapshots?limit={limit}"));
+        self.request(Method::GET, path, None).await
     }
 
-    async fn prompt_snapshot(&self, _llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
-        Err(local_only("recorded prompts"))
+    async fn prompt_snapshot(&self, llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
+        let path = self.workspace_path(&format!("/snapshots/{llm_call_id}"));
+        self.request(Method::GET, path, None).await
     }
 
     async fn prompt_snapshot_settings(&self) -> CowResult<PromptSnapshotSettings> {
-        Err(local_only("prompt snapshot settings"))
+        let path = self.workspace_path("/snapshots/settings");
+        self.request(Method::GET, path, None).await
     }
 
     async fn update_prompt_snapshot_settings(
         &self,
-        _enabled: Option<bool>,
-        _retention_days: Option<u32>,
+        enabled: Option<bool>,
+        retention_days: Option<u32>,
     ) -> CowResult<PromptSnapshotSettings> {
-        Err(local_only("prompt snapshot settings"))
+        let path = self.workspace_path("/snapshots/settings");
+        self.request(
+            Method::PATCH,
+            path,
+            Some(json!({ "enabled": enabled, "retention_days": retention_days })),
+        )
+        .await
     }
 
     async fn purge_prompt_snapshots(&self) -> CowResult<u64> {
-        Err(local_only("purging prompt snapshots"))
+        let path = self.workspace_path("/snapshots/purge");
+        self.request(Method::POST, path, None).await
     }
 
-    async fn clear_conversation_context(&self, _channel_id: &ChannelId) -> CowResult<u64> {
-        Err(local_only("clearing conversation context"))
+    async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        let path = self.workspace_path(&format!("/conversations/{}/context", channel_id.0));
+        self.request(Method::DELETE, path, None).await
     }
 
     async fn clear_conversation_participant_context(
         &self,
-        _channel_id: &ChannelId,
-        _agent_id: &AgentId,
+        channel_id: &ChannelId,
+        agent_id: &AgentId,
     ) -> CowResult<u64> {
-        Err(local_only("clearing conversation context"))
+        let path = self.workspace_path(&format!(
+            "/conversations/{}/context/{}",
+            channel_id.0, agent_id.0
+        ));
+        self.request(Method::DELETE, path, None).await
     }
 
-    async fn memory_notes(&self, _channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes> {
-        Err(local_only("memory notes"))
+    async fn memory_notes(&self, channel_id: Option<&ChannelId>) -> CowResult<MemoryNotes> {
+        let mut path = self.workspace_path("/memory/notes");
+        if let Some(channel_id) = channel_id {
+            path.push_str(&format!("?channel_id={}", channel_id.0));
+        }
+        self.request(Method::GET, path, None).await
     }
 
-    async fn save_workspace_note(&self, _content: &str) -> CowResult<NoteSave> {
-        Err(local_only("memory notes"))
+    async fn save_workspace_note(&self, content: &str) -> CowResult<NoteSave> {
+        let path = self.workspace_path("/memory/notes");
+        self.request(Method::PUT, path, Some(json!({ "content": content })))
+            .await
     }
 
     async fn save_conversation_note(
         &self,
-        _channel_id: &ChannelId,
-        _content: &str,
+        channel_id: &ChannelId,
+        content: &str,
     ) -> CowResult<NoteSave> {
-        Err(local_only("memory notes"))
+        let path = self.workspace_path(&format!("/memory/notes/{}", channel_id.0));
+        self.request(Method::PUT, path, Some(json!({ "content": content })))
+            .await
     }
 
-    async fn delete_conversation_note(&self, _channel_id: &ChannelId) -> CowResult<u64> {
-        Err(local_only("memory notes"))
+    async fn delete_conversation_note(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        let path = self.workspace_path(&format!("/memory/notes/{}", channel_id.0));
+        self.request(Method::DELETE, path, None).await
     }
 
     async fn memory_settings(&self) -> CowResult<MemorySettings> {
-        Err(local_only("memory settings"))
+        let path = self.workspace_path("/memory/settings");
+        self.request(Method::GET, path, None).await
     }
 
     async fn update_memory_settings(
         &self,
-        _update: &MemorySettingsUpdate,
+        update: &MemorySettingsUpdate,
     ) -> CowResult<MemorySettings> {
-        Err(local_only("memory settings"))
+        let path = self.workspace_path("/memory/settings");
+        self.request(
+            Method::PATCH,
+            path,
+            Some(json!({
+                "extraction_enabled": update.extraction_enabled,
+                "recall_enabled": update.recall_enabled,
+                "notes_budget_tokens": update.notes_budget_tokens,
+                "recall_budget_tokens": update.recall_budget_tokens,
+            })),
+        )
+        .await
     }
 
-    async fn list_memory_entries(&self, _filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>> {
-        Err(local_only("memory entries"))
+    async fn list_memory_entries(&self, filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>> {
+        let mut path = self.workspace_path("/memory/entries");
+        let mut separator = '?';
+        if let Some(status) = filter.status {
+            path.push_str(&format!("{separator}status={}", status.as_str()));
+            separator = '&';
+        }
+        if let Some(agent_id) = &filter.agent_id {
+            path.push_str(&format!("{separator}agent_id={}", agent_id.0));
+            separator = '&';
+        }
+        if let Some(channel_id) = &filter.channel_id {
+            path.push_str(&format!("{separator}channel_id={}", channel_id.0));
+        }
+        self.request(Method::GET, path, None).await
     }
 
-    async fn add_memory_entry(&self, _new: NewMemory) -> CowResult<MemorySave> {
-        Err(local_only("memory entries"))
+    async fn add_memory_entry(&self, new: NewMemory) -> CowResult<MemorySave> {
+        let path = self.workspace_path("/memory/entries");
+        self.request(
+            Method::POST,
+            path,
+            Some(json!({
+                "content": new.content,
+                "kind": new.kind.as_str(),
+                "agent_id": new.agent_id.as_ref().map(|id| id.0.clone()),
+                "channel_id": new.channel_id.as_ref().map(|id| id.0.clone()),
+                "pinned": new.pinned,
+            })),
+        )
+        .await
     }
 
-    async fn update_memory_entry(
-        &self,
-        _id: &str,
-        _update: &MemoryUpdate,
-    ) -> CowResult<MemorySave> {
-        Err(local_only("memory entries"))
+    async fn update_memory_entry(&self, id: &str, update: &MemoryUpdate) -> CowResult<MemorySave> {
+        let path = self.workspace_path(&format!("/memory/entries/{id}"));
+        self.request(
+            Method::PATCH,
+            path,
+            Some(json!({
+                "content": update.content,
+                "kind": update.kind.map(|kind| kind.as_str()),
+                "pinned": update.pinned,
+            })),
+        )
+        .await
     }
 
-    async fn approve_memory_entry(&self, _id: &str) -> CowResult<MemoryEntry> {
-        Err(local_only("memory entries"))
+    async fn approve_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.set_memory_status(id, "approve").await
     }
 
-    async fn dismiss_memory_entry(&self, _id: &str) -> CowResult<MemoryEntry> {
-        Err(local_only("memory entries"))
+    async fn dismiss_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.set_memory_status(id, "dismiss").await
     }
 
-    async fn archive_memory_entry(&self, _id: &str) -> CowResult<MemoryEntry> {
-        Err(local_only("memory entries"))
+    async fn archive_memory_entry(&self, id: &str) -> CowResult<MemoryEntry> {
+        self.set_memory_status(id, "archive").await
     }
 
-    async fn delete_memory_entry(&self, _id: &str) -> CowResult<u64> {
-        Err(local_only("memory entries"))
+    async fn delete_memory_entry(&self, id: &str) -> CowResult<u64> {
+        let path = self.workspace_path(&format!("/memory/entries/{id}"));
+        self.request(Method::DELETE, path, None).await
     }
 
     async fn preview_memory_recall(
         &self,
-        _channel_id: Option<&ChannelId>,
-        _agent_id: &AgentId,
-        _query: &str,
+        channel_id: Option<&ChannelId>,
+        agent_id: &AgentId,
+        query: &str,
     ) -> CowResult<Option<RecalledMemory>> {
-        Err(local_only("memory recall"))
+        let mut path = self.workspace_path("/memory/recall");
+        path.push_str(&format!(
+            "?agent_id={}&query={}",
+            agent_id.0,
+            urlencode(query)
+        ));
+        if let Some(channel_id) = channel_id {
+            path.push_str(&format!("&channel_id={}", channel_id.0));
+        }
+        self.request(Method::GET, path, None).await
     }
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
@@ -854,31 +1015,47 @@ impl Client for RemoteClient {
     }
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>> {
-        Err(local_only("templates"))
+        let path = self.workspace_path("/templates");
+        self.request(Method::GET, path, None).await
     }
 
-    async fn get_template(&self, _id: &str) -> CowResult<Option<TemplateDocument>> {
-        Err(local_only("templates"))
+    async fn get_template(&self, id: &str) -> CowResult<Option<TemplateDocument>> {
+        let path = self.workspace_path(&format!("/templates/{id}"));
+        match self
+            .request::<Option<TemplateDocument>>(Method::GET, path, None)
+            .await
+        {
+            Ok(document) => Ok(document),
+            Err(CowError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
-    async fn save_template(&self, _document: &TemplateDocument) -> CowResult<()> {
-        Err(local_only("templates"))
+    async fn save_template(&self, document: &TemplateDocument) -> CowResult<()> {
+        let path = self.workspace_path("/templates");
+        self.send_empty_with(Method::POST, path, Some(json!({ "document": document })))
+            .await
     }
 
-    async fn delete_template(&self, _id: &str) -> CowResult<()> {
-        Err(local_only("templates"))
+    async fn delete_template(&self, id: &str) -> CowResult<()> {
+        let path = self.workspace_path(&format!("/templates/{id}"));
+        self.send_empty(Method::DELETE, path).await
     }
 
-    async fn import_template(&self, _json: &str) -> CowResult<TemplateDocument> {
-        Err(local_only("templates"))
+    async fn import_template(&self, json: &str) -> CowResult<TemplateDocument> {
+        let path = self.workspace_path("/templates");
+        self.request(Method::POST, path, Some(json!({ "json": json })))
+            .await
     }
 
-    async fn export_template(&self, _id: &str) -> CowResult<String> {
-        Err(local_only("templates"))
+    async fn export_template(&self, id: &str) -> CowResult<String> {
+        let path = self.workspace_path(&format!("/templates/{id}/export"));
+        self.request(Method::GET, path, None).await
     }
 
-    async fn instantiate_agents(&self, _template_id: &str) -> CowResult<Vec<AgentProfile>> {
-        Err(local_only("templates"))
+    async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>> {
+        let path = self.workspace_path(&format!("/templates/{template_id}/instantiate"));
+        self.request(Method::POST, path, None).await
     }
 
     async fn request_task_worktree(
@@ -935,6 +1112,29 @@ impl RemoteClient {
         )
         .await
     }
+
+    async fn set_memory_status(&self, id: &str, action: &str) -> CowResult<MemoryEntry> {
+        let path = self.workspace_path(&format!("/memory/entries/{id}/{action}"));
+        self.request(Method::POST, path, None).await
+    }
+}
+
+/// Percent-encode a query-string value.
+///
+/// The recall query is free text, so anything outside the unreserved set has
+/// to be escaped before it reaches the URL.
+fn urlencode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            b' ' => encoded.push('+'),
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
 }
 
 /// A channel as the server sends it.
@@ -965,6 +1165,24 @@ impl ApiChannel {
             agent_id: self.agent_id.map(AgentId),
             pinned: self.pinned,
             kind: parse_kind(&self.kind),
+        }
+    }
+}
+
+/// A conversation as the server lists it, mapped onto the client summary.
+#[derive(Debug, serde::Deserialize)]
+struct ServerConversationSummary {
+    channel: ApiChannel,
+    settings: ConversationSettings,
+    participants: Vec<AgentProfile>,
+}
+
+impl ServerConversationSummary {
+    fn into_summary(self) -> crate::ConversationSummary {
+        crate::ConversationSummary {
+            channel: self.channel.into_channel(),
+            settings: self.settings,
+            participants: self.participants,
         }
     }
 }

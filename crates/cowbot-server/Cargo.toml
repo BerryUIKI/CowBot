@@ -9,6 +9,7 @@ license.workspace = true
 cowbot-core = { workspace = true }
 cowbot-store = { workspace = true }
 cowbot-service = { workspace = true }
+cowbot-package = { workspace = true }
 cowbot-bus = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
