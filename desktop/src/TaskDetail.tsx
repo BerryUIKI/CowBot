@@ -75,7 +75,7 @@ function toolResultText(result: unknown): string {
       return record.error;
     }
   }
-  return JSON.stringify(result ?? null) ?? "null";
+  return JSON.stringify(result ?? null);
 }
 
 export default function TaskDetail({

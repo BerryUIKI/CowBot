@@ -32,7 +32,6 @@ import {
   filterCommands,
   isCommandDraft,
   loadCommands,
-  parseCommandDraft,
   slashQuery,
 } from "./command";
 import TaskDetail from "./TaskDetail";
@@ -82,6 +81,7 @@ import {
   onCowbotEvent,
   onChannelReply,
   onRunFinished,
+  parseCommand,
   pendingApprovals,
   postMessage,
   removeProject,
@@ -139,7 +139,7 @@ interface PendingReply {
 
 interface MenuState {
   kind: "agent" | "channel" | "conversation" | "task";
-  channel: Channel | null;
+  channel: Channel;
   agent: AgentProfile | null;
   task: Task | null;
   x: number;
@@ -921,11 +921,12 @@ export default function App() {
         // Another client cleared the history; the timeline must not keep
         // showing messages that no longer exist.
         const cleared = event.payload.payload as { channel_id?: string } | undefined;
-        if (cleared?.channel_id) {
+        const clearedChannelId = cleared?.channel_id;
+        if (clearedChannelId) {
           setPreviews((current) => {
-            if (!(cleared.channel_id! in current)) return current;
+            if (!(clearedChannelId in current)) return current;
             const next = { ...current };
-            delete next[cleared.channel_id!];
+            delete next[clearedChannelId];
             return next;
           });
         }
@@ -1710,10 +1711,6 @@ export default function App() {
     }
   }
 
-  function handleEditAgent(agent: AgentProfile) {
-    openEditAgentDialog(agent);
-  }
-
   function acceptCommand(command: CommandInfo) {
     setCommandHint(null);
     setCommandExpanded(false);
@@ -1732,7 +1729,7 @@ export default function App() {
   /// carry out the action. #186 owns the menu and the parser; this owns what
   /// each command does.
   async function runCommand(line: string) {
-    const parsed = await parseCommandDraft(line);
+    const parsed = await parseCommand(line);
     switch (parsed.kind) {
       case "not_a_command":
         await sendMessage(line);
@@ -2022,7 +2019,7 @@ export default function App() {
           ...current,
           [id]: {
             ...existing,
-            tools: [...existing.tools, { name: turn.call?.name ?? "tool", running: true }],
+            tools: [...existing.tools, { name: turn.call.name, running: true }],
           },
         };
       });
@@ -2059,7 +2056,7 @@ export default function App() {
         refreshMessages(finished.channelId).catch((err) => setError(errorMessage(err)));
       }
       // A task turn settles into the task list and, when open, its detail.
-      if (finished?.runId || finished?.channelId === null) {
+      if (finished?.runId) {
         refreshTasks().catch((err) => setError(errorMessage(err)));
         if (selectedTaskId) {
           refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
@@ -2617,7 +2614,6 @@ export default function App() {
     if (!menu) return [];
 
     const channel = menu.channel;
-    if (!channel) return [];
     const menuAgent = menu.agent;
     return menu.kind === "agent"
       ? [
@@ -4182,7 +4178,7 @@ export default function App() {
             projects={projects}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
-            onEditAgent={handleEditAgent}
+            onEditAgent={openEditAgentDialog}
             onSessionChange={setSession}
             onAddProject={handleAddProject}
             onRemoveProject={handleRemoveProject}

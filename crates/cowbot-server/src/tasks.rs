@@ -23,14 +23,17 @@ use crate::error::ApiError;
 use crate::router::AppState;
 use crate::workspaces::require_member;
 
-/// Parse the approval level names the CLI and desktop use.
+/// Parse the approval level names the CLI and the remote client send.
+///
+/// The enum's serde name is the canonical spelling; the hyphenated form is the
+/// one `RemoteClient` writes, so both are accepted and nothing else is.
 fn parse_approval_level(value: &str) -> Option<cowbot_core::approval::ApprovalLevel> {
     use cowbot_core::approval::ApprovalLevel;
     match value {
-        "ask" | "manual" => Some(ApprovalLevel::Ask),
-        "accept-edits" | "accept_edits" => Some(ApprovalLevel::AcceptEdits),
-        "safe-auto" | "safe_auto" => Some(ApprovalLevel::SafeAuto),
-        "plan-only" | "plan_only" | "plan" => Some(ApprovalLevel::PlanOnly),
+        "ask" => Some(ApprovalLevel::Ask),
+        "accept_edits" | "accept-edits" => Some(ApprovalLevel::AcceptEdits),
+        "safe_auto" | "safe-auto" => Some(ApprovalLevel::SafeAuto),
+        "plan_only" | "plan-only" => Some(ApprovalLevel::PlanOnly),
         "trusted" => Some(ApprovalLevel::Trusted),
         _ => None,
     }
@@ -432,12 +435,13 @@ pub async fn set_permission_rule_enabled(
             "your role does not allow changing permission rules",
         ));
     }
-    let service = state.permissions(&workspace_id);
-    // A rule id from another workspace must not be reachable here.
-    if !service.list().await?.iter().any(|rule| rule.id == rule_id) {
-        return Err(ApiError::not_found("the rule was not found"));
-    }
-    Ok(Json(service.set_enabled(&rule_id, body.enabled).await?))
+    // The service resolves the rule against this workspace and reports one in
+    // another as not found.
+    let rule = state
+        .permissions(&workspace_id)
+        .set_enabled(&rule_id, body.enabled)
+        .await?;
+    Ok(Json(rule))
 }
 
 pub async fn delete_permission_rule(
@@ -452,11 +456,7 @@ pub async fn delete_permission_rule(
             "your role does not allow changing permission rules",
         ));
     }
-    let service = state.permissions(&workspace_id);
-    if !service.list().await?.iter().any(|rule| rule.id == rule_id) {
-        return Err(ApiError::not_found("the rule was not found"));
-    }
-    service.delete(&rule_id).await?;
+    state.permissions(&workspace_id).delete(&rule_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

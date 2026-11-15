@@ -9,8 +9,9 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use cowbot_core::event::Event;
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::turn::{TurnEvent, TurnTarget};
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -142,50 +143,69 @@ impl Scope {
     /// Channel and task identifiers are checked against the workspace's sets.
     /// An event that names neither is dropped: a payload that cannot be placed
     /// is safer omitted in a shared deployment than leaked.
+    ///
+    /// A channel or task is read live rather than from the subscribe-time set,
+    /// so one created after subscribe is not mistaken for another tenant's.
     async fn admit(&mut self, state: &AppState, event: &Event) -> bool {
-        let Ok(encoded) = serde_json::to_value(&event.payload) else {
-            return false;
-        };
-        // `EventPayload` is `{ "type": ..., "payload": { ... } }`, so the
-        // identifiers live one level down.
-        let value = encoded.get("payload").cloned().unwrap_or(encoded);
-        // A channel event is placed by the channel's workspace, read live so a
-        // channel created after subscribe is not mistaken for another tenant's.
-        if let Some(id) = value.get("channel_id").and_then(|id| id.as_str()) {
-            return self.channel_admitted(state, id).await;
-        }
-        if let Some(channel) = value.get("channel") {
-            if let Some(id) = channel.get("id").and_then(|id| id.as_str()) {
-                return self.channel_admitted(state, id).await;
+        match &event.payload {
+            EventPayload::MessagePosted(message) => {
+                self.channel_admitted(state, &message.channel_id.0).await
             }
-        }
-        // A task event is placed by the task's workspace, read live for the same
-        // reason: a task created after subscribe must still reach the socket.
-        if let Some(id) = value.get("task_id").and_then(|id| id.as_str()) {
-            return self.task_admitted(state, id).await;
-        }
-        if let Some(task) = value.get("task") {
-            if let Some(id) = task.get("id").and_then(|id| id.as_str()) {
-                return self.task_admitted(state, id).await;
+            EventPayload::ChannelCreated(channel) | EventPayload::ChannelUpdated(channel) => {
+                self.channel_admitted(state, &channel.id.0).await
             }
-        }
-        // `TaskCreated`, `TaskUpdated`, and `TaskCompleted` carry the task's
-        // fields directly, so its id is at the top of the payload.
-        if value.get("description").is_some() || value.get("expected_output").is_some() {
-            if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
-                return self.task_admitted(state, id).await;
+            EventPayload::ChannelDeleted { channel_id }
+            | EventPayload::ChannelCleared { channel_id } => {
+                self.channel_admitted(state, &channel_id.0).await
             }
+            EventPayload::ConversationRouted(turn) => {
+                self.channel_admitted(state, &turn.channel_id.0).await
+            }
+            EventPayload::UserPrompt { channel_id, .. } => {
+                self.channel_admitted(state, &channel_id.0).await
+            }
+            EventPayload::TaskCreated(task) | EventPayload::TaskUpdated(task) => {
+                self.task_admitted(state, &task.id.0).await
+            }
+            EventPayload::TaskAssigned { task_id, .. }
+            | EventPayload::TaskCompleted { task_id, .. }
+            | EventPayload::TaskFailed { task_id, .. }
+            | EventPayload::AssignmentUpdated { task_id, .. }
+            | EventPayload::ToolCallRequested { task_id, .. }
+            | EventPayload::ToolCallExecuted { task_id, .. }
+            | EventPayload::WorktreeUpdated { task_id, .. } => {
+                self.task_admitted(state, &task_id.0).await
+            }
+            EventPayload::ApprovalRequested { approval, .. }
+            | EventPayload::ApprovalDecided { approval } => {
+                self.task_admitted(state, &approval.task_id.0).await
+            }
+            EventPayload::Turn(turn) => match turn {
+                TurnEvent::TurnStarted { target, .. } => match target {
+                    TurnTarget::Conversation { channel_id, .. } => {
+                        self.channel_admitted(state, &channel_id.0).await
+                    }
+                    TurnTarget::Task { task_id, .. } => self.task_admitted(state, &task_id.0).await,
+                },
+                // Every later event in a turn is placed by its turn; it carries
+                // no channel or task, so the socket cannot place it on its own.
+                // The UI learns the target from `TurnStarted`.
+                _ => false,
+            },
+            // These name no channel or task, so there is nowhere to place them.
+            EventPayload::AgentUpdated(_)
+            | EventPayload::AgentThought { .. }
+            | EventPayload::SystemNotice { .. } => false,
         }
-        false
     }
 
     async fn channel_admitted(&mut self, state: &AppState, channel_id: &str) -> bool {
         // A deleted channel's row is already gone, so the live lookup cannot
-        // place it; the subscribe-time set still knows it was ours.
+        // place it and the subscribe-time set decides.
         if self.channels.contains(channel_id) {
             return true;
         }
-        if let Some(workspace) = state
+        let Some(workspace) = state
             .store
             .channel_workspace(&cowbot_core::channel::ChannelId::new(
                 channel_id.to_string(),
@@ -193,14 +213,14 @@ impl Scope {
             .await
             .ok()
             .flatten()
-        {
-            let mine = workspace.0 == self.workspace();
-            if mine {
-                self.channels.insert(channel_id.to_string());
-            }
-            return mine;
+        else {
+            return false;
+        };
+        let mine = workspace.0 == self.workspace();
+        if mine {
+            self.channels.insert(channel_id.to_string());
         }
-        self.channels.contains(channel_id)
+        mine
     }
 
     async fn task_admitted(&mut self, state: &AppState, task_id: &str) -> bool {

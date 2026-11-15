@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{delete, get, patch, post};
@@ -269,10 +268,4 @@ where
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown)
         .await
-}
-
-/// A status assistant so a caller can tell "not found" from "unauthorized"
-/// without parsing.
-pub fn status_code(error: &ApiError) -> StatusCode {
-    error.status
 }

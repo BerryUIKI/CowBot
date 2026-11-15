@@ -40,13 +40,13 @@ pub use command::{
     CommandParse, CommandSpec, CommandTarget, APPROVAL_CHOICES, COMMANDS, SETTINGS_CHOICES,
 };
 pub use conversation::{
-    clean_group_reply, compaction_split, compaction_split_by, context_entry_tokens,
-    context_usage_state, next_rotation, project_context, usable_window, CacheUsageSummary,
-    ChannelKind, ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind,
-    ContextEvent, ContextEventKind, ContextProjection, ContextRole, ContextToolCall,
-    ContextUsageState, ConversationContext, ConversationMode, ConversationParticipantContext,
-    ConversationSettings, ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode,
-    TurnId, CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
+    clean_group_reply, compaction_split_by, context_entry_tokens, context_usage_state,
+    next_rotation, project_context, usable_window, CacheUsageSummary, ChannelKind,
+    ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind, ContextEvent,
+    ContextEventKind, ContextProjection, ContextRole, ContextToolCall, ContextUsageState,
+    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode, TurnId,
+    CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
     DEFAULT_COMPACT_THRESHOLD, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 pub use error::{CowError, CowResult};
@@ -56,13 +56,13 @@ pub use identity::{
 };
 pub use memory::{
     clamp_memory_budget, plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,
-    render_memory_entry, render_notes_for_prompt, select_recalled_entries, truncate_to_tokens,
-    MemoryEntry, MemoryKind, MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note,
-    RecallCandidate, RecallPlan, RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome,
-    ScoredMemory, CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS,
-    DEFAULT_RECALL_BUDGET_TOKENS, MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER,
-    MEMORY_ENTRY_MAX_CHARS, MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
-    MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER, WORKSPACE_NOTE_TITLE,
+    render_memory_entry, render_notes_for_prompt, truncate_to_tokens, MemoryEntry, MemoryKind,
+    MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note, RecallCandidate, RecallPlan,
+    RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome, ScoredMemory,
+    CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS, DEFAULT_RECALL_BUDGET_TOKENS,
+    MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER, MEMORY_ENTRY_MAX_CHARS,
+    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS, MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER,
+    WORKSPACE_NOTE_TITLE,
 };
 pub use mention::{
     is_broadcast_mention, parse_mentions, resolve_mentions, MentionResolution, BROADCAST_MENTIONS,

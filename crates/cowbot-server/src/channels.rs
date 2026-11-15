@@ -105,7 +105,7 @@ pub async fn get_channel(
     user: AuthenticatedUser,
     Path(channel_id): Path<String>,
 ) -> Result<Json<ChannelBody>, ApiError> {
-    let (channel, role) = channel_and_role(&state, &user, &ChannelId::new(channel_id)).await?;
+    let (channel, _, role) = channel_and_role(&state, &user, &ChannelId::new(channel_id)).await?;
     Ok(Json(channel_body(channel, role)))
 }
 
@@ -124,15 +124,12 @@ pub async fn update_channel(
     Json(body): Json<UpdateChannelRequest>,
 ) -> Result<Json<ChannelBody>, ApiError> {
     let channel_id = ChannelId::new(channel_id);
-    let (channel, role) = channel_and_role(&state, &user, &channel_id).await?;
+    let (channel, workspace_id, role) = channel_and_role(&state, &user, &channel_id).await?;
     if !role.can_write() {
         return Err(ApiError::forbidden(
             "your role does not allow changing channels",
         ));
     }
-    let Some(workspace_id) = state.store.channel_workspace(&channel_id).await? else {
-        return Err(ApiError::not_found("the channel was not found"));
-    };
     let mut updated = channel;
     let name = body.name.as_deref().unwrap_or(&updated.name);
     let topic = body.topic.as_deref().unwrap_or(&updated.topic);
@@ -158,7 +155,7 @@ pub async fn delete_channel(
     Path(channel_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let channel_id = ChannelId::new(channel_id);
-    let (_, role) = channel_and_role(&state, &user, &channel_id).await?;
+    let (_, _, role) = channel_and_role(&state, &user, &channel_id).await?;
     if !role.can_administer() {
         return Err(ApiError::forbidden(
             "your role does not allow deleting channels",
@@ -211,7 +208,7 @@ pub async fn list_messages(
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<MessageBody>>, ApiError> {
     let channel_id = ChannelId::new(channel_id);
-    channel_and_role(&state, &user, &channel_id).await?;
+    let _ = channel_and_role(&state, &user, &channel_id).await?;
     let limit = query.limit.clamp(1, 500);
     // The thread is part of the store query, not a filter over the newest
     // channel page: filtering afterwards would silently truncate a thread whose
@@ -242,7 +239,7 @@ pub async fn post_message(
     Json(body): Json<PostMessageRequest>,
 ) -> Result<(StatusCode, Json<MessageBody>), ApiError> {
     let channel_id = ChannelId::new(channel_id);
-    let (_, role) = channel_and_role(&state, &user, &channel_id).await?;
+    let (_, _, role) = channel_and_role(&state, &user, &channel_id).await?;
     if !role.can_write() {
         return Err(ApiError::forbidden(
             "your role does not allow posting in this channel",
@@ -265,7 +262,7 @@ pub async fn clear_messages(
     Path(channel_id): Path<String>,
 ) -> Result<Json<ClearBody>, ApiError> {
     let channel_id = ChannelId::new(channel_id);
-    let (_, role) = channel_and_role(&state, &user, &channel_id).await?;
+    let (_, _, role) = channel_and_role(&state, &user, &channel_id).await?;
     if !role.can_administer() {
         return Err(ApiError::forbidden(
             "your role does not allow clearing a channel",
@@ -288,7 +285,7 @@ pub(crate) async fn channel_and_role(
     state: &AppState,
     user: &AuthenticatedUser,
     channel_id: &ChannelId,
-) -> Result<(Channel, Role), ApiError> {
+) -> Result<(Channel, WorkspaceId, Role), ApiError> {
     let Some(channel) = state.store.get_channel(channel_id).await? else {
         return Err(ApiError::not_found("the channel was not found"));
     };
@@ -296,5 +293,5 @@ pub(crate) async fn channel_and_role(
         return Err(ApiError::not_found("the channel was not found"));
     };
     let role = require_member(state, user, &workspace_id).await?;
-    Ok((channel, role))
+    Ok((channel, workspace_id, role))
 }

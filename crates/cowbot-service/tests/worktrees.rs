@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cowbot_bus::EventBus;
+use cowbot_bus::bus::RecordingBus;
 use cowbot_core::event::EventPayload;
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::task::Task;
@@ -45,7 +45,7 @@ fn init_repo(root: &Path) -> PathBuf {
 
 async fn setup() -> (
     Store,
-    EventBus,
+    RecordingBus,
     WorktreeService,
     WorkspaceId,
     PathBuf,
@@ -53,11 +53,11 @@ async fn setup() -> (
 ) {
     let store = test_store().await;
     let context = bootstrap_local(&store).await.unwrap();
-    let bus = EventBus::default_bus();
-    let service = WorktreeService::new(store.clone(), bus.clone());
+    let recorder = RecordingBus::new();
+    let service = WorktreeService::new(store.clone(), recorder.bus().clone());
     let temp = tempfile::tempdir().unwrap();
     let repo = init_repo(temp.path());
-    (store, bus, service, context.workspace.id, repo, temp)
+    (store, recorder, service, context.workspace.id, repo, temp)
 }
 
 async fn make_task(store: &Store, workspace_id: &WorkspaceId, description: &str) -> Task {
@@ -68,7 +68,7 @@ async fn make_task(store: &Store, workspace_id: &WorkspaceId, description: &str)
 
 #[tokio::test]
 async fn worktree_lifecycle_creates_inspects_and_discards() {
-    let (store, bus, service, workspace_id, repo, _temp) = setup().await;
+    let (store, recorder, service, workspace_id, repo, _temp) = setup().await;
     let task = make_task(&store, &workspace_id, "Fix the login form").await;
 
     let requested = service
@@ -116,8 +116,8 @@ async fn worktree_lifecycle_creates_inspects_and_discards() {
     assert!(branches.is_empty(), "branch still exists: {branches}");
     assert!(service.discard(&task.id).await.unwrap().status == WorktreeStatus::Removed);
 
-    let statuses = bus
-        .history()
+    let statuses = recorder
+        .events()
         .iter()
         .filter_map(|event| match &event.payload {
             EventPayload::WorktreeUpdated { task_id, status } if task_id == &task.id => {

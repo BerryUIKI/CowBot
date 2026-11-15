@@ -29,14 +29,6 @@ pub struct WorkspaceBody {
     pub role: Role,
 }
 
-/// A workspace in the sign-in answer, before any route has run.
-#[derive(Debug, Serialize)]
-pub struct SignInWorkspaceBody {
-    pub id: String,
-    pub name: String,
-    pub role: Role,
-}
-
 /// Every workspace the caller belongs to.
 pub async fn list_workspaces(
     State(state): State<AppState>,

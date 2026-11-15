@@ -308,8 +308,7 @@ pub fn estimate_tokens(text: &str) -> u32 {
         };
     }
 
-    let tokens = weight.ceil().max(1.0);
-    tokens.min(u32::MAX as f64) as u32
+    weight.ceil() as u32
 }
 
 fn is_cjk(character: char) -> bool {

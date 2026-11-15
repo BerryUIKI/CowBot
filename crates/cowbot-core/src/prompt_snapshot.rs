@@ -85,18 +85,8 @@ impl SnapshotMessage {
         }
     }
 
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
     pub fn with_tool_calls(mut self, tool_calls: Vec<SnapshotToolCall>) -> Self {
         self.tool_calls = tool_calls;
-        self
-    }
-
-    pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
-        self.tool_call_id = Some(tool_call_id.into());
         self
     }
 }
@@ -324,18 +314,17 @@ impl LlmPromptSnapshot {
         let messages = self.messages.iter().fold(0_u32, |total, message| {
             total.saturating_add(counter.count_message(&message.content))
         });
-        let tools = serde_json::to_string(&self.tools)
-            .map(|json| counter.count(&json))
-            .unwrap_or(0);
+        let tools =
+            counter.count(&serde_json::to_string(&self.tools).expect("tool schemas serialize"));
         messages.saturating_add(tools)
     }
 
     fn compute_hash(&self) -> String {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        let mut value = serde_json::to_value(self).expect("a prompt snapshot always serializes");
         if let Some(object) = value.as_object_mut() {
             object.remove("content_hash");
         }
-        let bytes = serde_json::to_vec(&value).unwrap_or_default();
+        let bytes = serde_json::to_vec(&value).expect("a prompt snapshot always serializes");
         hex(&Sha256::digest(&bytes))
     }
 }

@@ -859,10 +859,7 @@ async fn compaction_rejects_invalid_sequences_before_the_model_call() {
         .unwrap();
     assert!(!outcome.compacted);
     assert!(!outcome.in_progress);
-    assert!(outcome
-        .reason
-        .as_deref()
-        .is_some_and(|reason| reason.contains("invalid sequence")));
+    assert!(outcome.invalid_sequences);
     assert!(llm.requests().is_empty());
 }
 

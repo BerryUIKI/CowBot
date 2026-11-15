@@ -68,26 +68,6 @@ function tokenSourceLabel(context: ConversationContext): string {
   return `Exact · ${counter}`;
 }
 
-/** View values for a backend that predates per-participant contexts. */
-function fallbackParticipant(context: ConversationContext): ConversationParticipantView {
-  return {
-    agent_id: context.agent_id,
-    agent_name: "",
-    system_tokens: context.system_tokens,
-    tool_tokens: context.tool_tokens,
-    history_tokens: context.history_tokens,
-    latest_tokens: context.latest_tokens,
-    total_tokens: context.total_tokens,
-    memory_tokens: context.memory_tokens,
-    active_entries: context.active_entries,
-    excluded_entries: context.excluded_entries,
-    percent_used: context.percent_used,
-    state: context.state,
-    cache_last_run: context.cache_last_turn,
-    cache_conversation: context.cache_conversation,
-  };
-}
-
 interface ContextSegment {
   id: string;
   label: string;
@@ -197,10 +177,7 @@ export default function ContextMeter({
     if (openSignal > 0) setOpen(true);
   }, [openSignal]);
 
-  const participants =
-    context.participants.length > 0
-      ? context.participants
-      : [fallbackParticipant(context)];
+  const participants = context.participants;
   const group = participants.length > 1;
   const index = Math.min(activeIndex, participants.length - 1);
   const current = participants[index];

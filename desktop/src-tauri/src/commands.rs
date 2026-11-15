@@ -493,6 +493,15 @@ pub async fn run_task(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("task '{task_id}' was not found"))?;
 
+    // Running a task needs this machine; check before preparing anything so a
+    // server-mode call leaves no worktree behind.
+    let Some(client) = state.local_client.clone() else {
+        return Err(
+            "running a task needs the local runtime and is not available in server mode"
+                .to_string(),
+        );
+    };
+
     // A worktree task is prepared before spawning so a git failure rejects
     // the run and the task stays pending.
     let worktree = match local(&state)?
@@ -528,13 +537,6 @@ pub async fn run_task(
         return Err(format!("task '{task_id}' is already running"));
     }
 
-    let Some(client) = state.local_client.clone() else {
-        running.lock().remove(&task_id);
-        return Err(
-            "running a task needs the local runtime and is not available in server mode"
-                .to_string(),
-        );
-    };
     let (llm, model) = state.runtime_model();
     let tools = match &worktree {
         Some(record) => AppState::rooted_tools(

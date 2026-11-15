@@ -12,4 +12,9 @@ in_progress: boolean,
  * Why nothing was written, for the in-progress, stale, empty, and
  * nothing-to-summarize paths.
  */
-reason: string | null, };
+reason: string | null, 
+/**
+ * The branch's stored sequence numbers are not usable for compaction, so
+ * nothing happened and the branch needs a new conversation or a re-import.
+ */
+invalid_sequences: boolean, };

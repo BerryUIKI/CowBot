@@ -78,12 +78,7 @@ struct ServerUser {
 struct ServerWorkspace {
     id: String,
     name: String,
-    /// The sign-in answer omits this; the workspace list route carries it.
-    #[serde(default)]
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    role: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl RemoteClient {
@@ -133,7 +128,7 @@ impl RemoteClient {
             workspace: Workspace {
                 id: WorkspaceId(chosen.id.clone()),
                 name: chosen.name.clone(),
-                created_at: chosen.created_at.unwrap_or_else(chrono::Utc::now),
+                created_at: chosen.created_at,
             },
             user: ClientUser {
                 id: cowbot_core::identity::UserId(sign_in.user.id),
@@ -235,24 +230,25 @@ fn transport(error: reqwest::Error) -> CowError {
 /// The `code` decides the variant, so a caller handling `CowError` sees the
 /// same shape it would in local mode.
 fn map_error(status: StatusCode, body: &Value) -> CowError {
+    let code = body
+        .get("code")
+        .and_then(|code| code.as_str())
+        .unwrap_or("");
     let message = body
         .get("message")
         .and_then(|message| message.as_str())
         .unwrap_or("the server returned an error")
         .to_string();
     match status {
-        // A 401 on the sign-in route is a bad credential; on any other route
-        // it is an expired session. The message decides which one to report.
-        StatusCode::UNAUTHORIZED if message.contains("email or password") => {
-            CowError::Config(message)
-        }
+        StatusCode::UNAUTHORIZED if code == "invalid_credentials" => CowError::Config(message),
         StatusCode::UNAUTHORIZED => {
             CowError::Config("the session is no longer valid; sign in again".into())
         }
-        StatusCode::FORBIDDEN => CowError::Config(message),
-        StatusCode::NOT_FOUND => CowError::Config(message),
-        StatusCode::CONFLICT => CowError::Config(message),
-        StatusCode::BAD_REQUEST => CowError::Config(message),
+        StatusCode::TOO_MANY_REQUESTS => CowError::RateLimited(message),
+        StatusCode::NOT_FOUND => CowError::NotFound(message),
+        StatusCode::FORBIDDEN | StatusCode::CONFLICT | StatusCode::BAD_REQUEST => {
+            CowError::Config(message)
+        }
         _ => CowError::Storage(message),
     }
 }
@@ -349,7 +345,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(channel) => Ok(Some(channel.into_channel())),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -467,7 +463,7 @@ impl Client for RemoteClient {
     }
 
     async fn list_conversation_summaries(&self) -> CowResult<Vec<crate::ConversationSummary>> {
-        Ok(Vec::new())
+        Err(local_only("conversation summaries"))
     }
 
     async fn list_conversation_participants(
@@ -532,18 +528,18 @@ impl Client for RemoteClient {
         &self,
         _run_id: &RunId,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
-        Ok(Vec::new())
+        Err(local_only("recorded prompts"))
     }
 
     async fn list_recent_prompt_snapshots(
         &self,
         _limit: u32,
     ) -> CowResult<Vec<PromptSnapshotSummary>> {
-        Ok(Vec::new())
+        Err(local_only("recorded prompts"))
     }
 
     async fn prompt_snapshot(&self, _llm_call_id: &str) -> CowResult<Option<PromptSnapshotDetail>> {
-        Ok(None)
+        Err(local_only("recorded prompts"))
     }
 
     async fn prompt_snapshot_settings(&self) -> CowResult<PromptSnapshotSettings> {
@@ -606,7 +602,7 @@ impl Client for RemoteClient {
     }
 
     async fn list_memory_entries(&self, _filter: &MemoryFilter) -> CowResult<Vec<MemoryEntry>> {
-        Ok(Vec::new())
+        Err(local_only("memory entries"))
     }
 
     async fn add_memory_entry(&self, _new: NewMemory) -> CowResult<MemorySave> {
@@ -643,7 +639,7 @@ impl Client for RemoteClient {
         _agent_id: &AgentId,
         _query: &str,
     ) -> CowResult<Option<RecalledMemory>> {
-        Ok(None)
+        Err(local_only("memory recall"))
     }
 
     async fn create_task(&self, task: &NewTask) -> CowResult<Task> {
@@ -679,7 +675,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(task) => Ok(Some(task)),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -734,7 +730,7 @@ impl Client for RemoteClient {
             .await
         {
             Ok(run) => Ok(Some(run)),
-            Err(CowError::Config(message)) if message.contains("not found") => Ok(None),
+            Err(CowError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -850,21 +846,19 @@ impl Client for RemoteClient {
     }
 
     async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>> {
-        // Session decisions live on the server process; the desktop shows an
-        // empty list in remote mode rather than a stale local one.
-        Ok(Vec::new())
+        Err(local_only("session decisions"))
     }
 
     async fn clear_session_decisions(&self) -> CowResult<()> {
-        Ok(())
+        Err(local_only("session decisions"))
     }
 
     async fn list_templates(&self) -> CowResult<Vec<TemplateDocument>> {
-        Ok(Vec::new())
+        Err(local_only("templates"))
     }
 
     async fn get_template(&self, _id: &str) -> CowResult<Option<TemplateDocument>> {
-        Ok(None)
+        Err(local_only("templates"))
     }
 
     async fn save_template(&self, _document: &TemplateDocument) -> CowResult<()> {
