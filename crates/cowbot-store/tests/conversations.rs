@@ -104,6 +104,53 @@ async fn conversation_round_trips_with_participant_and_settings() {
 }
 
 #[tokio::test]
+async fn compaction_reports_a_branch_it_cannot_renumber() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Imported", "");
+    let agent_id = AgentId::new("agent-coder");
+    let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
+        .await
+        .unwrap();
+
+    // Only an imported or hand-edited database can hold a non-positive
+    // sequence; the compaction renumber cannot stage it.
+    let mut imported = entry(&channel.id, &agent_id, ContextRole::User, "zero");
+    imported.seq = 0;
+    store.insert_context_entry(&imported).await.unwrap();
+
+    let mut summary = ContextEntry::summary(channel.id.clone(), agent_id.clone(), "summary");
+    summary.recount();
+    let mut event = ContextEvent::new(
+        channel.id.clone(),
+        agent_id.clone(),
+        ContextEventKind::Compact,
+        10,
+        4,
+    );
+    let written = store
+        .compact_context(&summary, &[imported.id.clone()], 1, &mut event)
+        .await
+        .unwrap();
+    assert_eq!(written, CompactionWrite::InvalidSequences);
+
+    // Nothing was excluded: the branch is exactly as it was.
+    let after = store
+        .list_context_entries(&channel.id, &agent_id)
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert!(!after[0].excluded);
+}
+
+#[tokio::test]
 async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
     let store = test_store().await;
     let workspace = seed_workspace(&store).await;
@@ -353,11 +400,13 @@ async fn compaction_rejects_non_positive_sequence_numbers() {
         10,
         4,
     );
-    let error = store
+    // A rejection the caller acts on is an outcome, not an error whose text
+    // has to be matched.
+    let written = store
         .compact_context(&summary, std::slice::from_ref(&first.id), 1, &mut event)
         .await
-        .unwrap_err();
-    assert!(matches!(error, cowbot_core::error::CowError::Config(_)));
+        .unwrap();
+    assert_eq!(written, CompactionWrite::InvalidSequences);
 }
 
 #[tokio::test]

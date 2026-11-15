@@ -632,6 +632,10 @@ pub enum CompactionWrite {
     /// The branch was cleared while the summary was being generated. Nothing
     /// was written.
     Empty,
+    /// The branch carries non-positive sequence numbers, which the renumber
+    /// cannot stage. Only an imported or hand-edited database can produce this.
+    /// Nothing was written.
+    InvalidSequences,
 }
 
 /// Strip a group reply of the speaker labels models add on their own.
@@ -958,6 +962,17 @@ pub const CONTEXT_KEEP_RECENT_TOKENS: u32 = 2_000;
 
 /// Largest transcript sent to the summarizer in one compaction call.
 pub const CONTEXT_SUMMARY_INPUT_TOKENS: u32 = 24_000;
+
+/// Whether a branch's sequence numbers can be renumbered by a compaction.
+///
+/// Compaction shifts the kept tail down through negative values so the summary
+/// can take the cutoff, which needs every existing sequence to be positive. An
+/// imported package normalizes them on the way in, so only a hand-edited
+/// database reaches this state — the store checks it again inside its
+/// transaction, and the service checks it before paying for a summary.
+pub fn compaction_sequences_are_valid(entries: &[ContextEntry]) -> bool {
+    entries.iter().all(|entry| entry.seq > 0)
+}
 
 /// Where a compaction splits the active branch.
 ///

@@ -1031,9 +1031,11 @@ impl Client for LocalClient {
         } else {
             ApprovalStatus::Rejected
         };
-        self.approvals
+        let (approval, _remembered) = self
+            .approvals
             .decide_for_session(approval_id, status, &self.session.user.id.0)
-            .await
+            .await?;
+        Ok(approval)
     }
 
     async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>> {

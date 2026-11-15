@@ -5074,6 +5074,21 @@ button {
   margin: 0;
 }
 
+.memory-recall-block {
+  margin: 8px 0 0;
+  padding: 12px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.03));
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .settings-form-actions {
   display: flex;
   flex-wrap: wrap;

@@ -11,6 +11,7 @@ import {
   getMemorySettings,
   listConversationSummaries,
   listMemoryEntries,
+  previewMemoryRecall,
   updateMemoryEntry,
   updateMemorySettings,
 } from "./api";
@@ -23,6 +24,7 @@ import type {
   MemoryKind,
   MemorySettings,
   MemoryStatus,
+  RecalledMemory,
 } from "./types";
 
 interface MemorySettingsProps {
@@ -118,6 +120,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
   const [newPinned, setNewPinned] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
 
+  const [recallAgent, setRecallAgent] = useState("");
+  const [recallChannel, setRecallChannel] = useState("");
+  const [recallQuery, setRecallQuery] = useState("");
+  const [recallPreview, setRecallPreview] = useState<RecalledMemory | null>(null);
+  const [recallBusy, setRecallBusy] = useState(false);
+  const [recallNotice, setRecallNotice] = useState<string | null>(null);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
   const [editKind, setEditKind] = useState<MemoryKind>("fact");
@@ -184,6 +193,36 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
       setSettingsError(errorMessage(err));
     } finally {
       setSettingsBusy(false);
+    }
+  }
+
+  /**
+   * Show what the next turn would inject, without writing a recall statistic.
+   *
+   * This is the only way to see the ranking before it matters: the entries a
+   * turn would receive depend on the budget, the scope, and the query, and
+   * until now none of that was visible outside a real turn.
+   */
+  async function handleRecallPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!recallAgent.trim()) {
+      setRecallNotice("Choose an agent to preview recall for.");
+      return;
+    }
+    setRecallBusy(true);
+    setRecallNotice(null);
+    try {
+      const preview = await previewMemoryRecall(
+        recallAgent,
+        recallQuery,
+        recallChannel || null,
+      );
+      setRecallPreview(preview);
+      if (!preview) setRecallNotice("Nothing would be recalled for that query.");
+    } catch (err) {
+      setRecallNotice(errorMessage(err));
+    } finally {
+      setRecallBusy(false);
     }
   }
 
@@ -513,6 +552,78 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
             <p className="dialog-error" role="alert">
               {settingsError}
             </p>
+          ) : null}
+        </form>
+      </section>
+
+      <section className="settings-section" aria-labelledby="settings-memory-recall">
+        <div className="settings-section-head">
+          <h3 id="settings-memory-recall">Preview recall</h3>
+          <p className="settings-hint">
+            Shows the entries the next turn would inject for an agent and a
+            query, ranked and cut to the recall budget. The preview writes
+            nothing — no context entry, no recall statistic.
+          </p>
+        </div>
+        <form className="settings-form" onSubmit={(event) => void handleRecallPreview(event)}>
+          <div className="memory-budgets">
+            <label className="field">
+              <span>Agent</span>
+              <select
+                value={recallAgent}
+                disabled={recallBusy}
+                onChange={(event) => setRecallAgent(event.target.value)}
+              >
+                <option value="">Choose an agent</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Conversation (optional)</span>
+              <select
+                value={recallChannel}
+                disabled={recallBusy}
+                onChange={(event) => setRecallChannel(event.target.value)}
+              >
+                <option value="">Workspace only</option>
+                {conversations.map((summary) => (
+                  <option key={summary.channel.id} value={summary.channel.id}>
+                    {summary.channel.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="field">
+            <span>Query</span>
+            <input
+              value={recallQuery}
+              placeholder="What the next message would ask about"
+              disabled={recallBusy}
+              onChange={(event) => setRecallQuery(event.target.value)}
+            />
+          </label>
+          <div className="settings-form-actions">
+            <button type="submit" className="primary-button" disabled={recallBusy}>
+              {recallBusy ? "Ranking…" : "Preview recall"}
+            </button>
+          </div>
+          {recallNotice ? (
+            <p className="settings-notice" role="status">
+              {recallNotice}
+            </p>
+          ) : null}
+          {recallPreview ? (
+            <div className="settings-subsection">
+              <p className="settings-hint">
+                {recallPreview.tokens} tokens from {recallPreview.entry_ids.length} entries.
+              </p>
+              <pre className="memory-recall-block">{recallPreview.block}</pre>
+            </div>
           ) : null}
         </form>
       </section>
