@@ -3213,7 +3213,22 @@ export default function App() {
           ) : (
             <section className="sidebar-section" aria-label="Settings sections">
               <div className="nav-heading">
-                <span>Settings</span>
+                <button
+                  type="button"
+                  className="nav-back"
+                  onClick={() => setView("chat")}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    aria-hidden="true"
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                  Back to chat
+                </button>
               </div>
               <ul className="contact-list">
                 {settingsSections.map((item) => (

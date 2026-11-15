@@ -801,6 +801,27 @@ button {
   color: var(--paper-faint);
 }
 
+.nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 12px;
+}
+
+.nav-back:hover {
+  color: var(--paper);
+}
+
+.nav-back svg {
+  width: 14px;
+  height: 14px;
+}
+
 .text-button {
   padding: 2px 4px;
   border: 0;
