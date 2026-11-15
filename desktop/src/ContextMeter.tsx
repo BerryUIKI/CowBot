@@ -25,6 +25,8 @@ interface ContextMeterProps {
   onReplyCleanupChange: (enabled: boolean) => void;
   onMemoryChanged: () => void;
   onNewConversation: () => void;
+  /** Open Settings → Models, where a model's context window is set. */
+  onOpenModelSettings: () => void;
   /** Open the read-only prompt and recall inspector for one participant. */
   onInspect: (agentId: string) => void;
 }
@@ -149,6 +151,7 @@ export default function ContextMeter({
   onReplyCleanupChange,
   onMemoryChanged,
   onNewConversation,
+  onOpenModelSettings,
   onInspect,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
@@ -348,10 +351,23 @@ export default function ContextMeter({
                   ) : null}
                 </div>
             ) : (
-              <p className="context-ratio">
-                {formatTokens(current.total_tokens)} tokens · set the model
-                context window in Settings → Models to see a percentage
-              </p>
+              <div className="context-unknown">
+                <p className="context-ratio">
+                  {formatTokens(current.total_tokens)} tokens in context. The
+                  context window is unknown because this model has none set, so
+                  there is nothing to measure against.
+                </p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenModelSettings();
+                  }}
+                >
+                  Set the context window
+                </button>
+              </div>
             )}
 
             {full ? (

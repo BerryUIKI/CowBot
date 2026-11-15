@@ -1752,6 +1752,18 @@ button {
   line-height: 1.5;
 }
 
+/* No window to measure against: say so, then offer the place to set it. */
+.context-unknown {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.context-unknown .context-ratio {
+  margin: 6px 0 0;
+}
+
 .context-breakdown {
   display: grid;
   gap: 5px;

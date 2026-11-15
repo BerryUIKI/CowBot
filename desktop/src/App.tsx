@@ -3931,6 +3931,10 @@ export default function App() {
                       setContextVersion((version) => version + 1)
                     }
                     onNewConversation={openNewConversation}
+                    onOpenModelSettings={() => {
+                      setSettingsSection("model");
+                      setView("settings");
+                    }}
                     onInspect={inspectConversationContext}
                   />
                 ) : null}

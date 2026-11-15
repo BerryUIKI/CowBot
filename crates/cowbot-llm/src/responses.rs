@@ -4,7 +4,9 @@
 //! top-level `function_call` items and tool results are `function_call_output`
 //! items rather than chat messages.
 
-use crate::endpoint::{endpoint_url, models_url, parse_model_ids, token_field};
+use crate::endpoint::{
+    endpoint_url, models_url, parse_discovered_models, token_field, DiscoveredModel,
+};
 use crate::provider::LlmProvider;
 use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
@@ -471,7 +473,7 @@ impl LlmProvider for ResponsesProvider {
         Ok(outcome)
     }
 
-    async fn list_models(&self) -> CowResult<Vec<String>> {
+    async fn list_models(&self) -> CowResult<Vec<DiscoveredModel>> {
         let url = self.models_url();
         debug!(url = %url, "Fetching OpenAI Responses model list");
 
@@ -503,7 +505,7 @@ impl LlmProvider for ResponsesProvider {
             .await
             .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
 
-        parse_model_ids(&payload)
+        parse_discovered_models(&payload)
     }
 }
 
