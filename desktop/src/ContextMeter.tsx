@@ -15,10 +15,9 @@ interface ContextMeterProps {
   busy: boolean;
   /** Increment to open the popover from outside, such as from \`/note\`. */
   openSignal?: number;
+  placement?: "header" | "composer";
   onCompact: (agentId?: string) => void;
-  onClear: (agentId?: string) => void;
-  onAutoCompactChange: (enabled: boolean) => void;
-  onThresholdChange: (threshold: number) => void;
+  onClear: (agentId?: string) => void;  onAutoCompactChange: (enabled: boolean) => void;  onThresholdChange: (threshold: number) => void;
   onRouterChange: (enabled: boolean) => void;
   onDefaultResponderChange: (agentId: string) => void;
   onRoutingModeChange: (mode: RoutingMode) => void;
@@ -138,6 +137,7 @@ export default function ContextMeter({
   context,
   busy,
   openSignal = 0,
+  placement = "header",
   onCompact,
   onClear,
   onAutoCompactChange,
@@ -220,7 +220,12 @@ export default function ContextMeter({
   }
 
   return (
-    <div className="context-meter-wrap" ref={rootRef}>
+    <div
+      className={`context-meter-wrap${
+        placement === "composer" ? " composer-context" : ""
+      }`}
+      ref={rootRef}
+    >
       <button
         type="button"
         className={`context-meter context-${state}`}
@@ -237,26 +242,23 @@ export default function ContextMeter({
         }
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
-        {percent === null ? (
-          <span className="context-absolute">
-            <strong>{formatTokens(worst.total_tokens)}</strong> tokens
-          </span>
-        ) : (
-          <>
-            <svg className="context-ring" viewBox="0 0 32 32" aria-hidden="true">
-              <circle className="context-ring-track" cx="16" cy="16" r={RADIUS} />
-              <circle
-                className="context-ring-fill"
-                cx="16"
-                cy="16"
-                r={RADIUS}
-                strokeDasharray={CIRCUMFERENCE}
-                strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}
-              />
-            </svg>
-            <span className="context-percent">{Math.round(percent)}%</span>
-          </>
-        )}
+        <svg
+          className={`context-ring${percent === null ? " context-ring-unknown" : ""}`}
+          viewBox="0 0 32 32"
+          aria-hidden="true"
+        >
+          <circle className="context-ring-track" cx="16" cy="16" r={RADIUS} />
+          {percent === null ? null : (
+            <circle
+              className="context-ring-fill"
+              cx="16"
+              cy="16"
+              r={RADIUS}
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}
+            />
+          )}
+        </svg>
       </button>
 
       {open ? (
@@ -266,14 +268,22 @@ export default function ContextMeter({
           aria-label="Context usage"
         >
           <div className="context-popover-head">
-            <h3>Context</h3>
-            <span className={`context-state context-${state}`}>
-              {percent === null
-                ? "Window unknown"
-                : `${Math.round(percent)}% used · ${Math.max(
-                    0,
-                    Math.round(100 - percent),
-                  )}% left`}
+            <h3>Context window</h3>
+            <span className="context-head-usage">
+              {bar && current.percent_used !== null
+                ? `${formatTokens(bar.used)} / ${formatTokens(bar.usable)} (${Math.round(
+                    current.percent_used,
+                  )}%)`
+                : `${formatTokens(current.total_tokens)} tokens`}
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path d="m9 6 6 6-6 6" />
+              </svg>
             </span>
           </div>
 
@@ -306,39 +316,15 @@ export default function ContextMeter({
             aria-labelledby={group ? tabId(index) : undefined}
           >
             {bar ? (
-              <>
-                <div className="context-summary">
-                  <span>
-                    {formatTokens(current.total_tokens)} /{" "}
-                    {formatTokens(bar.usable)}
-                    {current.percent_used === null
-                      ? ""
-                      : ` (${Math.round(current.percent_used)}%)`}
-                  </span>
-                  <span className="context-until">
-                    {bar.untilAutoCompact === null
-                      ? "Automatic compaction off"
-                      : `${formatTokens(bar.untilAutoCompact)} until auto-compact`}
-                  </span>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    disabled={busy}
-                    onClick={() => onCompact(group ? current.agent_id : undefined)}
-                  >
-                    {busy ? "Compacting…" : "Compact now"}
-                  </button>
-                </div>
-
-                <div
-                  className="context-bar"
-                  role="img"
-                  aria-label={`Context used: ${formatTokens(
-                    bar.used,
-                  )} of ${formatTokens(bar.usable)} tokens`}
-                >
-                  {bar.segments
-                    .filter((segment) => segment.tokens > 0)
+              <div
+                className="context-bar"
+                role="img"
+                aria-label={`Context used: ${formatTokens(bar.used)} of ${formatTokens(
+                  bar.usable,
+                )} tokens`}
+              >
+                {bar.segments
+                  .filter((segment) => segment.tokens > 0)
                     .map((segment) => (
                       <span
                         key={segment.id}
@@ -361,53 +347,6 @@ export default function ContextMeter({
                     />
                   ) : null}
                 </div>
-
-                <ul className="context-legend">
-                  {bar.segments.map((segment) => (
-                    <li key={segment.id}>
-                      <span
-                        className={`context-swatch ${segmentClasses[segment.id]}`}
-                        aria-hidden="true"
-                      />
-                      <span className="context-legend-label">
-                        {segment.id === "memory" && exact
-                          ? "Memory (estimated)"
-                          : segment.label}
-                      </span>
-                      <span className="context-legend-value">
-                        {formatTokens(segment.tokens)} ·{" "}
-                        {Math.round(segment.percent)}%
-                      </span>
-                    </li>
-                  ))}
-                  <li>
-                    <span
-                      className="context-swatch context-bar-free"
-                      aria-hidden="true"
-                    />
-                    <span className="context-legend-label">Free space</span>
-                    <span className="context-legend-value">
-                      {formatTokens(bar.freeTokens)} ·{" "}
-                      {Math.round((bar.freeTokens / bar.usable) * 100)}%
-                    </span>
-                  </li>
-                  {context.auto_compact ? (
-                    <li>
-                      <span
-                        className="context-swatch context-bar-buffer"
-                        aria-hidden="true"
-                      />
-                      <span className="context-legend-label">
-                        Auto-compact buffer
-                      </span>
-                      <span className="context-legend-value">
-                        {formatTokens(bar.bufferTokens)} ·{" "}
-                        {Math.round((bar.bufferTokens / bar.usable) * 100)}%
-                      </span>
-                    </li>
-                  ) : null}
-                </ul>
-              </>
             ) : (
               <p className="context-ratio">
                 {formatTokens(current.total_tokens)} tokens · set the model
@@ -490,203 +429,203 @@ export default function ContextMeter({
                     {cacheLabel(current.cache_conversation)}
                   </p>
                 </div>
+                            {group ? (
+                              <div className="context-routing">
+                                <h4>Routing</h4>
+                                <label className="context-default-responder">
+                                  <span>Who answers an unaddressed message</span>
+                                  <select
+                                    value={context.routing_mode}
+                                    disabled={busy}
+                                    onChange={(event) =>
+                                      onRoutingModeChange(event.target.value as RoutingMode)
+                                    }
+                                  >
+                                    <option value="mention">
+                                      Default responder (or the model router)
+                                    </option>
+                                    <option value="rotation">
+                                      Rotation — the next participant after the last speaker
+                                    </option>
+                                    <option value="default">Default responder only</option>
+                                  </select>
+                                </label>
+                                {context.routing_mode === "mention" ? (
+                                  <label className="context-toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={context.router_enabled}
+                                      disabled={busy}
+                                      onChange={(event) => onRouterChange(event.target.checked)}
+                                    />
+                                    <span>Route unaddressed messages with the model</span>
+                                  </label>
+                                ) : null}
+                                <div className="context-mute">
+                                  <span>Mute</span>
+                                  <div className="context-mute-list">
+                                    {participants.map((participant) => {
+                                      const muted = context.muted_participants.includes(
+                                        participant.agent_id,
+                                      );
+                                      return (
+                                        <label key={participant.agent_id} className="context-mute-item">
+                                          <input
+                                            type="checkbox"
+                                            checked={muted}
+                                            disabled={busy}
+                                            onChange={() =>
+                                              onMutedChange(
+                                                muted
+                                                  ? context.muted_participants.filter(
+                                                      (id) => id !== participant.agent_id,
+                                                    )
+                                                  : [...context.muted_participants, participant.agent_id],
+                                              )
+                                            }
+                                          />
+                                          <span>{participant.agent_name || participant.agent_id}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="context-hint">
+                                    A muted participant stays in the roster and keeps the
+                                    history, but is never picked to answer.
+                                  </p>
+                                </div>
+                                <label className="context-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={context.reply_cleanup}
+                                    disabled={busy}
+                                    onChange={(event) => onReplyCleanupChange(event.target.checked)}
+                                  />
+                                  <span>Strip speaker labels and cross-talk from replies</span>
+                                </label>
+                                <label className="context-default-responder">
+                                  <span>Default responder</span>
+                                  <select
+                                    value={context.default_responder ?? ""}
+                                    disabled={busy}
+                                    onChange={(event) => {
+                                      if (event.target.value) {
+                                        onDefaultResponderChange(event.target.value);
+                                      }
+                                    }}
+                                  >
+                                    {context.default_responder === null ? (
+                                      <option value="" disabled>
+                                        None (unaddressed messages stay silent)
+                                      </option>
+                                    ) : null}
+                                    {participants.map((participant) => (
+                                      <option
+                                        key={participant.agent_id}
+                                        value={participant.agent_id}
+                                      >
+                                        {participant.agent_name || participant.agent_id}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <p className="context-hint">
+                                  Participants are fixed at creation. Start a new conversation
+                                  for a different team.
+                                </p>
+                              </div>
+                            ) : null}
+
+                            <div className="context-settings">
+                              <label className="context-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={context.auto_compact}
+                                  disabled={busy}
+                                  onChange={(event) => onAutoCompactChange(event.target.checked)}
+                                />
+                                <span>Compact automatically</span>
+                              </label>
+                              <label className="context-threshold">
+                                <span>at</span>
+                                <select
+                                  value={context.compact_threshold}
+                                  disabled={busy || !context.auto_compact}
+                                  onChange={(event) => onThresholdChange(Number(event.target.value))}
+                                  aria-label="Automatic compaction threshold percent"
+                                >
+                                  {[60, 70, 80, 90].map((threshold) => (
+                                    <option key={threshold} value={threshold}>
+                                      {threshold}%
+                                    </option>
+                                  ))}
+                                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
+                                    <option value={context.compact_threshold}>
+                                      {context.compact_threshold}%
+                                    </option>
+                                  )}
+                                </select>
+                              </label>
+                            </div>
+
+                            <NotesEditor
+                              channelId={context.channel_id}
+                              label="Conversation note"
+                              hint="Shared with every participant and injected before this branch."
+                              onChanged={onMemoryChanged}
+                            />
+
+                            <p className="context-meta">
+                              {context.model}
+                              {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
+                              {current.active_entries} active
+                              {current.excluded_entries > 0
+                                ? `, ${current.excluded_entries} excluded`
+                                : ""}
+                              {" · "}
+                              {tokenSourceLabel(context)}
+                            </p>
+
+                            <div className="context-actions">
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={() => {
+                                  setOpen(false);
+                                  onInspect(current.agent_id);
+                                }}
+                              >
+                                Inspect
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                disabled={busy}
+                                onClick={() => onClear(group ? current.agent_id : undefined)}
+                              >
+                                {group ? "Clear this branch" : "Clear context"}
+                              </button>
+                              {group ? (
+                                <button
+                                  type="button"
+                                  className="ghost-button"
+                                  disabled={busy}
+                                  onClick={() => onClear()}
+                                >
+                                  Clear all
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={onNewConversation}
+                              >
+                                New conversation
+                              </button>
+                            </div>
               </>
             ) : null}
 
-            {group ? (
-              <div className="context-routing">
-                <h4>Routing</h4>
-                <label className="context-default-responder">
-                  <span>Who answers an unaddressed message</span>
-                  <select
-                    value={context.routing_mode}
-                    disabled={busy}
-                    onChange={(event) =>
-                      onRoutingModeChange(event.target.value as RoutingMode)
-                    }
-                  >
-                    <option value="mention">
-                      Default responder (or the model router)
-                    </option>
-                    <option value="rotation">
-                      Rotation — the next participant after the last speaker
-                    </option>
-                    <option value="default">Default responder only</option>
-                  </select>
-                </label>
-                {context.routing_mode === "mention" ? (
-                  <label className="context-toggle">
-                    <input
-                      type="checkbox"
-                      checked={context.router_enabled}
-                      disabled={busy}
-                      onChange={(event) => onRouterChange(event.target.checked)}
-                    />
-                    <span>Route unaddressed messages with the model</span>
-                  </label>
-                ) : null}
-                <div className="context-mute">
-                  <span>Mute</span>
-                  <div className="context-mute-list">
-                    {participants.map((participant) => {
-                      const muted = context.muted_participants.includes(
-                        participant.agent_id,
-                      );
-                      return (
-                        <label key={participant.agent_id} className="context-mute-item">
-                          <input
-                            type="checkbox"
-                            checked={muted}
-                            disabled={busy}
-                            onChange={() =>
-                              onMutedChange(
-                                muted
-                                  ? context.muted_participants.filter(
-                                      (id) => id !== participant.agent_id,
-                                    )
-                                  : [...context.muted_participants, participant.agent_id],
-                              )
-                            }
-                          />
-                          <span>{participant.agent_name || participant.agent_id}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <p className="context-hint">
-                    A muted participant stays in the roster and keeps the
-                    history, but is never picked to answer.
-                  </p>
-                </div>
-                <label className="context-toggle">
-                  <input
-                    type="checkbox"
-                    checked={context.reply_cleanup}
-                    disabled={busy}
-                    onChange={(event) => onReplyCleanupChange(event.target.checked)}
-                  />
-                  <span>Strip speaker labels and cross-talk from replies</span>
-                </label>
-                <label className="context-default-responder">
-                  <span>Default responder</span>
-                  <select
-                    value={context.default_responder ?? ""}
-                    disabled={busy}
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        onDefaultResponderChange(event.target.value);
-                      }
-                    }}
-                  >
-                    {context.default_responder === null ? (
-                      <option value="" disabled>
-                        None (unaddressed messages stay silent)
-                      </option>
-                    ) : null}
-                    {participants.map((participant) => (
-                      <option
-                        key={participant.agent_id}
-                        value={participant.agent_id}
-                      >
-                        {participant.agent_name || participant.agent_id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="context-hint">
-                  Participants are fixed at creation. Start a new conversation
-                  for a different team.
-                </p>
-              </div>
-            ) : null}
-
-            <div className="context-settings">
-              <label className="context-toggle">
-                <input
-                  type="checkbox"
-                  checked={context.auto_compact}
-                  disabled={busy}
-                  onChange={(event) => onAutoCompactChange(event.target.checked)}
-                />
-                <span>Compact automatically</span>
-              </label>
-              <label className="context-threshold">
-                <span>at</span>
-                <select
-                  value={context.compact_threshold}
-                  disabled={busy || !context.auto_compact}
-                  onChange={(event) => onThresholdChange(Number(event.target.value))}
-                  aria-label="Automatic compaction threshold percent"
-                >
-                  {[60, 70, 80, 90].map((threshold) => (
-                    <option key={threshold} value={threshold}>
-                      {threshold}%
-                    </option>
-                  ))}
-                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
-                    <option value={context.compact_threshold}>
-                      {context.compact_threshold}%
-                    </option>
-                  )}
-                </select>
-              </label>
-            </div>
-
-            <NotesEditor
-              channelId={context.channel_id}
-              label="Conversation note"
-              hint="Shared with every participant and injected before this branch."
-              onChanged={onMemoryChanged}
-            />
-
-            <p className="context-meta">
-              {context.model}
-              {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
-              {current.active_entries} active
-              {current.excluded_entries > 0
-                ? `, ${current.excluded_entries} excluded`
-                : ""}
-              {" · "}
-              {tokenSourceLabel(context)}
-            </p>
-
-            <div className="context-actions">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => {
-                  setOpen(false);
-                  onInspect(current.agent_id);
-                }}
-              >
-                Inspect
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={busy}
-                onClick={() => onClear(group ? current.agent_id : undefined)}
-              >
-                {group ? "Clear this branch" : "Clear context"}
-              </button>
-              {group ? (
-                <button
-                  type="button"
-                  className="ghost-button"
-                  disabled={busy}
-                  onClick={() => onClear()}
-                >
-                  Clear all
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={onNewConversation}
-              >
-                New conversation
-              </button>
-            </div>
           </div>
         </div>
       ) : null}

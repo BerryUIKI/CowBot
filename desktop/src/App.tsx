@@ -1290,8 +1290,17 @@ export default function App() {
   const channelIsStreaming = channelStreams.length > 0;
   /// A task run's turn streams to no chat, so the composer names it instead of
   /// letting it run invisibly; a task turn is the only one with a run id.
+  /// It only claims the composer when it runs the agent this chat talks to —
+  /// an unrelated background task must not turn the send button into a stop.
+  const composerAgentId = selectedAgent?.id ?? null;
   const taskStream = Object.entries(streamingTurns)
-    .filter(([, turn]) => turn.channelId === null && turn.runId !== null)
+    .filter(
+      ([, turn]) =>
+        turn.channelId === null &&
+        turn.runId !== null &&
+        composerAgentId !== null &&
+        turn.agentId === composerAgentId,
+    )
     .map(([id, turn]) => ({
       id,
       ...turn,
@@ -3409,70 +3418,15 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  {selectedChannel.kind === "conversation" ? (
-                    <>
-                      {conversationContext ? (
-                        <ContextMeter
-                          context={conversationContext}
-                          busy={contextBusy}
-                          openSignal={contextOpenSignal}
-                          onCompact={(agentId) =>
-                            void compactChannel(selectedChannel, agentId)
-                          }
-                          onClear={(agentId) =>
-                            void clearContextForChannel(selectedChannel, agentId)
-                          }
-                          onAutoCompactChange={(enabled) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              enabled,
-                              conversationContext.compact_threshold,
-                            )
-                          }
-                          onThresholdChange={(threshold) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              conversationContext.auto_compact,
-                              threshold,
-                            )
-                          }
-                          onRouterChange={(enabled) =>
-                            void updateConversationRouting(selectedChannel, enabled)
-                          }
-                          onRoutingModeChange={(mode) =>
-                            void updateConversationSetting(selectedChannel, {
-                              routingMode: mode,
-                            })
-                          }
-                          onMutedChange={(agentIds) =>
-                            void updateConversationSetting(selectedChannel, {
-                              mutedParticipants: agentIds,
-                            })
-                          }
-                          onReplyCleanupChange={(enabled) =>
-                            void updateConversationSetting(selectedChannel, {
-                              replyCleanup: enabled,
-                            })
-                          }
-                          onDefaultResponderChange={(agentId) =>
-                            void updateDefaultResponder(selectedChannel, agentId)
-                          }
-                          onMemoryChanged={() =>
-                            setContextVersion((version) => version + 1)
-                          }
-                          onNewConversation={openNewConversation}
-                          onInspect={inspectConversationContext}
-                        />
-                      ) : null}
-                      <span className="chat-kind">
-                        {conversationParticipants.length > 1
-                          ? "Group"
-                          : "Conversation"}
-                      </span>
-                    </>
-                  ) : selectedAgent ? (
-                    <span className="chat-kind">Direct</span>
-                  ) : null}
+                  <span className="chat-kind">
+                    {selectedChannel.kind === "conversation"
+                      ? conversationParticipants.length > 1
+                        ? "Group"
+                        : "Conversation"
+                      : selectedAgent
+                        ? "Direct"
+                        : ""}
+                  </span>
                 </div>
               </header>
 
@@ -3853,23 +3807,13 @@ export default function App() {
                     disabled={conversationFull}
                     rows={1}
                   />
-                  {taskStream || channelIsStreaming ? (
+                  {channelIsStreaming ? (
                     <button
                       type="button"
                       className="composer-stop"
-                      title={
-                        taskStream
-                          ? `Stop ${taskStream.name}'s task run`
-                          : "Stop the running reply"
-                      }
-                      aria-label={
-                        taskStream
-                          ? `Stop ${taskStream.name}'s task run`
-                          : "Stop the running reply"
-                      }
-                      onClick={() =>
-                        void (taskStream ? stopTurn(taskStream.id) : stopCurrentTurn())
-                      }
+                      title="Stop the running reply"
+                      aria-label="Stop the running reply"
+                      onClick={() => void stopCurrentTurn()}
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -3899,38 +3843,98 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <div className="composer-footer">
-                  {taskStream ? (
-                    <span className="composer-task-run">
-                      {taskStream.name} is working on a task
-                      {taskStream.tools.some((tool) => tool.running)
-                        ? " · tool running"
-                        : ""}
-                    </span>
-                  ) : null}
-                  <span className="composer-footer-spacer" />
-                  {agents.length > 0 ? (
-                    <ApprovalModeMenu
-                      value={channelApproval}
-                      onChange={setChannelApproval}
-                    />
-                  ) : null}
+              </form>
+              <div className="composer-footer">
+                {taskStream ? (
                   <button
                     type="button"
-                    className="composer-model"
-                    aria-haspopup="menu"
-                    aria-expanded={modelMenu !== null}
-                    title={
-                      activeModelProvider
-                        ? `${activeModelProvider.name} · ${activeModelProvider.model}`
-                        : "Offline mock model"
-                    }
-                    onClick={openModelMenu}
+                    className="composer-task-run"
+                    title={`Stop ${taskStream.name}'s task run`}
+                    onClick={() => void stopTurn(taskStream.id)}
                   >
-                    {activeModelLabel}
+                    <span className="composer-task-run-dot" aria-hidden="true" />
+                    {taskStream.name} is working on a task
+                    {taskStream.tools.some((tool) => tool.running)
+                      ? " · tool running"
+                      : ""}
                   </button>
-                </div>
-              </form>
+                ) : null}
+                <span className="composer-footer-spacer" />
+                <button
+                  type="button"
+                  className="composer-model"
+                  aria-haspopup="menu"
+                  aria-expanded={modelMenu !== null}
+                  title={
+                    activeModelProvider
+                      ? `${activeModelProvider.name} · ${activeModelProvider.model}`
+                      : "Offline mock model"
+                  }
+                  onClick={openModelMenu}
+                >
+                  {activeModelLabel}
+                </button>
+                {agents.length > 0 ? (
+                  <ApprovalModeMenu
+                    value={channelApproval}
+                    onChange={setChannelApproval}
+                  />
+                ) : null}
+                {selectedChannel.kind === "conversation" && conversationContext ? (
+                  <ContextMeter
+                    context={conversationContext}
+                    busy={contextBusy}
+                    openSignal={contextOpenSignal}
+                    placement="composer"
+                    onCompact={(agentId) =>
+                      void compactChannel(selectedChannel, agentId)
+                    }
+                    onClear={(agentId) =>
+                      void clearContextForChannel(selectedChannel, agentId)
+                    }
+                    onAutoCompactChange={(enabled) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        enabled,
+                        conversationContext.compact_threshold,
+                      )
+                    }
+                    onThresholdChange={(threshold) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        conversationContext.auto_compact,
+                        threshold,
+                      )
+                    }
+                    onRouterChange={(enabled) =>
+                      void updateConversationRouting(selectedChannel, enabled)
+                    }
+                    onRoutingModeChange={(mode) =>
+                      void updateConversationSetting(selectedChannel, {
+                        routingMode: mode,
+                      })
+                    }
+                    onMutedChange={(agentIds) =>
+                      void updateConversationSetting(selectedChannel, {
+                        mutedParticipants: agentIds,
+                      })
+                    }
+                    onReplyCleanupChange={(enabled) =>
+                      void updateConversationSetting(selectedChannel, {
+                        replyCleanup: enabled,
+                      })
+                    }
+                    onDefaultResponderChange={(agentId) =>
+                      void updateDefaultResponder(selectedChannel, agentId)
+                    }
+                    onMemoryChanged={() =>
+                      setContextVersion((version) => version + 1)
+                    }
+                    onNewConversation={openNewConversation}
+                    onInspect={inspectConversationContext}
+                  />
+                ) : null}
+              </div>
             </>
           ) : (
             <div className="empty-workspace">
