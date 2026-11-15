@@ -439,18 +439,28 @@ impl ApprovalService {
     }
 
     /// Decide an approval and remember the decision for the process lifetime.
+    /// Decide one approval and remember the choice for the rest of the session.
+    ///
+    /// Returns whether the decision was also remembered. `false` means this
+    /// process will not consult it again — a server hosts no scheduler, so the
+    /// next turn runs in the caller's desktop and cannot see this set. The
+    /// approval itself is still decided, which is why the answer is a flag
+    /// rather than an error: refusing would leave a waiting turn undecided.
     pub async fn decide_for_session(
         &self,
         approval_id: &ApprovalId,
         status: ApprovalStatus,
         decided_by: &str,
-    ) -> CowResult<Approval> {
+    ) -> CowResult<(Approval, bool)> {
+        let mut remembered = false;
         if let Some(decisions) = &self.session_decisions {
             if let Some(call) = decisions.take_pending(approval_id) {
                 decisions.remember(&call, status);
+                remembered = true;
             }
         }
-        self.decide(approval_id, status, decided_by).await
+        let approval = self.decide(approval_id, status, decided_by).await?;
+        Ok((approval, remembered))
     }
 
     pub async fn pending_for_task(&self, task_id: &TaskId) -> CowResult<Vec<Approval>> {

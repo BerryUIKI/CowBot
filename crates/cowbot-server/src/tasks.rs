@@ -23,20 +23,19 @@ use crate::error::ApiError;
 use crate::router::AppState;
 use crate::workspaces::require_member;
 
-/// Parse the approval level names the CLI and the remote client send.
+/// Deserialize the approval level a create-task body carries.
 ///
-/// The enum's serde name is the canonical spelling; the hyphenated form is the
-/// one `RemoteClient` writes, so both are accepted and nothing else is.
+/// The enum's own serde form is the vocabulary; this accepts the hyphenated
+/// spelling as well, because the CLI and `RemoteClient` both write that, and
+/// nothing beyond the two. A hand-written table that grew a third spelling per
+/// value would be a second definition of the same enum, drifting from the
+/// generated one.
 fn parse_approval_level(value: &str) -> Option<cowbot_core::approval::ApprovalLevel> {
-    use cowbot_core::approval::ApprovalLevel;
-    match value {
-        "ask" => Some(ApprovalLevel::Ask),
-        "accept_edits" | "accept-edits" => Some(ApprovalLevel::AcceptEdits),
-        "safe_auto" | "safe-auto" => Some(ApprovalLevel::SafeAuto),
-        "plan_only" | "plan-only" => Some(ApprovalLevel::PlanOnly),
-        "trusted" => Some(ApprovalLevel::Trusted),
-        _ => None,
-    }
+    let canonical = value.replace('-', "_");
+    serde_json::from_value::<cowbot_core::approval::ApprovalLevel>(serde_json::Value::String(
+        canonical,
+    ))
+    .ok()
 }
 
 /// The workspace that owns a task.
@@ -368,13 +367,25 @@ pub async fn decide_approval(
         cowbot_core::approval::ApprovalStatus::Rejected
     };
     let decided_by = user.user.id.0.clone();
-    let decided = if body.for_session {
+    let (decided, remembered) = if body.for_session {
         service
             .decide_for_session(&approval_id, status, &decided_by)
             .await?
     } else {
-        service.decide(&approval_id, status, &decided_by).await?
+        (
+            service.decide(&approval_id, status, &decided_by).await?,
+            false,
+        )
     };
+    // A session decision is remembered by the process that runs the next
+    // turn. The server runs none, so the approval is decided but the choice
+    // does not carry — say so rather than reporting a plain success.
+    if body.for_session && !remembered {
+        tracing::info!(
+            approval = %approval_id.0,
+            "Session decision applied to this approval; the server hosts no              scheduler, so it was not remembered for later turns"
+        );
+    }
     Ok(Json(decided))
 }
 
