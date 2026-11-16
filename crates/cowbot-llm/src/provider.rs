@@ -1,3 +1,4 @@
+use crate::endpoint::DiscoveredModel;
 use crate::stream::CancelSignal;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, CompletionOutcome, StreamChunk};
 use async_trait::async_trait;
@@ -69,11 +70,14 @@ pub trait LlmProvider: Send + Sync {
         Ok(outcome)
     }
 
-    /// Lists the model ids the endpoint reports.
+    /// Lists the models the endpoint reports, each with the context window it
+    /// advertises.
     ///
-    /// Providers without a usable catalogue keep the default, which reports
-    /// model discovery as unsupported so callers can fall back to manual entry.
-    async fn list_models(&self) -> CowResult<Vec<String>> {
+    /// A provider that does not report a window yields `None` for it rather
+    /// than a guess; callers keep their own metadata in that case. Providers
+    /// without a usable catalogue keep the default, which reports model
+    /// discovery as unsupported so callers can fall back to manual entry.
+    async fn list_models(&self) -> CowResult<Vec<DiscoveredModel>> {
         Err(CowError::Llm(format!(
             "{} does not support model discovery",
             self.name()

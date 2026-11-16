@@ -586,13 +586,21 @@ export function testModelProvider(input: {
   });
 }
 
+/// One model an endpoint reports. `contextWindow` is null when the endpoint
+/// does not advertise one, and is never guessed.
+export interface FetchedModel {
+  id: string;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+}
+
 export function fetchProviderModels(input: {
   providerId: string | null;
   protocol: ProviderProtocol;
   baseUrl: string;
   apiKey: string;
-}): Promise<string[]> {
-  return invoke<string[]>("fetch_provider_models", {
+}): Promise<FetchedModel[]> {
+  return invoke<FetchedModel[]>("fetch_provider_models", {
     providerId: input.providerId,
     protocol: input.protocol,
     baseUrl: input.baseUrl,

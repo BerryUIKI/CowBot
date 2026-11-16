@@ -5,7 +5,9 @@
 //! both as `x-api-key` (official API) and as a bearer token (relays configured
 //! with `ANTHROPIC_AUTH_TOKEN`).
 
-use crate::endpoint::{endpoint_url, models_url, parse_model_ids, token_field};
+use crate::endpoint::{
+    endpoint_url, models_url, parse_discovered_models, token_field, DiscoveredModel,
+};
 use crate::provider::LlmProvider;
 use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
@@ -427,7 +429,7 @@ impl LlmProvider for AnthropicProvider {
         Ok(outcome)
     }
 
-    async fn list_models(&self) -> CowResult<Vec<String>> {
+    async fn list_models(&self) -> CowResult<Vec<DiscoveredModel>> {
         let url = self.models_url();
         debug!(url = %url, "Fetching Anthropic model list");
 
@@ -462,7 +464,7 @@ impl LlmProvider for AnthropicProvider {
             .await
             .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
 
-        parse_model_ids(&payload)
+        parse_discovered_models(&payload)
     }
 }
 

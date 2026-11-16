@@ -8,6 +8,7 @@ import type {
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import { TitleBar } from "./TitleBar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
 import GroupAvatar from "./GroupAvatar";
 import Inspector from "./Inspector";
@@ -420,6 +421,7 @@ export default function App() {
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);  const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -444,6 +446,13 @@ export default function App() {
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
   );
+
+  const selectedChannelLabel = useMemo(() => {
+    if (!selectedChannel) return undefined;
+    if (selectedChannel.kind === "conversation") return selectedChannel.name;
+    if (selectedAgent) return selectedAgent.name;
+    return `#${selectedChannel.name}`;
+  }, [selectedAgent, selectedChannel]);
 
   const availableProjects = useMemo(
     () => projects.filter((project) => project.available),
@@ -1046,6 +1055,22 @@ export default function App() {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, pendingReply]);
 
+  // Streaming text, approval cards, and late-loading images all grow the
+  // thread without changing `messages`, so follow the content height itself.
+  // A reader who scrolled up keeps their place until they return to the end.
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    const follow = () => {
+      const distance =
+        thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+      if (distance < 120) endRef.current?.scrollIntoView({ block: "end" });
+    };
+    const observer = new ResizeObserver(follow);
+    for (const child of Array.from(thread.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [selectedId, messages.length]);
+
   useEffect(() => {
     const composer = composerRef.current;
     if (!composer) return;
@@ -1265,8 +1290,17 @@ export default function App() {
   const channelIsStreaming = channelStreams.length > 0;
   /// A task run's turn streams to no chat, so the composer names it instead of
   /// letting it run invisibly; a task turn is the only one with a run id.
+  /// It only claims the composer when it runs the agent this chat talks to —
+  /// an unrelated background task must not turn the send button into a stop.
+  const composerAgentId = selectedAgent?.id ?? null;
   const taskStream = Object.entries(streamingTurns)
-    .filter(([, turn]) => turn.channelId === null && turn.runId !== null)
+    .filter(
+      ([, turn]) =>
+        turn.channelId === null &&
+        turn.runId !== null &&
+        composerAgentId !== null &&
+        turn.agentId === composerAgentId,
+    )
     .map(([id, turn]) => ({
       id,
       ...turn,
@@ -2741,64 +2775,63 @@ export default function App() {
     <ContextInspector target={contextTarget} version={contextVersion} />
   );
 
+  const titlebarActions = (
+    <>
+      <button
+        type="button"
+        className={`inspector-trigger${inspectorTab === "approvals" ? " is-active" : ""}`}
+        title="Approvals"
+        aria-label={`Approvals (${approvals.length} pending)`}
+        aria-pressed={inspectorTab === "approvals"}
+        onClick={() => toggleInspector("approvals")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          aria-hidden="true"
+        >
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        {approvals.length > 0 ? (
+          <span className="inspector-trigger-count">{approvals.length}</span>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        className={`inspector-trigger${inspectorTab === "background" ? " is-active" : ""}`}
+        title="Background tasks"
+        aria-label={`Background tasks (${activeOverviewCount} active)`}
+        aria-pressed={inspectorTab === "background"}
+        onClick={() => toggleInspector("background")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          aria-hidden="true"
+        >
+          <path d="M3 12h4l3-8 4 16 3-8h4" />
+        </svg>
+        {activeOverviewCount > 0 ? (
+          <span className="inspector-trigger-count">{activeOverviewCount}</span>
+        ) : null}
+      </button>
+    </>
+  );
+
   return (
-    <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
+    <div className={`app-shell${inspectorTab ? " with-inspector" : ""}`}>
+      <TitleBar
+        title={selectedChannel ? selectedChannelLabel : undefined}
+        actions={titlebarActions}
+        leading={<img className="wordmark" src={wordmark} alt="CowBot" />}
+      />
+      <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
-        <div className="sidebar-head">
-          <img className="wordmark" src={wordmark} alt="CowBot" />
-          <div className="sidebar-head-actions">
-            <button
-              type="button"
-              className={`icon-button${view === "chat" ? " is-active" : ""}`}
-              title="Chat"
-              aria-label="Chat"
-              aria-current={view === "chat" ? "page" : undefined}
-              onClick={() => setView("chat")}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                aria-hidden="true"
-              >
-                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`icon-button${inspectorTab === "task" ? " is-active" : ""}`}
-              title="Tasks"
-              aria-label="Tasks"
-              aria-pressed={inspectorTab === "task"}
-              onClick={() =>
-                setInspectorTab((current) => (current === "task" ? null : "task"))
-              }
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                aria-hidden="true"
-              >
-                <path d="M9 6h11M9 12h11M9 18h11" />
-                <path d="M4 6l1.5 1.5L8 5" />
-                <path d="M4 12l1.5 1.5L8 11" />
-                <path d="M4 18l1.5 1.5L8 17" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="New channel"
-              aria-label="New channel"
-              onClick={openNewChannel}
-            >
-              +
-            </button>
-          </div>
-        </div>
 
         {view !== "settings" ? (
           <label className="search-field">
@@ -3206,7 +3239,22 @@ export default function App() {
           ) : (
             <section className="sidebar-section" aria-label="Settings sections">
               <div className="nav-heading">
-                <span>Settings</span>
+                <button
+                  type="button"
+                  className="nav-back"
+                  onClick={() => setView("chat")}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    aria-hidden="true"
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                  Back to chat
+                </button>
               </div>
               <ul className="contact-list">
                 {settingsSections.map((item) => (
@@ -3370,128 +3418,21 @@ export default function App() {
                   </div>
                 </div>
                 <div className="chat-actions">
-                  <div className="inspector-triggers">
-                    <button
-                      type="button"
-                      className={`inspector-trigger${
-                        inspectorTab === "approvals" ? " is-active" : ""
-                      }`}
-                      title="Approvals"
-                      aria-label={`Approvals (${approvals.length} pending)`}
-                      aria-pressed={inspectorTab === "approvals"}
-                      onClick={() => toggleInspector("approvals")}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        aria-hidden="true"
-                      >
-                        <path d="M9 11l3 3L22 4" />
-                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                      </svg>
-                      {approvals.length > 0 ? (
-                        <span className="inspector-trigger-count">
-                          {approvals.length}
-                        </span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      className={`inspector-trigger${
-                        inspectorTab === "background" ? " is-active" : ""
-                      }`}
-                      title="Background tasks"
-                      aria-label={`Background tasks (${activeOverviewCount} active)`}
-                      aria-pressed={inspectorTab === "background"}
-                      onClick={() => toggleInspector("background")}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 12h4l3-8 4 16 3-8h4" />
-                      </svg>
-                      {activeOverviewCount > 0 ? (
-                        <span className="inspector-trigger-count">
-                          {activeOverviewCount}
-                        </span>
-                      ) : null}
-                    </button>
-                  </div>
-                  {selectedChannel.kind === "conversation" ? (
-                    <>
-                      {conversationContext ? (
-                        <ContextMeter
-                          context={conversationContext}
-                          busy={contextBusy}
-                          openSignal={contextOpenSignal}
-                          onCompact={(agentId) =>
-                            void compactChannel(selectedChannel, agentId)
-                          }
-                          onClear={(agentId) =>
-                            void clearContextForChannel(selectedChannel, agentId)
-                          }
-                          onAutoCompactChange={(enabled) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              enabled,
-                              conversationContext.compact_threshold,
-                            )
-                          }
-                          onThresholdChange={(threshold) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              conversationContext.auto_compact,
-                              threshold,
-                            )
-                          }
-                          onRouterChange={(enabled) =>
-                            void updateConversationRouting(selectedChannel, enabled)
-                          }
-                          onRoutingModeChange={(mode) =>
-                            void updateConversationSetting(selectedChannel, {
-                              routingMode: mode,
-                            })
-                          }
-                          onMutedChange={(agentIds) =>
-                            void updateConversationSetting(selectedChannel, {
-                              mutedParticipants: agentIds,
-                            })
-                          }
-                          onReplyCleanupChange={(enabled) =>
-                            void updateConversationSetting(selectedChannel, {
-                              replyCleanup: enabled,
-                            })
-                          }
-                          onDefaultResponderChange={(agentId) =>
-                            void updateDefaultResponder(selectedChannel, agentId)
-                          }
-                          onMemoryChanged={() =>
-                            setContextVersion((version) => version + 1)
-                          }
-                          onNewConversation={openNewConversation}
-                          onInspect={inspectConversationContext}
-                        />
-                      ) : null}
-                      <span className="chat-kind">
-                        {conversationParticipants.length > 1
-                          ? "Group"
-                          : "Conversation"}
-                      </span>
-                    </>
-                  ) : selectedAgent ? (
-                    <span className="chat-kind">Direct</span>
-                  ) : null}
+                  <span className="chat-kind">
+                    {selectedChannel.kind === "conversation"
+                      ? conversationParticipants.length > 1
+                        ? "Group"
+                        : "Conversation"
+                      : selectedAgent
+                        ? "Direct"
+                        : ""}
+                  </span>
                 </div>
               </header>
 
               <section
                 className="chat-thread"
+                ref={threadRef}
                 aria-label={`Messages in ${selectedChannel.name}`}
                 key={selectedChannel.id}
               >
@@ -3866,23 +3807,7 @@ export default function App() {
                     disabled={conversationFull}
                     rows={1}
                   />
-                  {taskStream ? (
-                    <button
-                      type="button"
-                      className="composer-stop"
-                      title={`Stop ${taskStream.name}'s task run`}
-                      aria-label={`Stop ${taskStream.name}'s task run`}
-                      onClick={() => void stopTurn(taskStream.id)}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <rect x="7" y="7" width="10" height="10" rx="2" />
-                      </svg>
-                    </button>
-                  ) : channelIsStreaming ? (
+                  {channelIsStreaming ? (
                     <button
                       type="button"
                       className="composer-stop"
@@ -3898,55 +3823,122 @@ export default function App() {
                         <rect x="7" y="7" width="10" height="10" rx="2" />
                       </svg>
                     </button>
-                  ) : null}
-                  {taskStream ? (
-                    <span className="composer-task-run">
-                      {taskStream.name} is working on a task
-                      {taskStream.tools.some((tool) => tool.running) ? " · tool running" : ""}
-                    </span>
-                  ) : null}
-                  <button
-                    type="submit"
-                    className="composer-send"
-                    disabled={!draft.trim() || sending || conversationFull}
-                    aria-label="Send message"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      aria-hidden="true"
+                  ) : (
+                    <button
+                      type="submit"
+                      className="composer-send"
+                      disabled={!draft.trim() || sending || conversationFull}
+                      aria-label="Send message"
                     >
-                      <path d="M12 19V5" />
-                      <path d="m6 11 6-6 6 6" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="composer-footer">
-                  <span className="composer-footer-spacer" />
-                  {agents.length > 0 ? (
-                    <ApprovalModeMenu
-                      value={channelApproval}
-                      onChange={setChannelApproval}
-                    />
-                  ) : null}
-                  <button
-                    type="button"
-                    className="composer-model"
-                    aria-haspopup="menu"
-                    aria-expanded={modelMenu !== null}
-                    title={
-                      activeModelProvider
-                        ? `${activeModelProvider.name} · ${activeModelProvider.model}`
-                        : "Offline mock model"
-                    }
-                    onClick={openModelMenu}
-                  >
-                    {activeModelLabel}
-                  </button>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 19V5" />
+                        <path d="m6 11 6-6 6 6" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </form>
+              <div className="composer-footer">
+                {taskStream ? (
+                  <button
+                    type="button"
+                    className="composer-task-run"
+                    title={`Stop ${taskStream.name}'s task run`}
+                    onClick={() => void stopTurn(taskStream.id)}
+                  >
+                    <span className="composer-task-run-dot" aria-hidden="true" />
+                    {taskStream.name} is working on a task
+                    {taskStream.tools.some((tool) => tool.running)
+                      ? " · tool running"
+                      : ""}
+                  </button>
+                ) : null}
+                <span className="composer-footer-spacer" />
+                <button
+                  type="button"
+                  className="composer-model"
+                  aria-haspopup="menu"
+                  aria-expanded={modelMenu !== null}
+                  title={
+                    activeModelProvider
+                      ? `${activeModelProvider.name} · ${activeModelProvider.model}`
+                      : "Offline mock model"
+                  }
+                  onClick={openModelMenu}
+                >
+                  {activeModelLabel}
+                </button>
+                {agents.length > 0 ? (
+                  <ApprovalModeMenu
+                    value={channelApproval}
+                    onChange={setChannelApproval}
+                  />
+                ) : null}
+                {selectedChannel.kind === "conversation" && conversationContext ? (
+                  <ContextMeter
+                    context={conversationContext}
+                    busy={contextBusy}
+                    openSignal={contextOpenSignal}
+                    placement="composer"
+                    onCompact={(agentId) =>
+                      void compactChannel(selectedChannel, agentId)
+                    }
+                    onClear={(agentId) =>
+                      void clearContextForChannel(selectedChannel, agentId)
+                    }
+                    onAutoCompactChange={(enabled) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        enabled,
+                        conversationContext.compact_threshold,
+                      )
+                    }
+                    onThresholdChange={(threshold) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        conversationContext.auto_compact,
+                        threshold,
+                      )
+                    }
+                    onRouterChange={(enabled) =>
+                      void updateConversationRouting(selectedChannel, enabled)
+                    }
+                    onRoutingModeChange={(mode) =>
+                      void updateConversationSetting(selectedChannel, {
+                        routingMode: mode,
+                      })
+                    }
+                    onMutedChange={(agentIds) =>
+                      void updateConversationSetting(selectedChannel, {
+                        mutedParticipants: agentIds,
+                      })
+                    }
+                    onReplyCleanupChange={(enabled) =>
+                      void updateConversationSetting(selectedChannel, {
+                        replyCleanup: enabled,
+                      })
+                    }
+                    onDefaultResponderChange={(agentId) =>
+                      void updateDefaultResponder(selectedChannel, agentId)
+                    }
+                    onMemoryChanged={() =>
+                      setContextVersion((version) => version + 1)
+                    }
+                    onNewConversation={openNewConversation}
+                    onOpenModelSettings={() => {
+                      setSettingsSection("model");
+                      setView("settings");
+                    }}
+                    onInspect={inspectConversationContext}
+                  />
+                ) : null}
+              </div>
             </>
           ) : (
             <div className="empty-workspace">
@@ -4455,6 +4447,7 @@ export default function App() {
           }}
         />
       ) : null}
+      </div>
     </div>
   );
 }

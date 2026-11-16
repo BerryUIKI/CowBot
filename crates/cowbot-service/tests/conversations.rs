@@ -1728,8 +1728,12 @@ impl LlmProvider for FixedLlm {
         })
     }
 
-    async fn list_models(&self) -> CowResult<Vec<String>> {
-        Ok(vec!["fixed-model".to_string()])
+    async fn list_models(&self) -> CowResult<Vec<cowbot_llm::DiscoveredModel>> {
+        Ok(vec![cowbot_llm::DiscoveredModel {
+            id: "fixed-model".to_string(),
+            context_window: None,
+            max_output_tokens: None,
+        }])
     }
 }
 

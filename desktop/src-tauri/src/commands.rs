@@ -2719,6 +2719,15 @@ pub async fn test_model_provider(
 ///
 /// The listing shape differs between protocols, so the request goes through
 /// the protocol client rather than a shared HTTP helper.
+/// One model the endpoint reported, with the window it advertises.
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchedModel {
+    pub id: String,
+    /// Absent when the endpoint does not report one.
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+}
+
 #[tauri::command]
 pub async fn fetch_provider_models(
     state: State<'_, AppState>,
@@ -2726,25 +2735,75 @@ pub async fn fetch_provider_models(
     protocol: config::ProviderProtocol,
     base_url: String,
     api_key: Option<String>,
-) -> Result<Vec<String>, String> {
-    let config = load_config(&state)?;
+) -> Result<Vec<FetchedModel>, String> {
+    let config_value = load_config(&state)?;
     let stored_key = provider_id
         .as_deref()
-        .and_then(|id| config.provider(id))
+        .and_then(|id| config_value.provider(id))
         .and_then(|provider| provider.api_key.clone());
     let api_key = config::normalize_api_key(api_key.as_deref()).or(stored_key);
     let base_url = config::normalize_base_url(&base_url)?;
     let provider = config::build_remote_provider(protocol, &base_url, api_key);
 
-    let models = tokio::time::timeout(Duration::from_secs(30), provider.list_models())
+    let discovered = tokio::time::timeout(Duration::from_secs(30), provider.list_models())
         .await
         .map_err(|_| "The provider did not respond within 30 seconds.".to_string())?
         .map_err(|error| error.to_string())?;
 
-    if models.is_empty() {
+    if discovered.is_empty() {
         return Err("The endpoint returned no models.".to_string());
     }
-    Ok(models)
+
+    // Only a saved provider has somewhere to keep the metadata, and a value
+    // the user typed always wins over what the endpoint claims.
+    if let Some(id) = provider_id.as_deref() {
+        if let Some(provider) = config_value.provider(id) {
+            let merged = merge_discovered_metadata(&provider.model_metadata, &discovered);
+            if merged != provider.model_metadata {
+                let mut updated = config_value.clone();
+                if let Some(target) = updated.providers.iter_mut().find(|entry| entry.id == id) {
+                    target.model_metadata = merged;
+                }
+                config::save(&state.config_path, &updated).map_err(|error| {
+                    format!("failed to write {}: {error}", state.config_path.display())
+                })?;
+            }
+        }
+    }
+
+    Ok(discovered
+        .into_iter()
+        .map(|model| FetchedModel {
+            id: model.id,
+            context_window: model.context_window,
+            max_output_tokens: model.max_output_tokens,
+        })
+        .collect())
+}
+
+/// Fill window metadata the provider does not already carry.
+///
+/// A model the user gave a window keeps it; only a missing entry, or one with
+/// no window at all, takes the endpoint's figure. The same rule applies per
+/// field, so a hand-typed output limit survives a fetch that reports none.
+fn merge_discovered_metadata(
+    existing: &BTreeMap<String, config::ModelMetadata>,
+    discovered: &[cowbot_llm::DiscoveredModel],
+) -> BTreeMap<String, config::ModelMetadata> {
+    let mut merged = existing.clone();
+    for model in discovered {
+        if model.context_window.is_none() && model.max_output_tokens.is_none() {
+            continue;
+        }
+        let entry = merged.entry(model.id.clone()).or_default();
+        if entry.context_window.is_none() {
+            entry.context_window = model.context_window;
+        }
+        if entry.max_output_tokens.is_none() {
+            entry.max_output_tokens = model.max_output_tokens;
+        }
+    }
+    merged
 }
 
 fn summarize_reply(reply: &str) -> String {

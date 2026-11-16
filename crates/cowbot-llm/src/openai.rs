@@ -1,4 +1,4 @@
-use crate::endpoint::{parse_model_ids, token_field};
+use crate::endpoint::{parse_discovered_models, token_field, DiscoveredModel};
 use crate::provider::LlmProvider;
 use crate::stream::{CancelSignal, SseDecoder};
 use crate::types::{
@@ -468,7 +468,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         Ok(outcome)
     }
 
-    async fn list_models(&self) -> CowResult<Vec<String>> {
+    async fn list_models(&self) -> CowResult<Vec<DiscoveredModel>> {
         let url = self.models_url();
         debug!(url = %url, "Fetching OpenAI-compatible model list");
 
@@ -500,7 +500,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .await
             .map_err(|e| CowError::Llm(format!("Failed to parse response JSON: {}", e)))?;
 
-        parse_model_ids(&payload)
+        parse_discovered_models(&payload)
     }
 }
 

@@ -10,6 +10,7 @@ import {
   setActiveModel,
   testModelProvider,
 } from "./api";
+import type { FetchedModel } from "./api";
 import { errorMessage } from "./errors";
 import type {
   ModelMetadata,
@@ -297,6 +298,16 @@ function mergeModels(...lists: string[][]): string[] {
   return merged;
 }
 
+/// A token count in the compact form a catalogue row has room for.
+function compactTokens(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const millions = tokens / 1_000_000;
+    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
+
 function modelMetadataFor(draft: ProviderDraft): ModelMetadata {
   const model = draft.model.trim();
   return model ? (draft.modelMetadata[model] ?? {}) : {};
@@ -375,7 +386,7 @@ export default function ModelProviderSettings({
   const [modelError, setModelError] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
   const [fetchStatus, setFetchStatus] = useState<ModelFetchStatus | null>(null);
-  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
@@ -519,9 +530,10 @@ export default function ModelProviderSettings({
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey,
       });
+      const ids = models.map((model) => model.id);
       setDraft((current) => {
         if (!current) return current;
-        const active = current.model.trim() ? current.model : (models[0] ?? "");
+        const active = current.model.trim() ? current.model : (ids[0] ?? "");
         return {
           ...current,
           model: active,
@@ -529,11 +541,15 @@ export default function ModelProviderSettings({
         };
       });
       setFetchedModels(models);
-      setSelectedModels(models);
+      setSelectedModels(ids);
       setModelsOpen(true);
+      const withWindow = models.filter((model) => model.contextWindow).length;
       setFetchStatus({
         ok: true,
-        message: `Fetched ${modelCountLabel(models.length)} from the endpoint. Select models to add.`,
+        message:
+          withWindow > 0
+            ? `Fetched ${modelCountLabel(models.length)} from the endpoint. ${withWindow} reported a context window.`
+            : `Fetched ${modelCountLabel(models.length)} from the endpoint. None reported a context window, so set it by hand below.`,
       });
     } catch (error) {
       setFetchStatus({ ok: false, message: errorMessage(error) });
@@ -552,9 +568,25 @@ export default function ModelProviderSettings({
 
   function addSelectedModels() {
     if (!draft) return;
+    // Seed the window the endpoint reported so the model meters immediately.
+    // A window already set by hand stays as it is.
+    const metadata: Record<string, ModelMetadata> = { ...draft.modelMetadata };
+    for (const id of selectedModels) {
+      const fetched = fetchedModels.find((model) => model.id === id);
+      if (!fetched || (!fetched.contextWindow && !fetched.maxOutputTokens)) continue;
+      const entry: ModelMetadata = { ...(metadata[id] ?? {}) };
+      if (entry.context_window === undefined && fetched.contextWindow) {
+        entry.context_window = fetched.contextWindow;
+      }
+      if (entry.max_output_tokens === undefined && fetched.maxOutputTokens) {
+        entry.max_output_tokens = fetched.maxOutputTokens;
+      }
+      metadata[id] = entry;
+    }
     updateDraft({
       models: mergeModels(draft.models, selectedModels),
       model: draft.model.trim() ? draft.model : (selectedModels[0] ?? ""),
+      modelMetadata: metadata,
     });
     setFetchStatus({
       ok: true,
@@ -696,7 +728,7 @@ export default function ModelProviderSettings({
     ? mergeModels(draft.models, [draft.model])
     : [];
   const filteredFetched = fetchedModels.filter((model) =>
-    model.toLowerCase().includes(modelFilter.trim().toLowerCase()),
+    model.id.toLowerCase().includes(modelFilter.trim().toLowerCase()),
   );
 
   return (
@@ -983,7 +1015,9 @@ export default function ModelProviderSettings({
                     <button
                       type="button"
                       className="ghost-button"
-                      onClick={() => setSelectedModels(fetchedModels)}
+                      onClick={() =>
+                        setSelectedModels(fetchedModels.map((model) => model.id))
+                      }
                     >
                       Select all
                     </button>
@@ -1005,15 +1039,20 @@ export default function ModelProviderSettings({
                   </div>
                   <ul className="model-catalogue-list">
                     {filteredFetched.map((model) => (
-                      <li key={model}>
+                      <li key={model.id}>
                         <label>
                           <input
                             type="checkbox"
-                            checked={selectedModels.includes(model)}
-                            onChange={() => toggleFetchedModel(model)}
+                            checked={selectedModels.includes(model.id)}
+                            onChange={() => toggleFetchedModel(model.id)}
                           />
-                          <span>{model}</span>
-                          {draft.models.includes(model) ? (
+                          <span>{model.id}</span>
+                          <span className="settings-meta-inline">
+                            {model.contextWindow
+                              ? compactTokens(model.contextWindow)
+                              : "no window reported"}
+                          </span>
+                          {draft.models.includes(model.id) ? (
                             <span className="settings-meta-inline">Known</span>
                           ) : null}
                         </label>
