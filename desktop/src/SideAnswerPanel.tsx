@@ -1,4 +1,5 @@
 import RichText from "./RichText";
+import { useT } from "./i18n";
 import type { SideAnswer } from "./types";
 
 interface SideAnswerPanelProps {
@@ -19,11 +20,12 @@ export default function SideAnswerPanel({
   onDismiss,
   onAskAgain,
 }: SideAnswerPanelProps) {
+  const t = useT();
   return (
-    <aside className="side-answer" aria-label="Side answer">
+    <aside className="side-answer" aria-label={t("sideAnswer.aria")}>
       <header className="side-answer-header">
         <span className="side-answer-title">
-          Side answer from {answer.agent_name}
+          {t("sideAnswer.title", { name: answer.agent_name })}
         </span>
         <span className="side-answer-meta" title={answer.call_id}>
           {answer.model}
@@ -32,24 +34,24 @@ export default function SideAnswerPanel({
           type="button"
           className="text-button"
           onClick={onAskAgain}
-          title="Ask another side question"
+          title={t("sideAnswer.askAgainTitle")}
         >
-          Ask again
+          {t("sideAnswer.askAgain")}
         </button>
         <button
           type="button"
           className="text-button"
           onClick={onDismiss}
-          aria-label="Dismiss side answer"
+          aria-label={t("sideAnswer.dismissAria")}
         >
-          Dismiss
+          {t("sideAnswer.dismiss")}
         </button>
       </header>
       <div className="side-answer-body">
         <RichText content={answer.content} />
       </div>
       <p className="side-answer-footnote">
-        This exchange is not in the conversation; the agent will not remember it.
+        {t("sideAnswer.footnote")}
       </p>
     </aside>
   );

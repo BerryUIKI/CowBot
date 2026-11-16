@@ -40,7 +40,7 @@ The desktop exposes the same editor from Settings → Team and from an agent con
 | `create_task` | Medium | Queues a pending task for a named agent, optionally linked to a channel |
 | `instantiate_team` | High | Adds the agents from a template and provisions their conversations |
 
-`AppState::build_tools` registers them alongside the sandbox and file tools. Only agents whose profile lists a tool receive its definition, so the Main Assistant gets them while a specialist keeps its narrower set. The agents still run through the same assignment scheduler, approval gate, and tool-call recording as any other task.
+`AppState::rooted_tools` registers them alongside the sandbox and file tools. Only agents whose profile lists a tool receive its definition, so the Main Assistant gets them while a specialist keeps its narrower set. The agents still run through the same assignment scheduler, approval gate, and tool-call recording as any other task.
 
 The tools live in the desktop crate because the client depends on the tools crate; adding them to `cowbot-tools` would require a cycle or a new workspace-action abstraction. They are therefore desktop-only for now; the CLI's channel turns do not expose them.
 

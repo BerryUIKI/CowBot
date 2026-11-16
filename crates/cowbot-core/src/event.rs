@@ -7,6 +7,7 @@ use crate::permission::PermissionRuleMatch;
 use crate::risk::RiskLevel;
 use crate::task::{Task, TaskId};
 use crate::tool::{ToolCall, ToolResult};
+use crate::turn::TurnEvent;
 use crate::worktree::WorktreeStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ pub enum EventPayload {
     ChannelUpdated(Channel),
     /// A channel was deleted
     ChannelDeleted { channel_id: ChannelId },
+    /// A channel's messages were cleared; its history is empty
+    ChannelCleared { channel_id: ChannelId },
     /// A group conversation message was routed to its responders
     ConversationRouted(ConversationTurn),
     /// An agent profile was updated
@@ -76,6 +79,11 @@ pub enum EventPayload {
     ApprovalDecided { approval: Approval },
     /// Intermediate reasoning or thought emitted by an agent
     AgentThought { agent_id: AgentId, thought: String },
+    /// One event in a turn's streaming lifecycle (ADR-0041).
+    ///
+    /// Direct chat, group reply, channel mention, and task turns all publish
+    /// this same variant, so a client needs a single subscription.
+    Turn(TurnEvent),
     /// Direct user prompt submitted to the platform
     UserPrompt {
         channel_id: ChannelId,

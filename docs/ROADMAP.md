@@ -28,7 +28,7 @@ This roadmap sequences the work from the current foundation to a self-hosted, ch
 | **Phase 2** | Self-Hosted Team Mode | Multi-user server, shared workspaces, remote desktop client, Docker deployment |
 | **Phase 3** | Extensibility and Ecosystem | Docker sandbox, knowledge bases, integrations, plugins/MCP, marketplace, enterprise features |
 
-No calendar dates are committed; a phase ships when its exit criteria are met. Phase 0 and Phase 1 are complete; Phase 2 has not started.
+No calendar dates are committed; a phase ships when its exit criteria are met. Phase 0 and Phase 1 are complete. Phase 2 is in progress: milestones 2.1–2.5 are implemented, and the open items are tracked in the section below.
 
 ---
 
@@ -83,6 +83,8 @@ Delivered:
 >
 > **Composer slash commands (0.1.9)**: typing `/` in the composer opens a command menu driven by a catalogue and parser in `cowbot-core`, so the CLI and future remote clients share the same names, aliases, quoting, and arity rules. Fifteen commands cover help, chat management, context compaction and clearing, notes and memory, task creation, model and approval switching, cancellation, and Settings navigation. Commands are desktop actions and never become messages or context entries; context commands require a user-created conversation, destructive commands keep their confirmations, and an unknown first token shows a hint that Escape overrides so path-like input still sends (ADR-0038). `/btw <question>` asks an agent something without adding it to the conversation: the turn runs with the same tools and approval gate, but posts no message, appends no context entry, and records no routing turn, and its answer appears in a dismissible panel above the composer (ADR-0039).
 >
+> **Turn streaming and cancellation (0.1.9)**: `chat_stream` delivers normalized text, reasoning, tool-call, and usage chunks from all three protocols over a shared SSE decoder, and every agent loop reports its progress through a `TurnObserver`. One shared `TurnRunner` opens each turn, publishes the `turn_started` / delta / tool / `turn_done` / `turn_error` lifecycle on the event bus, stores the reply before the terminal event, and keeps a stopped turn's partial text with a stopped marker; `cancel_turn(turn_id)` is idempotent and covers conversation, group, channel, and task turns. The desktop renders the live bubble — reasoning, tool chips, incremental text — with a Stop button beside the composer, and a reload shows the persisted state (ADR-0041).
+>
 > **Phase 1 status**: complete. The exit criteria below are met. Reproducible path: install a release → complete onboarding → add agents from a template → create a channel and a task in it → run the crew and decide an approval → inspect run and tool-call history → export the workspace, import it as a new local workspace, and switch between them. The CLI reads `cowbot.toml`, lists and creates channels and messages, and can attach a crew's tasks to a channel (ADR-0020). 0.1.x remains the current release line until Phase 2 work starts.
 
 ### 4.2 Phase 1 Exit Criteria
@@ -101,7 +103,7 @@ Delivered:
 
 - Multi-user server, invitations, and remote sessions.
 - OIDC/SSO, PostgreSQL, Docker sandbox, IM/Webhook integrations.
-- Project-scoped long-term knowledge bases, streaming responses, cost accounting.
+- Project-scoped long-term knowledge bases, a remote streaming transport, cost accounting.
 - Template marketplace and plugin/MCP ecosystem.
 
 ---
@@ -115,10 +117,52 @@ Delivered:
 | ID | Milestone | Key Deliverables | Depends On |
 | --- | --- | --- | --- |
 | 2.1 | Server and API foundation (`cowbot-server`) | HTTP + WebSocket API; Argon2id accounts; opaque sessions; API tokens; error model; login rate limiting | Phase 1 |
+
+> **2.1 progress**: `cowbot-server` exists with the HTTP surface and the account
+> model — `GET /health`, `POST /api/v1/auth/sign-in`, `POST /api/v1/auth/sign-out`,
+> `POST /api/v1/auth/password`, and `GET /api/v1/me` — over the same
+> `cowbot-store` database local mode uses. Passwords are Argon2id, sessions are
+> 256-bit opaque tokens stored only as a SHA-256 hash, sign-ins are rate limited
+> per source, and the error model is one JSON body with a stable code (ADR-0043).
+> The WebSocket surface and API tokens arrive with the workspace routes in 2.2.
 | 2.2 | Multi-user workspaces | Workspace creation; invitations; Owner/Admin/Member roles; membership enforcement; audit integration | 2.1 |
+
+> **2.3 progress**: the collaboration surface is served — channels and messages,
+> tasks, assignments, runs, tool calls, approvals, permission rules, the
+> workspace policy, agents, audit, and API tokens — and `RemoteClient` implements
+> the `Client` trait over HTTP with a WebSocket event stream, so the desktop can
+> run against a server. Operations that need the local machine (worktrees,
+> in-process crew execution, local compaction) report server mode plainly, and
+> memory, prompt snapshots, context previews, and templates stay local until the
+> next milestone (ADR-0045).
+>
+> **2.2 progress**: workspaces, membership, roles, and invitations are in place
+> in `cowbot-server` — list and create workspaces, list/update/remove members,
+> create/list/revoke/accept single-use invitations, and rename a workspace. The
+> role policy lives on `Role` in `cowbot-core` and is deliberately stricter than
+> rank ordering (an Admin cannot promote a peer or grant Owner), a non-member
+> gets `404` rather than `403` so workspace existence cannot be probed, and the
+> last Owner cannot be demoted or removed. Membership changes append audit
+> events with the acting user (ADR-0044). Channel, task, and approval routes
+> reuse `require_member` and land with 2.3.
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
 | 2.4 | Deployment and operations | Single binary and Docker image; Compose example; TLS via reverse proxy; health checks; backup/restore; configuration reference | 2.1 |
+
+> **2.4 progress**: `cowbot-server` reads its configuration from the environment
+> and stops on a value that does not parse; `deploy/` holds a multi-stage
+> Dockerfile (unprivileged user, health check, one data volume) and a Compose
+> file with Caddy terminating TLS in front of a loopback-bound server;
+> `docs/SERVER.md` is the configuration, backup, restore, upgrade, and token
+> reference (ADR-0046). PostgreSQL and horizontal scaling remain out of scope.
 | 2.5 | Migration and compatibility | `.cowpkg` import into the server; server-side schema migrations; version compatibility policy | 2.2, 2.4 |
+
+> **2.5 progress**: the workspace data surfaces are served: memory notes, entries,
+> settings and recall; conversation creation, settings, context meters, turns,
+> and clearing; the two read-only context previews; prompt snapshots with their
+> settings and purge; templates, now workspace-scoped by migration `0019`; and
+> `.cowpkg` import and export. `RemoteClient` serves every `Client` method except
+> the four that need the machine it runs on. Schema migrations run on open and a
+> backup is one file ([ADR-0047](ADR/0047-hosting-the-workspace-data-surfaces.md)).
 
 ### 5.2 Phase 2 Exit Criteria
 

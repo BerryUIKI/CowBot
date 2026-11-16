@@ -2,6 +2,7 @@
 import type { AgentId } from "./AgentId";
 import type { ChannelId } from "./ChannelId";
 import type { ConversationMode } from "./ConversationMode";
+import type { RoutingMode } from "./RoutingMode";
 
 /**
  * Per-conversation settings stored independently from the channel row.
@@ -16,6 +17,15 @@ provider_id: string | null,
  */
 model: string, 
 /**
+ * Whether this conversation follows the desktop's default model.
+ *
+ * A following conversation mirrors the default's provider and model
+ * whenever the default changes, so its meter and compaction keep the
+ * tokenizer the next turn will use. Settings written before ADR-0049
+ * deserialize as pinned, which is how they behaved.
+ */
+model_follows_default: boolean, 
+/**
  * Participant that answers an unaddressed message, when one is configured.
  */
 default_responder?: AgentId | null, 
@@ -23,6 +33,18 @@ default_responder?: AgentId | null,
  * Whether an unaddressed group message may be routed by the model.
  */
 router_enabled: boolean, 
+/**
+ * How an unmentioned group message picks its responder (ADR-0042).
+ */
+routing_mode: RoutingMode, 
+/**
+ * Participants kept in the roster and history but never selected.
+ */
+muted_participants: Array<AgentId>, 
+/**
+ * Whether a group reply is stripped of speaker labels and cross-talk.
+ */
+reply_cleanup: boolean, 
 /**
  * Whether the runtime may compact the context automatically.
  */

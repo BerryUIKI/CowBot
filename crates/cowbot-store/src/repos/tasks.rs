@@ -236,6 +236,17 @@ impl Store {
         row.map(TaskRow::into_domain).transpose()
     }
 
+    /// The output a completed task produced.
+    pub async fn task_output(&self, id: &TaskId) -> CowResult<Option<String>> {
+        Ok(match self.get_task(id).await? {
+            Some(task) => match task.status {
+                TaskStatus::Completed { output } => Some(output),
+                _ => None,
+            },
+            None => None,
+        })
+    }
+
     pub async fn update_task_status(&self, id: &TaskId, status: &TaskStatus) -> CowResult<()> {
         sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?")
             .bind(serde_json::to_string(status)?)
@@ -359,6 +370,17 @@ impl Store {
         .await
         .map_err(db)?;
         row.map(RunRow::into_domain).transpose()
+    }
+
+    /// The workspace that owns a task.
+    pub async fn task_workspace(&self, id: &TaskId) -> CowResult<Option<WorkspaceId>> {
+        let workspace_id: Option<String> =
+            sqlx::query_scalar("SELECT workspace_id FROM tasks WHERE id = ?")
+                .bind(&id.0)
+                .fetch_optional(self.pool())
+                .await
+                .map_err(db)?;
+        Ok(workspace_id.map(WorkspaceId))
     }
 
     pub async fn list_runs(&self, task_id: &TaskId) -> CowResult<Vec<Run>> {

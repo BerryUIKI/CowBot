@@ -16,6 +16,7 @@ import type {
 import { taskWorktreeDiff } from "./api";
 import { errorMessage } from "./errors";
 import { formatDateTime, formatTime } from "./format";
+import { t, type TranslationKey } from "./i18n/catalog";
 import Modal from "./Modal";
 import { RunPromptSnapshotsToggle } from "./PromptSnapshotViewer";
 import RichText from "./RichText";
@@ -58,12 +59,53 @@ function outcomeText(outcome: AssignmentOutcome): string {
   return outcome.detail.reason;
 }
 
-const worktreeStatusLabels: Record<WorktreeStatus, string> = {
-  requested: "Requested",
-  ready: "Ready",
-  missing: "Missing",
-  removed: "Removed",
+const worktreeStatusKeys: Record<WorktreeStatus, TranslationKey> = {
+  requested: "tasks.status.worktree.requested",
+  ready: "tasks.status.worktree.ready",
+  missing: "tasks.status.worktree.missing",
+  removed: "tasks.status.worktree.removed",
 };
+
+const assignmentStatusKeys: Record<string, TranslationKey> = {
+  queued: "tasks.status.assignment.queued",
+  running: "tasks.status.assignment.running",
+  waiting: "tasks.status.assignment.waiting",
+  resume: "tasks.status.assignment.resume",
+  needs_input: "tasks.status.assignment.needsInput",
+  completed: "tasks.status.assignment.completed",
+  failed: "tasks.status.assignment.failed",
+  cancelled: "tasks.status.assignment.cancelled",
+};
+
+const runStatusKeys: Record<string, TranslationKey> = {
+  running: "tasks.status.run.running",
+  waiting_approval: "tasks.status.run.waitingApproval",
+  completed: "tasks.status.run.completed",
+  failed: "tasks.status.run.failed",
+  cancelled: "tasks.status.run.cancelled",
+};
+
+const eventKindKeys: Record<string, TranslationKey> = {
+  enqueued: "tasks.status.event.enqueued",
+  started: "tasks.status.event.started",
+  waiting: "tasks.status.event.waiting",
+  resumed: "tasks.status.event.resumed",
+  needs_input: "tasks.status.event.needsInput",
+  completed: "tasks.status.event.completed",
+  failed: "tasks.status.event.failed",
+  cancelled: "tasks.status.event.cancelled",
+  restarted: "tasks.status.event.restarted",
+  stalled: "tasks.status.event.stalled",
+  budget_exhausted: "tasks.status.event.budgetExhausted",
+};
+
+function statusLabel(
+  keys: Record<string, TranslationKey>,
+  value: string,
+): string {
+  const key = keys[value];
+  return key ? t(key) : value.replaceAll("_", " ");
+}
 
 function toolResultText(result: unknown): string {
   if (result && typeof result === "object") {
@@ -75,7 +117,7 @@ function toolResultText(result: unknown): string {
       return record.error;
     }
   }
-  return JSON.stringify(result ?? null) ?? "null";
+  return JSON.stringify(result ?? null);
 }
 
 export default function TaskDetail({
@@ -155,11 +197,7 @@ export default function TaskDetail({
   }
 
   function discardWorktree() {
-    if (
-      window.confirm(
-        "Discard this worktree? The checkout folder and its branch are removed, and uncommitted changes are lost.",
-      )
-    ) {
+    if (window.confirm(t("tasks.detail.confirmDiscard"))) {
       onDiscardWorktree();
     }
   }
@@ -168,19 +206,25 @@ export default function TaskDetail({
     <article className="task-detail">
       {onBack ? (
         <button type="button" className="text-button task-back" onClick={onBack}>
-          ← All tasks
+          {t("tasks.detail.allTasks")}
         </button>
       ) : null}
       <header className="task-header">
         <div className="task-heading">
           <div className="task-badges">
             <span className={`status-badge status-${kind}`}>{taskStatusLabel(task.status)}</span>
-            {task.archived ? <span className="settings-badge">Archived</span> : null}
-            <span className="task-id">Task {task.id.slice(0, 8)}</span>
+            {task.archived ? (
+              <span className="settings-badge">{t("tasks.detail.archived")}</span>
+            ) : null}
+            <span className="task-id">
+              {t("tasks.detail.taskId", { id: task.id.slice(0, 8) })}
+            </span>
           </div>
           <h2 className="task-title">{task.title || task.description}</h2>
           <div className="task-output">
-            <span className="task-output-label">Expected output</span>
+            <span className="task-output-label">
+              {t("tasks.detail.expectedOutput")}
+            </span>
             <p
               id="task-output-text"
               className={`task-output-text${
@@ -197,7 +241,9 @@ export default function TaskDetail({
                 aria-controls="task-output-text"
                 onClick={() => setOutputExpanded((value) => !value)}
               >
-                {outputExpanded ? "Show less" : `Show more (${outputLines} lines)`}
+                {outputExpanded
+                  ? t("tasks.detail.showLess")
+                  : t("tasks.detail.showMore", { count: outputLines })}
               </button>
             ) : null}
           </div>
@@ -210,7 +256,9 @@ export default function TaskDetail({
               onClick={onRun}
               disabled={running}
             >
-              {running ? "Running…" : "Run task"}
+              {running
+                ? t("tasks.detail.running")
+                : t("tasks.detail.run")}
             </button>
           ) : null}
           {canArchive ? (
@@ -221,10 +269,10 @@ export default function TaskDetail({
               disabled={archiveBusy}
             >
               {archiveBusy
-                ? "Saving…"
+                ? t("tasks.detail.saving")
                 : task.archived
-                  ? "Unarchive task"
-                  : "Archive task"}
+                  ? t("tasks.detail.unarchive")
+                  : t("tasks.detail.archive")}
             </button>
           ) : null}
           {canCancel || kind === "pending" ? (
@@ -234,15 +282,17 @@ export default function TaskDetail({
               onClick={onCancel}
               disabled={cancelling || running}
             >
-              {cancelling ? "Cancelling…" : "Cancel task"}
+              {cancelling
+                ? t("tasks.detail.cancelling")
+                : t("tasks.detail.cancel")}
             </button>
           ) : null}
         </div>
       </header>
 
-      <section className="task-prompt" aria-label="Task prompt">
+      <section className="task-prompt" aria-label={t("tasks.detail.promptAria")}>
         <div className="task-section-head">
-          <h3 className="task-prompt-label">Task prompt</h3>
+          <h3 className="task-prompt-label">{t("tasks.detail.prompt")}</h3>
           {promptLong ? (
             <button
               type="button"
@@ -252,8 +302,8 @@ export default function TaskDetail({
               onClick={() => setPromptExpanded((value) => !value)}
             >
               {promptExpanded
-                ? "Show less"
-                : `Show more (${promptLines} lines)`}
+                ? t("tasks.detail.showLess")
+                : t("tasks.detail.showMore", { count: promptLines })}
             </button>
           ) : null}
         </div>
@@ -268,16 +318,16 @@ export default function TaskDetail({
       </section>
 
       {task.plan ? (
-        <section className="task-plan" aria-label="Task plan">
+        <section className="task-plan" aria-label={t("tasks.detail.planAria")}>
           <div className="task-plan-head">
-            <h3>Plan</h3>
+            <h3>{t("tasks.detail.plan")}</h3>
             {task.plan_approved ? (
               <span className="settings-badge settings-badge-active">
-                Approved
+                {t("tasks.detail.approved")}
               </span>
             ) : (
               <span className="status-badge status-pending">
-                Awaiting approval
+                {t("tasks.detail.awaitingApproval")}
               </span>
             )}
           </div>
@@ -292,10 +342,10 @@ export default function TaskDetail({
               disabled={approvingPlan || running}
             >
               {approvingPlan || running
-                ? "Starting…"
+                ? t("tasks.detail.starting")
                 : task.plan_approved
-                  ? "Continue task"
-                  : "Approve plan and continue"}
+                  ? t("tasks.detail.continueTask")
+                  : t("tasks.detail.approvePlan")}
             </button>
           </div>
         </section>
@@ -303,81 +353,86 @@ export default function TaskDetail({
 
       <dl className="task-meta">
         <div>
-          <dt>Assignee</dt>
-          <dd>{task.assigned_agent ?? "Unassigned"}</dd>
+          <dt>{t("tasks.detail.assignee")}</dt>
+          <dd>{task.assigned_agent ?? t("tasks.detail.unassigned")}</dd>
         </div>
         <div>
-          <dt>Approval</dt>
+          <dt>{t("tasks.detail.approval")}</dt>
           <dd>{approvalLevel}</dd>
         </div>
         <div>
-          <dt>Assignments</dt>
+          <dt>{t("tasks.detail.assignments")}</dt>
           <dd>{assignments.length}</dd>
         </div>
         <div>
-          <dt>Runs</dt>
+          <dt>{t("tasks.detail.runs")}</dt>
           <dd>{runs.length}</dd>
         </div>
       </dl>
 
       {worktree ? (
-        <section className="task-section" aria-label="Task worktree">
+        <section className="task-section" aria-label={t("tasks.detail.worktreeAria")}>
           <div className="worktree-card">
             <div className="worktree-card-head">
-              <h3>Worktree</h3>
+              <h3>{t("tasks.detail.worktree")}</h3>
               <span
                 className={`settings-badge worktree-status worktree-status-${worktree.status}`}
               >
-                {worktreeStatusLabels[worktree.status]}
+                {t(worktreeStatusKeys[worktree.status])}
               </span>
             </div>
             <dl className="worktree-meta">
               <div>
-                <dt>Branch</dt>
+                <dt>{t("tasks.detail.branch")}</dt>
                 <dd>
-                  <code>{worktree.branch || "Created when the task runs"}</code>
+                  <code>
+                    {worktree.branch || t("tasks.detail.createdWhenRun")}
+                  </code>
                   {worktree.branch ? (
                     <button
                       type="button"
                       className="text-button worktree-copy"
                       onClick={() => void copyWorktreeBranch()}
                     >
-                      {copiedBranch ? "Copied" : "Copy"}
+                      {copiedBranch
+                        ? t("tasks.detail.copied")
+                        : t("tasks.detail.copy")}
                     </button>
                   ) : null}
                 </dd>
               </div>
               <div>
-                <dt>Base branch</dt>
+                <dt>{t("tasks.detail.baseBranch")}</dt>
                 <dd>{worktree.base_branch}</dd>
               </div>
               <div>
-                <dt>Project</dt>
+                <dt>{t("tasks.detail.project")}</dt>
                 <dd>{worktree.project_path}</dd>
               </div>
               <div>
-                <dt>Path</dt>
-                <dd>{worktree.worktree_path || "Created when the task runs"}</dd>
+                <dt>{t("tasks.detail.path")}</dt>
+                <dd>
+                  {worktree.worktree_path || t("tasks.detail.createdWhenRun")}
+                </dd>
               </div>
               <div>
-                <dt>Created</dt>
+                <dt>{t("tasks.detail.created")}</dt>
                 <dd>{formatDateTime(worktree.created_at)}</dd>
               </div>
             </dl>
             {worktree.status === "requested" ? (
               <p className="worktree-note">
-                The checkout and branch are created when you run this task.
+                {t("tasks.detail.worktreeRequested")}
               </p>
             ) : null}
             {worktree.status === "missing" ? (
               <p className="worktree-note">
-                The checkout folder no longer exists. Discard the record and
-                create a new task to run in a worktree.
+                {t("tasks.detail.worktreeMissing")}
               </p>
             ) : null}
             {worktree.status === "removed" ? (
               <p className="worktree-note">
-                This worktree was discarded. Its branch and folder are gone.
+                {t("tasks.detail.worktreeRemoved")}
               </p>
             ) : null}
             {worktreeError ? (
@@ -393,14 +448,14 @@ export default function TaskDetail({
                     className="ghost-button"
                     onClick={() => void revealWorktree()}
                   >
-                    Open folder
+                    {t("tasks.detail.openFolder")}
                   </button>
                   <button
                     type="button"
                     className="ghost-button"
                     onClick={openWorktreeDiff}
                   >
-                    View diff
+                    {t("tasks.detail.viewDiff")}
                   </button>
                 </>
               ) : null}
@@ -411,7 +466,9 @@ export default function TaskDetail({
                   onClick={discardWorktree}
                   disabled={discardingWorktree || running}
                 >
-                  {discardingWorktree ? "Discarding…" : "Discard worktree"}
+                  {discardingWorktree
+                    ? t("tasks.detail.discarding")
+                    : t("tasks.detail.discard")}
                 </button>
               ) : null}
             </div>
@@ -421,23 +478,22 @@ export default function TaskDetail({
 
       {typeof task.status === "object" && "completed" in task.status ? (
         <section className="task-result">
-          <h3>Deliverable</h3>
+          <h3>{t("tasks.detail.deliverable")}</h3>
           <RichText content={task.status.completed.output} />
         </section>
       ) : null}
       {typeof task.status === "object" && "failed" in task.status ? (
         <section className="task-result task-result-failed">
-          <h3>Failure</h3>
+          <h3>{t("tasks.detail.failure")}</h3>
           <pre>{task.status.failed.error}</pre>
         </section>
       ) : null}
 
       {runTasks.length > 0 ? (
-        <section className="task-section" aria-label="Run tasks">
-          <h3>Run tasks</h3>
+        <section className="task-section" aria-label={t("tasks.detail.runTasksAria")}>
+          <h3>{t("tasks.detail.runTasks")}</h3>
           <p className="muted">
-            This run is split across {runTasks.length} crew tasks. Open one to see
-            its assignments and tool calls.
+            {t("tasks.detail.runTasksHint", { count: runTasks.length })}
           </p>
           <ul className="run-task-list">
             {runTasks.map((runTask) => {
@@ -455,7 +511,7 @@ export default function TaskDetail({
                     </span>
                     <span className="muted">{taskStatusLabel(runTask.status)}</span>
                     <span className="run-task-agent">
-                      {runTask.assigned_agent ?? "Unassigned"}
+                      {runTask.assigned_agent ?? t("tasks.detail.unassigned")}
                     </span>
                   </button>
                 </li>
@@ -466,22 +522,33 @@ export default function TaskDetail({
       ) : null}
 
       <section className="task-section">
-        <h3>Assignments</h3>
+        <h3>{t("tasks.detail.assignments")}</h3>
         {assignments.length === 0 ? (
-          <p className="muted">No assignments yet.</p>
+          <p className="muted">{t("tasks.detail.noAssignments")}</p>
         ) : (
           assignments.map(({ assignment, events }) => (
             <details className="assignment" key={assignment.id}>
               <summary>
                 <span className={`status-dot status-${assignment.status}`} />
-                <span className="summary-label">{assignment.status.replaceAll("_", " ")}</span>
+                <span className="summary-label">
+                  {statusLabel(assignmentStatusKeys, assignment.status)}
+                </span>
                 <span className="muted">
-                  {approvalLevelLabel(assignment.approval_level)} · {assignment.executions} run
-                  {assignment.executions === 1 ? "" : "s"}
+                  {approvalLevelLabel(assignment.approval_level)} ·{" "}
+                  {t(
+                    assignment.executions === 1
+                      ? "tasks.detail.executionsOne"
+                      : "tasks.detail.executionsOther",
+                    { count: assignment.executions },
+                  )}
                 </span>
                 <time className="summary-time">{formatDateTime(assignment.updated_at)}</time>
               </summary>
-              <p className="assignment-id">Assignment {assignment.id.slice(0, 8)}</p>
+              <p className="assignment-id">
+                {t("tasks.detail.assignmentId", {
+                  id: assignment.id.slice(0, 8),
+                })}
+              </p>
               {assignment.outcome ? (
                 <p className="assignment-outcome">{outcomeText(assignment.outcome)}</p>
               ) : null}
@@ -491,7 +558,9 @@ export default function TaskDetail({
               <ol className="event-log">
                 {events.map((event) => (
                   <li key={event.id}>
-                    <span className="event-kind">{event.kind.replaceAll("_", " ")}</span>
+                    <span className="event-kind">
+                      {statusLabel(eventKindKeys, event.kind)}
+                    </span>
                     {event.detail ? <span className="event-detail">{event.detail}</span> : null}
                     <time className="event-time">{formatTime(event.created_at)}</time>
                   </li>
@@ -503,18 +572,25 @@ export default function TaskDetail({
       </section>
 
       <section className="task-section">
-        <h3>Runs</h3>
+        <h3>{t("tasks.detail.runs")}</h3>
         {runs.length === 0 ? (
-          <p className="muted">No runs recorded yet.</p>
+          <p className="muted">{t("tasks.detail.noRuns")}</p>
         ) : (
           runs.map(({ run, calls }) => (
             <details className="run" key={run.id}>
               <summary>
                 <span className={`status-dot status-${run.status}`} />
-                <span className="summary-label">{run.status.replaceAll("_", " ")}</span>
-                <span className="muted">Agent {run.agent_id.slice(0, 8)}</span>
+                <span className="summary-label">
+                  {statusLabel(runStatusKeys, run.status)}
+                </span>
+                <span className="muted">
+                  {t("tasks.detail.agent", { id: run.agent_id.slice(0, 8) })}
+                </span>
                 <time className="summary-time">
-                  {formatTime(run.started_at)} — {run.finished_at ? formatTime(run.finished_at) : "running"}
+                  {formatTime(run.started_at)} —{" "}
+                  {run.finished_at
+                    ? formatTime(run.finished_at)
+                    : t("tasks.detail.runningStatus")}
                 </time>
               </summary>
               {task.source === "user" ? (
@@ -524,18 +600,17 @@ export default function TaskDetail({
                     className="ghost-button"
                     onClick={() => onInspectRun(run.id)}
                   >
-                    Inspect context
+                    {t("tasks.detail.inspectContext")}
                   </button>
                 </div>
               ) : (
                 <p className="muted">
-                  This run executed a conversation or channel turn. Inspect its
-                  request from that conversation's context meter.
+                  {t("tasks.detail.turnRunHint")}
                 </p>
               )}
               <RunPromptSnapshotsToggle runId={run.id} />
               {calls.length === 0 ? (
-                <p className="muted">No tool calls.</p>
+                <p className="muted">{t("tasks.detail.noToolCalls")}</p>
               ) : (
                 <ul className="tool-calls">
                   {calls.map((call) => (
@@ -547,7 +622,11 @@ export default function TaskDetail({
                       <code className="tool-arguments">{JSON.stringify(call.arguments)}</code>
                       <pre className="tool-result">{toolResultText(call.result)}</pre>
                       {call.approved_by ? (
-                        <p className="muted">Approved by {call.approved_by}</p>
+                        <p className="muted">
+                          {t("tasks.detail.approvedBy", {
+                            name: call.approved_by,
+                          })}
+                        </p>
                       ) : null}
                     </li>
                   ))}
@@ -560,7 +639,7 @@ export default function TaskDetail({
 
       {diffOpen ? (
         <Modal
-          title="Worktree diff"
+          title={t("tasks.detail.diffTitle")}
           onClose={() => setDiffOpen(false)}
           footer={
             <button
@@ -568,12 +647,12 @@ export default function TaskDetail({
               className="ghost-button"
               onClick={() => setDiffOpen(false)}
             >
-              Close
+              {t("tasks.detail.close")}
             </button>
           }
         >
           {diffBusy ? (
-            <p className="muted">Loading the diff…</p>
+            <p className="muted">{t("tasks.detail.loadingDiff")}</p>
           ) : diffError ? (
             <p className="dialog-error" role="alert">
               {diffError}
@@ -582,26 +661,26 @@ export default function TaskDetail({
             <div className="worktree-diff">
               {diff.status ? (
                 <>
-                  <h4>Status</h4>
+                  <h4>{t("tasks.detail.status")}</h4>
                   <pre className="worktree-patch">{diff.status}</pre>
                 </>
               ) : (
-                <p className="muted">The working tree is clean.</p>
+                <p className="muted">{t("tasks.detail.clean")}</p>
               )}
               {diff.stat ? (
                 <>
-                  <h4>Diffstat</h4>
+                  <h4>{t("tasks.detail.diffstat")}</h4>
                   <pre className="worktree-patch">{diff.stat}</pre>
                 </>
               ) : null}
               {diff.truncated ? (
                 <p className="worktree-note">
-                  The patch is truncated at 256 KiB.
+                  {t("tasks.detail.truncated")}
                 </p>
               ) : null}
-              <h4>Patch</h4>
+              <h4>{t("tasks.detail.patch")}</h4>
               <pre className="worktree-patch">
-                {diff.patch || "No tracked changes."}
+                {diff.patch || t("tasks.detail.noTrackedChanges")}
               </pre>
             </div>
           ) : null}

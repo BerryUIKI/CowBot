@@ -104,6 +104,100 @@ async fn conversation_round_trips_with_participant_and_settings() {
 }
 
 #[tokio::test]
+async fn conversation_model_scope_round_trips() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Model scope", "Conversation with Planner");
+    let settings = ConversationSettings::new(
+        channel.id.clone(),
+        Some("provider-1".to_string()),
+        "deepseek-chat",
+    );
+    assert!(settings.model_follows_default);
+
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            &[AgentId::new("agent-planner")],
+        )
+        .await
+        .unwrap();
+
+    let stored = store
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.model_follows_default);
+    assert_eq!(stored.model, "deepseek-chat");
+
+    let mut pinned = stored;
+    pinned.model_follows_default = false;
+    pinned.provider_id = Some("provider-2".to_string());
+    pinned.model = "qwen-plus".to_string();
+    pinned.updated_at = Utc::now();
+    store.update_conversation_settings(&pinned).await.unwrap();
+
+    let reloaded = store
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!reloaded.model_follows_default);
+    assert_eq!(reloaded.provider_id.as_deref(), Some("provider-2"));
+    assert_eq!(reloaded.model, "qwen-plus");
+}
+
+#[tokio::test]
+async fn compaction_reports_a_branch_it_cannot_renumber() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Imported", "");
+    let agent_id = AgentId::new("agent-coder");
+    let settings = ConversationSettings::new(channel.id.clone(), None, "mock-model");
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            std::slice::from_ref(&agent_id),
+        )
+        .await
+        .unwrap();
+
+    // Only an imported or hand-edited database can hold a non-positive
+    // sequence; the compaction renumber cannot stage it.
+    let mut imported = entry(&channel.id, &agent_id, ContextRole::User, "zero");
+    imported.seq = 0;
+    store.insert_context_entry(&imported).await.unwrap();
+
+    let mut summary = ContextEntry::summary(channel.id.clone(), agent_id.clone(), "summary");
+    summary.recount();
+    let mut event = ContextEvent::new(
+        channel.id.clone(),
+        agent_id.clone(),
+        ContextEventKind::Compact,
+        10,
+        4,
+    );
+    let written = store
+        .compact_context(&summary, &[imported.id.clone()], 1, &mut event)
+        .await
+        .unwrap();
+    assert_eq!(written, CompactionWrite::InvalidSequences);
+
+    // Nothing was excluded: the branch is exactly as it was.
+    let after = store
+        .list_context_entries(&channel.id, &agent_id)
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert!(!after[0].excluded);
+}
+
+#[tokio::test]
 async fn context_entries_are_sequential_per_agent_and_compact_atomically() {
     let store = test_store().await;
     let workspace = seed_workspace(&store).await;
@@ -353,11 +447,13 @@ async fn compaction_rejects_non_positive_sequence_numbers() {
         10,
         4,
     );
-    let error = store
+    // A rejection the caller acts on is an outcome, not an error whose text
+    // has to be matched.
+    let written = store
         .compact_context(&summary, std::slice::from_ref(&first.id), 1, &mut event)
         .await
-        .unwrap_err();
-    assert!(matches!(error, cowbot_core::error::CowError::Config(_)));
+        .unwrap();
+    assert_eq!(written, CompactionWrite::InvalidSequences);
 }
 
 #[tokio::test]

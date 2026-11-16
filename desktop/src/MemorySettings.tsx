@@ -11,11 +11,13 @@ import {
   getMemorySettings,
   listConversationSummaries,
   listMemoryEntries,
+  previewMemoryRecall,
   updateMemoryEntry,
   updateMemorySettings,
 } from "./api";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
+import { t, type TranslationKey } from "./i18n/catalog";
 import type {
   AgentProfile,
   ConversationSummary,
@@ -23,6 +25,7 @@ import type {
   MemoryKind,
   MemorySettings,
   MemoryStatus,
+  RecalledMemory,
 } from "./types";
 
 interface MemorySettingsProps {
@@ -44,12 +47,36 @@ const kinds: MemoryKind[] = [
   "note",
 ];
 
-const scopeOptions: { id: ScopeFilter; label: string }[] = [
-  { id: "all", label: "All scopes" },
-  { id: "workspace", label: "Workspace-shared" },
-  { id: "agent", label: "Agent" },
-  { id: "conversation", label: "Conversation-shared" },
-  { id: "agent-in-conversation", label: "Agent in a conversation" },
+const kindKeys: Record<MemoryKind, TranslationKey> = {
+  fact: "memory.kind.fact",
+  preference: "memory.kind.preference",
+  decision: "memory.kind.decision",
+  summary: "memory.kind.summary",
+  note: "memory.kind.note",
+};
+
+const statusKeys: Record<MemoryStatus, TranslationKey> = {
+  active: "memory.status.active",
+  pending: "memory.status.pending",
+  archived: "memory.status.archived",
+};
+
+const sourceKeys: Record<string, TranslationKey> = {
+  user: "memory.source.user",
+  agent: "memory.source.agent",
+  extraction: "memory.source.extraction",
+  compaction: "memory.source.compaction",
+};
+
+const scopeOptions: { id: ScopeFilter; labelKey: TranslationKey }[] = [
+  { id: "all", labelKey: "memory.scope.all" },
+  { id: "workspace", labelKey: "memory.scope.workspace" },
+  { id: "agent", labelKey: "memory.scope.agent" },
+  { id: "conversation", labelKey: "memory.scope.conversation" },
+  {
+    id: "agent-in-conversation",
+    labelKey: "memory.scope.agentInConversation",
+  },
 ];
 
 function scopeLabel(
@@ -66,10 +93,12 @@ function scopeLabel(
         (candidate) => candidate.channel.id === entry.channel_id,
       )?.channel.name ?? entry.channel_id
     : null;
-  if (agent && conversation) return `${agent} in ${conversation}`;
+  if (agent && conversation) {
+    return t("memory.scope.agentIn", { agent, conversation });
+  }
   if (agent) return agent;
   if (conversation) return conversation;
-  return "Workspace";
+  return t("memory.scope.workspaceLabel");
 }
 
 function matchesScope(entry: MemoryEntry, scope: ScopeFilter): boolean {
@@ -117,6 +146,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
   const [newChannel, setNewChannel] = useState("");
   const [newPinned, setNewPinned] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
+
+  const [recallAgent, setRecallAgent] = useState("");
+  const [recallChannel, setRecallChannel] = useState("");
+  const [recallQuery, setRecallQuery] = useState("");
+  const [recallPreview, setRecallPreview] = useState<RecalledMemory | null>(null);
+  const [recallBusy, setRecallBusy] = useState(false);
+  const [recallNotice, setRecallNotice] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
@@ -179,11 +215,41 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
         recallBudgetTokens: recallBudget,
       });
       setSettings(saved);
-      setSettingsNotice("Memory settings saved.");
+      setSettingsNotice(t("memory.savedSettings"));
     } catch (err) {
       setSettingsError(errorMessage(err));
     } finally {
       setSettingsBusy(false);
+    }
+  }
+
+  /**
+   * Show what the next turn would inject, without writing a recall statistic.
+   *
+   * This is the only way to see the ranking before it matters: the entries a
+   * turn would receive depend on the budget, the scope, and the query, and
+   * until now none of that was visible outside a real turn.
+   */
+  async function handleRecallPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!recallAgent.trim()) {
+      setRecallNotice(t("memory.chooseAgentNotice"));
+      return;
+    }
+    setRecallBusy(true);
+    setRecallNotice(null);
+    try {
+      const preview = await previewMemoryRecall(
+        recallAgent,
+        recallQuery,
+        recallChannel || null,
+      );
+      setRecallPreview(preview);
+      if (!preview) setRecallNotice(t("memory.nothingRecalled"));
+    } catch (err) {
+      setRecallNotice(errorMessage(err));
+    } finally {
+      setRecallBusy(false);
     }
   }
 
@@ -201,8 +267,8 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
       setNewContent("");
       setNotice(
         saved.redacted
-          ? `Added a memory entry; credentials were redacted.`
-          : "Added a memory entry.",
+          ? t("memory.addedRedacted")
+          : t("memory.added"),
       );
       await refresh();
     } catch (err) {
@@ -232,8 +298,8 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
       setEditingId(null);
       setNotice(
         saved.redacted
-          ? "Memory entry saved; credentials were redacted."
-          : "Memory entry saved.",
+          ? t("memory.savedRedacted")
+          : t("memory.savedEntry"),
       );
       await refresh();
     } catch (err) {
@@ -268,11 +334,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
     return (
       <li key={entry.id} className="memory-entry">
         <div className="memory-entry-head">
-          <span className="settings-badge">{entry.kind}</span>
+          <span className="settings-badge">{t(kindKeys[entry.kind])}</span>
           <span className={`settings-badge memory-status-${entry.status}`}>
-            {entry.status}
+            {t(statusKeys[entry.status])}
           </span>
-          {entry.pinned ? <span className="settings-badge">pinned</span> : null}
+          {entry.pinned ? (
+            <span className="settings-badge">{t("memory.pinned")}</span>
+          ) : null}
           <span className="settings-meta-inline">
             {scopeLabel(entry, agents, conversations)}
           </span>
@@ -289,14 +357,14 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               <select
                 value={editKind}
                 disabled={busy}
-                aria-label="Memory kind"
+                aria-label={t("memory.memoryKindAria")}
                 onChange={(event) =>
                   setEditKind(event.target.value as MemoryKind)
                 }
               >
                 {kinds.map((kind) => (
                   <option key={kind} value={kind}>
-                    {kind}
+                    {t(kindKeys[kind])}
                   </option>
                 ))}
               </select>
@@ -307,7 +375,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                   disabled={busy}
                   onChange={(event) => setEditPinned(event.target.checked)}
                 />
-                <span>Pinned</span>
+                <span>{t("memory.pinned")}</span>
               </label>
               <button
                 type="button"
@@ -315,7 +383,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                 disabled={busy || !editContent.trim()}
                 onClick={() => void saveEdit(entry.id)}
               >
-                {busy ? "Saving…" : "Save"}
+                {busy ? t("memory.saving") : t("memory.save")}
               </button>
               <button
                 type="button"
@@ -323,7 +391,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                 disabled={busy}
                 onClick={() => setEditingId(null)}
               >
-                Cancel
+                {t("memory.cancel")}
               </button>
             </div>
           </div>
@@ -332,8 +400,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
         )}
         <div className="memory-entry-foot">
           <span className="settings-meta-inline">
-            {entry.source} · recalled {entry.recall_count}× · updated{" "}
-            {formatDateTime(entry.updated_at)}
+            {t("memory.stats", {
+              source: sourceKeys[entry.source]
+                ? t(sourceKeys[entry.source])
+                : entry.source,
+              count: entry.recall_count,
+              date: formatDateTime(entry.updated_at),
+            })}
           </span>
           <div className="memory-entry-actions">
             {entry.status === "pending" ? (
@@ -346,11 +419,11 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                     void runEntryAction(
                       entry.id,
                       () => approveMemoryEntry(entry.id),
-                      "Candidate approved.",
+                      t("memory.candidateApproved"),
                     )
                   }
                 >
-                  Approve
+                  {t("memory.approve")}
                 </button>
                 <button
                   type="button"
@@ -360,11 +433,11 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                     void runEntryAction(
                       entry.id,
                       () => dismissMemoryEntry(entry.id),
-                      "Candidate dismissed.",
+                      t("memory.candidateDismissed"),
                     )
                   }
                 >
-                  Dismiss
+                  {t("memory.dismiss")}
                 </button>
               </>
             ) : null}
@@ -374,7 +447,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               disabled={busy}
               onClick={() => beginEdit(entry)}
             >
-              Edit
+              {t("memory.edit")}
             </button>
             <button
               type="button"
@@ -385,11 +458,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                   entry.id,
                   () =>
                     updateMemoryEntry(entry.id, { pinned: !entry.pinned }),
-                  entry.pinned ? "Entry unpinned." : "Entry pinned.",
+                  entry.pinned
+                    ? t("memory.entryUnpinned")
+                    : t("memory.entryPinned"),
                 )
               }
             >
-              {entry.pinned ? "Unpin" : "Pin"}
+              {entry.pinned ? t("memory.unpin") : t("memory.pin")}
             </button>
             {entry.status !== "archived" ? (
               <button
@@ -400,11 +475,11 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                   void runEntryAction(
                     entry.id,
                     () => archiveMemoryEntry(entry.id),
-                    "Entry archived.",
+                    t("memory.entryArchived"),
                   )
                 }
               >
-                Archive
+                {t("memory.archive")}
               </button>
             ) : null}
             <button
@@ -415,11 +490,11 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
                 void runEntryAction(
                   entry.id,
                   () => deleteMemoryEntry(entry.id),
-                  "Entry deleted.",
+                  t("memory.entryDeleted"),
                 )
               }
             >
-              Delete
+              {t("memory.delete")}
             </button>
           </div>
         </div>
@@ -431,22 +506,19 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
     <>
       <section className="settings-section" aria-labelledby="settings-memory-note">
         <div className="settings-section-head">
-          <h3 id="settings-memory-note">Notes</h3>
+          <h3 id="settings-memory-note">{t("memory.notesTitle")}</h3>
           <p className="settings-hint">
-            Notes are shared reference text injected into every prompt in their
-            scope. Credential-shaped text is redacted on save.
+            {t("memory.notesHint")}
           </p>
         </div>
-        <NotesEditor label="Workspace note" />
+        <NotesEditor label={t("memory.workspaceNote")} />
       </section>
 
       <section className="settings-section" aria-labelledby="settings-memory-behavior">
         <div className="settings-section-head">
-          <h3 id="settings-memory-behavior">Recall and extraction</h3>
+          <h3 id="settings-memory-behavior">{t("memory.behaviorTitle")}</h3>
           <p className="settings-hint">
-            Recall injects matching notes and entries into prompts. Extraction
-            asks the conversation model for up to three pending candidates after
-            a turn; nothing extracted is injected until you approve it.
+            {t("memory.behaviorHint")}
           </p>
         </div>
         <form className="settings-form" onSubmit={(event) => void handleSettingsSave(event)}>
@@ -457,7 +529,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               disabled={settingsBusy}
               onChange={(event) => setRecall(event.target.checked)}
             />
-            <span>Recall memory in prompts</span>
+            <span>{t("memory.recallInPrompts")}</span>
           </label>
           <label className="context-toggle">
             <input
@@ -466,11 +538,11 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               disabled={settingsBusy}
               onChange={(event) => setExtraction(event.target.checked)}
             />
-            <span>Extract pending candidates after conversation turns</span>
+            <span>{t("memory.extractCandidates")}</span>
           </label>
           <div className="memory-budgets">
             <label className="field">
-              <span>Notes budget (tokens)</span>
+              <span>{t("memory.notesBudget")}</span>
               <input
                 type="number"
                 min={100}
@@ -482,7 +554,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               />
             </label>
             <label className="field">
-              <span>Recall budget (tokens)</span>
+              <span>{t("memory.recallBudget")}</span>
               <input
                 type="number"
                 min={100}
@@ -496,11 +568,15 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
           </div>
           <div className="settings-form-actions">
             <button type="submit" className="primary-button" disabled={settingsBusy}>
-              {settingsBusy ? "Saving…" : "Save memory settings"}
+              {settingsBusy
+                ? t("memory.saving")
+                : t("memory.saveSettings")}
             </button>
             {settings ? (
               <span className="settings-meta-inline">
-                Updated {formatDateTime(settings.updated_at)}
+                {t("memory.updated", {
+                  date: formatDateTime(settings.updated_at),
+                })}
               </span>
             ) : null}
           </div>
@@ -517,17 +593,91 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
         </form>
       </section>
 
+      <section className="settings-section" aria-labelledby="settings-memory-recall">
+        <div className="settings-section-head">
+          <h3 id="settings-memory-recall">{t("memory.previewTitle")}</h3>
+          <p className="settings-hint">
+            {t("memory.previewHint")}
+          </p>
+        </div>
+        <form className="settings-form" onSubmit={(event) => void handleRecallPreview(event)}>
+          <div className="memory-budgets">
+            <label className="field">
+              <span>{t("memory.agent")}</span>
+              <select
+                value={recallAgent}
+                disabled={recallBusy}
+                onChange={(event) => setRecallAgent(event.target.value)}
+              >
+                <option value="">{t("memory.chooseAgent")}</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>{t("memory.conversationOptional")}</span>
+              <select
+                value={recallChannel}
+                disabled={recallBusy}
+                onChange={(event) => setRecallChannel(event.target.value)}
+              >
+                <option value="">{t("memory.workspaceOnly")}</option>
+                {conversations.map((summary) => (
+                  <option key={summary.channel.id} value={summary.channel.id}>
+                    {summary.channel.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="field">
+            <span>{t("memory.query")}</span>
+            <input
+              value={recallQuery}
+              placeholder={t("memory.queryPlaceholder")}
+              disabled={recallBusy}
+              onChange={(event) => setRecallQuery(event.target.value)}
+            />
+          </label>
+          <div className="settings-form-actions">
+            <button type="submit" className="primary-button" disabled={recallBusy}>
+              {recallBusy
+                ? t("memory.ranking")
+                : t("memory.previewRecall")}
+            </button>
+          </div>
+          {recallNotice ? (
+            <p className="settings-notice" role="status">
+              {recallNotice}
+            </p>
+          ) : null}
+          {recallPreview ? (
+            <div className="settings-subsection">
+              <p className="settings-hint">
+                {t("memory.previewSummary", {
+                  tokens: recallPreview.tokens,
+                  count: recallPreview.entry_ids.length,
+                })}
+              </p>
+              <pre className="memory-recall-block">{recallPreview.block}</pre>
+            </div>
+          ) : null}
+        </form>
+      </section>
+
       <section className="settings-section" aria-labelledby="settings-memory-add">
         <div className="settings-section-head">
-          <h3 id="settings-memory-add">Add a memory</h3>
+          <h3 id="settings-memory-add">{t("memory.addTitle")}</h3>
           <p className="settings-hint">
-            Leave agent and conversation empty for a workspace-shared entry.
-            Pick both to scope it to one agent in one conversation.
+            {t("memory.addHint")}
           </p>
         </div>
         <form className="settings-form" onSubmit={(event) => void handleAdd(event)}>
           <label className="field">
-            <span>Content</span>
+            <span>{t("memory.content")}</span>
             <textarea
               value={newContent}
               rows={3}
@@ -538,7 +688,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
           </label>
           <div className="memory-budgets">
             <label className="field">
-              <span>Kind</span>
+              <span>{t("memory.kindLabel")}</span>
               <select
                 value={newKind}
                 disabled={addBusy}
@@ -546,19 +696,19 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               >
                 {kinds.map((kind) => (
                   <option key={kind} value={kind}>
-                    {kind}
+                    {t(kindKeys[kind])}
                   </option>
                 ))}
               </select>
             </label>
             <label className="field">
-              <span>Agent</span>
+              <span>{t("memory.agent")}</span>
               <select
                 value={newAgent}
                 disabled={addBusy}
                 onChange={(event) => setNewAgent(event.target.value)}
               >
-                <option value="">Shared (no agent)</option>
+                <option value="">{t("memory.sharedNoAgent")}</option>
                 {agents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.name}
@@ -567,13 +717,13 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               </select>
             </label>
             <label className="field">
-              <span>Conversation</span>
+              <span>{t("memory.conversation")}</span>
               <select
                 value={newChannel}
                 disabled={addBusy}
                 onChange={(event) => setNewChannel(event.target.value)}
               >
-                <option value="">Workspace-wide</option>
+                <option value="">{t("memory.workspaceWide")}</option>
                 {conversations.map((conversation) => (
                   <option
                     key={conversation.channel.id}
@@ -592,7 +742,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               disabled={addBusy}
               onChange={(event) => setNewPinned(event.target.checked)}
             />
-            <span>Pin this entry</span>
+            <span>{t("memory.pinEntry")}</span>
           </label>
           <div className="settings-form-actions">
             <button
@@ -600,7 +750,7 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
               className="primary-button"
               disabled={addBusy || !newContent.trim()}
             >
-              {addBusy ? "Adding…" : "Add memory"}
+              {addBusy ? t("memory.adding") : t("memory.add")}
             </button>
           </div>
         </form>
@@ -608,29 +758,28 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
 
       <section className="settings-section" aria-labelledby="settings-memory-entries">
         <div className="settings-section-head">
-          <h3 id="settings-memory-entries">Memory entries</h3>
+          <h3 id="settings-memory-entries">{t("memory.entriesTitle")}</h3>
           <p className="settings-hint">
-            Archived entries stay visible but are never injected. Pinned entries
-            are recalled before scored entries.
+            {t("memory.entriesHint")}
           </p>
         </div>
         <div className="memory-filters">
           <label className="field">
-            <span>Status</span>
+            <span>{t("memory.statusLabel")}</span>
             <select
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as MemoryStatus | "")
               }
             >
-              <option value="">All statuses</option>
-              <option value="active">Active</option>
-              <option value="pending">Pending</option>
-              <option value="archived">Archived</option>
+              <option value="">{t("memory.allStatuses")}</option>
+              <option value="active">{t("memory.status.active")}</option>
+              <option value="pending">{t("memory.status.pending")}</option>
+              <option value="archived">{t("memory.status.archived")}</option>
             </select>
           </label>
           <label className="field">
-            <span>Scope</span>
+            <span>{t("memory.scopeLabel")}</span>
             <select
               value={scopeFilter}
               onChange={(event) =>
@@ -639,18 +788,18 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
             >
               {scopeOptions.map((option) => (
                 <option key={option.id} value={option.id}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span>Agent</span>
+            <span>{t("memory.agent")}</span>
             <select
               value={agentFilter}
               onChange={(event) => setAgentFilter(event.target.value)}
             >
-              <option value="">All agents</option>
+              <option value="">{t("memory.allAgents")}</option>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name}
@@ -659,12 +808,12 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
             </select>
           </label>
           <label className="field">
-            <span>Conversation</span>
+            <span>{t("memory.conversation")}</span>
             <select
               value={channelFilter}
               onChange={(event) => setChannelFilter(event.target.value)}
             >
-              <option value="">All conversations</option>
+              <option value="">{t("memory.allConversations")}</option>
               {conversations.map((conversation) => (
                 <option
                   key={conversation.channel.id}
@@ -689,19 +838,19 @@ export default function MemorySettings({ agents }: MemorySettingsProps) {
         ) : null}
 
         {listBusy && visibleEntries.length === 0 ? (
-          <p className="settings-empty">Loading memory…</p>
+          <p className="settings-empty">{t("memory.loading")}</p>
         ) : (
           <>
-            <h4 className="memory-group-title">Pending review</h4>
+            <h4 className="memory-group-title">{t("memory.pendingReview")}</h4>
             {pending.length === 0 ? (
-              <p className="settings-empty">No pending candidates.</p>
+              <p className="settings-empty">{t("memory.noPending")}</p>
             ) : (
               <ul className="memory-list">{pending.map(renderEntry)}</ul>
             )}
 
-            <h4 className="memory-group-title">Entries</h4>
+            <h4 className="memory-group-title">{t("memory.entries")}</h4>
             {listed.length === 0 ? (
-              <p className="settings-empty">No entries match these filters.</p>
+              <p className="settings-empty">{t("memory.noMatch")}</p>
             ) : (
               <ul className="memory-list">{listed.map(renderEntry)}</ul>
             )}

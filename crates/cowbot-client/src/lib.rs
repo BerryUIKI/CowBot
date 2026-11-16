@@ -1,9 +1,9 @@
 //! Transport-neutral client boundary for CowBot.
 //!
-//! Local mode calls the core in-process. A future remote implementation will
-//! speak to `cowbot-server` over HTTP and WebSocket behind the same [`Client`]
-//! trait, so the desktop UI and CLI never depend on storage or service types
-//! directly (ADR-0001, ADR-0007).
+//! Local mode calls the core in-process; remote mode (`RemoteClient`) speaks to
+//! `cowbot-server` over HTTP and WebSocket behind the same [`Client`] trait, so
+//! the desktop UI and CLI never depend on storage or service types directly
+//! (ADR-0001, ADR-0007, ADR-0045).
 
 use async_trait::async_trait;
 use cowbot_core::agent::{AgentId, AgentProfile};
@@ -13,7 +13,7 @@ use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage};
 use cowbot_core::conversation::{
     ChannelParticipant, ConversationContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn,
+    ConversationTurn, TurnId,
 };
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
@@ -27,10 +27,12 @@ use cowbot_core::run::{Run, RunId, ToolCallRecord};
 use cowbot_core::task::{Task, TaskId};
 use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
+use cowbot_core::worktree::TaskWorktree;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
 mod local;
+mod remote;
 
 pub use cowbot_package::MAX_PACKAGE_BYTES;
 pub use cowbot_service::{
@@ -38,6 +40,7 @@ pub use cowbot_service::{
     NewMemory, NoteSave, RecalledMemory, TaskRunPreview,
 };
 pub use local::LocalClient;
+pub use remote::RemoteClient;
 
 /// User identity as seen by the client.
 ///
@@ -157,7 +160,7 @@ pub struct ConversationSummary {
 }
 
 /// The workspace note and, when one conversation is selected, its note.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct MemoryNotes {
     pub workspace: Option<Note>,
     pub conversation: Option<Note>,
@@ -355,6 +358,12 @@ pub trait Client: Send + Sync {
     async fn list_run_tasks(&self, task_id: &TaskId) -> CowResult<Vec<Task>>;
     async fn get_task(&self, task_id: &TaskId) -> CowResult<Option<Task>>;
     async fn cancel_task(&self, task_id: &TaskId, reason: &str) -> CowResult<()>;
+    /// Stop a running turn: a conversation reply, a group reply, or a task run.
+    ///
+    /// Idempotent: an unknown or already finished turn returns `false` and does
+    /// nothing. A stopped turn keeps the text it produced, stored with a
+    /// stopped marker (ADR-0041).
+    async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool>;
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     async fn unarchive_task(&self, task_id: &TaskId) -> CowResult<Task>;
     /// Approve the Plan-mode artifact stored with a task.
@@ -416,6 +425,18 @@ pub trait Client: Send + Sync {
     async fn import_template(&self, json: &str) -> CowResult<TemplateDocument>;
     async fn export_template(&self, id: &str) -> CowResult<String>;
     async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>>;
+    /// Request a git worktree for a task.
+    ///
+    /// Local mode prepares one on disk; server mode has no filesystem to
+    /// prepare it on and reports that plainly.
+    async fn request_task_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree>;
+
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
     async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
 }

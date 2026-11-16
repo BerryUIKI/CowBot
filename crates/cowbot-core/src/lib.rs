@@ -2,6 +2,7 @@ pub mod agent;
 pub mod approval;
 pub mod assignment;
 pub mod audit;
+pub mod cancel;
 pub mod channel;
 pub mod command;
 pub mod conversation;
@@ -18,6 +19,7 @@ pub mod run;
 pub mod task;
 pub mod template;
 pub mod tool;
+pub mod turn;
 pub mod usage;
 pub mod worktree;
 
@@ -31,20 +33,21 @@ pub use assignment::{
     AssignmentStatus, ReplyMode, MAX_ASSIGNMENT_DEPTH,
 };
 pub use audit::{AuditEvent, AuditSource};
+pub use cancel::{CancelSignal, CancelWait};
 pub use channel::{Channel, ChannelId, ChannelMessage, Sender};
 pub use command::{
     command_catalogue, find_command, parse_command, CommandArg, CommandArgKind, CommandInvocation,
     CommandParse, CommandSpec, CommandTarget, APPROVAL_CHOICES, COMMANDS, SETTINGS_CHOICES,
 };
 pub use conversation::{
-    compaction_split, compaction_split_by, context_entry_tokens, context_usage_state,
-    project_context, usable_window, CacheUsageSummary, ChannelKind, ChannelParticipant,
-    CompactionOutcome, ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind,
-    ContextProjection, ContextRole, ContextToolCall, ContextUsageState, ConversationContext,
-    ConversationMode, ConversationParticipantContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn, RouteSource, TurnId, CONTEXT_KEEP_RECENT_TOKENS,
-    CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS, DEFAULT_COMPACT_THRESHOLD,
-    MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    clean_group_reply, compaction_split_by, context_entry_tokens, context_usage_state,
+    next_rotation, project_context, usable_window, CacheUsageSummary, ChannelKind,
+    ChannelParticipant, CompactionOutcome, ContextEntry, ContextEntryKind, ContextEvent,
+    ContextEventKind, ContextProjection, ContextRole, ContextToolCall, ContextUsageState,
+    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode, TurnId,
+    CONTEXT_KEEP_RECENT_TOKENS, CONTEXT_SUMMARY_INPUT_TOKENS, CONTEXT_WINDOW_BUFFER_TOKENS,
+    DEFAULT_COMPACT_THRESHOLD, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
 };
 pub use error::{CowError, CowResult};
 pub use event::{Event, EventPayload};
@@ -53,13 +56,13 @@ pub use identity::{
 };
 pub use memory::{
     clamp_memory_budget, plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,
-    render_memory_entry, render_notes_for_prompt, select_recalled_entries, truncate_to_tokens,
-    MemoryEntry, MemoryKind, MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note,
-    RecallCandidate, RecallPlan, RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome,
-    ScoredMemory, CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS,
-    DEFAULT_RECALL_BUDGET_TOKENS, MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER,
-    MEMORY_ENTRY_MAX_CHARS, MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS,
-    MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER, WORKSPACE_NOTE_TITLE,
+    render_memory_entry, render_notes_for_prompt, truncate_to_tokens, MemoryEntry, MemoryKind,
+    MemoryScope, MemorySettings, MemorySource, MemoryStatus, Note, RecallCandidate, RecallPlan,
+    RecallPreview, RecallSkipReason, RecallTrace, RedactionOutcome, ScoredMemory,
+    CONVERSATION_NOTE_TITLE, DEFAULT_NOTES_BUDGET_TOKENS, DEFAULT_RECALL_BUDGET_TOKENS,
+    MAX_MEMORY_BUDGET_TOKENS, MEMORY_BLOCK_HEADER, MEMORY_ENTRY_MAX_CHARS,
+    MEMORY_EXTRACTED_MAX_CHARS, MEMORY_NOTE_MAX_CHARS, MIN_MEMORY_BUDGET_TOKENS, TRUNCATION_MARKER,
+    WORKSPACE_NOTE_TITLE,
 };
 pub use mention::{
     is_broadcast_mention, parse_mentions, resolve_mentions, MentionResolution, BROADCAST_MENTIONS,
@@ -85,6 +88,7 @@ pub use template::{
     AgentTemplate, TaskTemplate, Template, TemplateDocument, TemplateKind, TEMPLATE_SCHEMA_VERSION,
 };
 pub use tool::{Tool, ToolAuthorization, ToolCall, ToolDefinition, ToolGate, ToolResult};
+pub use turn::{PendingApproval, TurnControl, TurnEvent, TurnOutcome, TurnTarget};
 pub use usage::{
     estimate_json_tokens, estimate_tokens, EstimateTokenCounter, LlmCallKind, LlmCallRecord,
     LlmCallUsage, LlmUsageRecorder, TokenCounter, TokenSource, TokenUsage, UsageTotals,

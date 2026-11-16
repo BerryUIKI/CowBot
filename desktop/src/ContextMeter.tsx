@@ -3,10 +3,12 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import NotesEditor from "./NotesEditor";
 import { formatTokens } from "./format";
+import { t } from "./i18n/catalog";
 import type {
   CacheUsageSummary,
   ConversationContext,
   ConversationParticipantView,
+  RoutingMode,
 } from "./types";
 
 interface ContextMeterProps {
@@ -14,14 +16,18 @@ interface ContextMeterProps {
   busy: boolean;
   /** Increment to open the popover from outside, such as from \`/note\`. */
   openSignal?: number;
+  placement?: "header" | "composer";
   onCompact: (agentId?: string) => void;
-  onClear: (agentId?: string) => void;
-  onAutoCompactChange: (enabled: boolean) => void;
-  onThresholdChange: (threshold: number) => void;
+  onClear: (agentId?: string) => void;  onAutoCompactChange: (enabled: boolean) => void;  onThresholdChange: (threshold: number) => void;
   onRouterChange: (enabled: boolean) => void;
   onDefaultResponderChange: (agentId: string) => void;
+  onRoutingModeChange: (mode: RoutingMode) => void;
+  onMutedChange: (agentIds: string[]) => void;
+  onReplyCleanupChange: (enabled: boolean) => void;
   onMemoryChanged: () => void;
   onNewConversation: () => void;
+  /** Open Settings → Models, where a model's context window is set. */
+  onOpenModelSettings: () => void;
   /** Open the read-only prompt and recall inspector for one participant. */
   onInspect: (agentId: string) => void;
 }
@@ -51,37 +57,21 @@ function cacheRate(summary: CacheUsageSummary): number | null {
 
 function cacheLabel(summary: CacheUsageSummary): string {
   const rate = cacheRate(summary);
-  if (rate === null) return "No usage recorded";
-  return `${Math.round(rate * 100)}% cached · ${formatTokens(
-    summary.cached_input_tokens,
-  )} of ${formatTokens(summary.total_input_tokens)} input`;
+  if (rate === null) return t("context.meter.cacheNone");
+  return t("context.meter.cacheValue", {
+    percent: Math.round(rate * 100),
+    cached: formatTokens(summary.cached_input_tokens),
+    total: formatTokens(summary.total_input_tokens),
+  });
 }
 
 /** How the meter's token numbers were counted. */
 function tokenSourceLabel(context: ConversationContext): string {
-  if (context.token_source === "estimate") return "Estimated from characters";
+  if (context.token_source === "estimate") {
+    return t("context.meter.sourceEstimated");
+  }
   const counter = context.token_counter ?? context.token_source;
-  return `Exact · ${counter}`;
-}
-
-/** View values for a backend that predates per-participant contexts. */
-function fallbackParticipant(context: ConversationContext): ConversationParticipantView {
-  return {
-    agent_id: context.agent_id,
-    agent_name: "",
-    system_tokens: context.system_tokens,
-    tool_tokens: context.tool_tokens,
-    history_tokens: context.history_tokens,
-    latest_tokens: context.latest_tokens,
-    total_tokens: context.total_tokens,
-    memory_tokens: context.memory_tokens,
-    active_entries: context.active_entries,
-    excluded_entries: context.excluded_entries,
-    percent_used: context.percent_used,
-    state: context.state,
-    cache_last_run: context.cache_last_turn,
-    cache_conversation: context.cache_conversation,
-  };
+  return t("context.meter.sourceExactWithCounter", { counter });
 }
 
 interface ContextSegment {
@@ -110,12 +100,16 @@ function buildContextBar(
   const segments: ContextSegment[] = [
     {
       id: "messages",
-      label: "Messages",
+      label: t("context.meter.messages"),
       tokens: current.history_tokens + current.latest_tokens,
     },
-    { id: "memory", label: "Memory", tokens: current.memory_tokens },
-    { id: "system", label: "System prompt", tokens: current.system_tokens },
-    { id: "tools", label: "Tools", tokens: current.tool_tokens },
+    { id: "memory", label: t("context.meter.memoryNext"), tokens: current.memory_tokens },
+    {
+      id: "system",
+      label: t("context.meter.systemPrompt"),
+      tokens: current.system_tokens,
+    },
+    { id: "tools", label: t("context.meter.tools"), tokens: current.tool_tokens },
   ].map((segment) => ({
     ...segment,
     percent: (segment.tokens / usable) * 100,
@@ -154,14 +148,19 @@ export default function ContextMeter({
   context,
   busy,
   openSignal = 0,
+  placement = "header",
   onCompact,
   onClear,
   onAutoCompactChange,
   onThresholdChange,
   onRouterChange,
   onDefaultResponderChange,
+  onRoutingModeChange,
+  onMutedChange,
+  onReplyCleanupChange,
   onMemoryChanged,
   onNewConversation,
+  onOpenModelSettings,
   onInspect,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
@@ -190,10 +189,7 @@ export default function ContextMeter({
     if (openSignal > 0) setOpen(true);
   }, [openSignal]);
 
-  const participants =
-    context.participants.length > 0
-      ? context.participants
-      : [fallbackParticipant(context)];
+  const participants = context.participants;
   const group = participants.length > 1;
   const index = Math.min(activeIndex, participants.length - 1);
   const current = participants[index];
@@ -212,8 +208,12 @@ export default function ContextMeter({
   // context meter labels that segment separately (ADR-0035).
   const exact = context.token_source === "tiktoken" || context.token_source === "provider";
   const sourceNote = exact
-    ? `exact count${context.token_counter ? ` (${context.token_counter})` : ""}`
-    : "estimated count";
+    ? context.token_counter
+      ? t("context.meter.sourceExactWithCounter", {
+          counter: context.token_counter,
+        })
+      : t("context.meter.sourceExact")
+    : t("context.meter.sourceEstimated");
   const tabId = (position: number) => `context-tab-${context.channel_id}-${position}`;
   const panelId = `context-panel-${context.channel_id}`;
 
@@ -236,65 +236,92 @@ export default function ContextMeter({
   }
 
   return (
-    <div className="context-meter-wrap" ref={rootRef}>
+    <div
+      className={`context-meter-wrap${
+        placement === "composer" ? " composer-context" : ""
+      }`}
+      ref={rootRef}
+    >
       <button
         type="button"
         className={`context-meter context-${state}`}
-        aria-label="Conversation context usage"
+        aria-label={t("context.meter.ringAria")}
         aria-expanded={open}
         title={
           group
             ? percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in the fullest branch (${current.agent_name}) · ${sourceNote}`
-              : `${Math.round(percent)}% used in the fullest participant branch · ${sourceNote}`
+              ? t("context.meter.groupTitleUnknown", {
+                  tokens: formatTokens(worst.total_tokens),
+                  name: current.agent_name,
+                  source: sourceNote,
+                })
+              : t("context.meter.groupTitle", {
+                  percent: Math.round(percent),
+                  source: sourceNote,
+                })
             : percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in context · ${sourceNote}`
-              : `${Math.round(percent)}% of the usable context window · ${sourceNote}`
+              ? t("context.meter.singleTitleUnknown", {
+                  tokens: formatTokens(worst.total_tokens),
+                  source: sourceNote,
+                })
+              : t("context.meter.singleTitle", {
+                  percent: Math.round(percent),
+                  source: sourceNote,
+                })
         }
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
-        {percent === null ? (
-          <span className="context-absolute">
-            <strong>{formatTokens(worst.total_tokens)}</strong> tokens
-          </span>
-        ) : (
-          <>
-            <svg className="context-ring" viewBox="0 0 32 32" aria-hidden="true">
-              <circle className="context-ring-track" cx="16" cy="16" r={RADIUS} />
-              <circle
-                className="context-ring-fill"
-                cx="16"
-                cy="16"
-                r={RADIUS}
-                strokeDasharray={CIRCUMFERENCE}
-                strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}
-              />
-            </svg>
-            <span className="context-percent">{Math.round(percent)}%</span>
-          </>
-        )}
+        <svg
+          className={`context-ring${percent === null ? " context-ring-unknown" : ""}`}
+          viewBox="0 0 32 32"
+          aria-hidden="true"
+        >
+          <circle className="context-ring-track" cx="16" cy="16" r={RADIUS} />
+          {percent === null ? null : (
+            <circle
+              className="context-ring-fill"
+              cx="16"
+              cy="16"
+              r={RADIUS}
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}
+            />
+          )}
+        </svg>
       </button>
 
       {open ? (
         <div
           className="context-popover"
           role="dialog"
-          aria-label="Context usage"
+          aria-label={t("context.meter.popoverAria")}
         >
           <div className="context-popover-head">
-            <h3>Context</h3>
-            <span className={`context-state context-${state}`}>
-              {percent === null
-                ? "Window unknown"
-                : `${Math.round(percent)}% used · ${Math.max(
-                    0,
-                    Math.round(100 - percent),
-                  )}% left`}
+            <h3>{t("context.meter.windowTitle")}</h3>
+            <span className="context-head-usage">
+              {bar && current.percent_used !== null
+                ? t("context.meter.headUsage", {
+                    used: formatTokens(bar.used),
+                    usable: formatTokens(bar.usable),
+                    percent: Math.round(current.percent_used),
+                  })
+                : t("context.meter.headTokens", {
+                    tokens: formatTokens(current.total_tokens),
+                  })}
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path d="m9 6 6 6-6 6" />
+              </svg>
             </span>
           </div>
 
           {group ? (
-            <div className="context-tabs" role="tablist" aria-label="Participants">
+            <div className="context-tabs" role="tablist" aria-label={t("context.meter.participantsAria")}>
               {participants.map((participant, position) => (
                 <button
                   key={participant.agent_id}
@@ -310,7 +337,7 @@ export default function ContextMeter({
                   onClick={() => setActiveIndex(position)}
                   onKeyDown={(event) => handleTabKey(event, position)}
                 >
-                  {participant.agent_name || "Participant"}
+                  {participant.agent_name || t("context.meter.participantFallback")}
                 </button>
               ))}
             </div>
@@ -322,39 +349,16 @@ export default function ContextMeter({
             aria-labelledby={group ? tabId(index) : undefined}
           >
             {bar ? (
-              <>
-                <div className="context-summary">
-                  <span>
-                    {formatTokens(current.total_tokens)} /{" "}
-                    {formatTokens(bar.usable)}
-                    {current.percent_used === null
-                      ? ""
-                      : ` (${Math.round(current.percent_used)}%)`}
-                  </span>
-                  <span className="context-until">
-                    {bar.untilAutoCompact === null
-                      ? "Automatic compaction off"
-                      : `${formatTokens(bar.untilAutoCompact)} until auto-compact`}
-                  </span>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    disabled={busy}
-                    onClick={() => onCompact(group ? current.agent_id : undefined)}
-                  >
-                    {busy ? "Compacting…" : "Compact now"}
-                  </button>
-                </div>
-
-                <div
-                  className="context-bar"
-                  role="img"
-                  aria-label={`Context used: ${formatTokens(
-                    bar.used,
-                  )} of ${formatTokens(bar.usable)} tokens`}
-                >
-                  {bar.segments
-                    .filter((segment) => segment.tokens > 0)
+              <div
+                className="context-bar"
+                role="img"
+                aria-label={t("context.meter.barAria", {
+                  used: formatTokens(bar.used),
+                  usable: formatTokens(bar.usable),
+                })}
+              >
+                {bar.segments
+                  .filter((segment) => segment.tokens > 0)
                     .map((segment) => (
                       <span
                         key={segment.id}
@@ -377,66 +381,36 @@ export default function ContextMeter({
                     />
                   ) : null}
                 </div>
-
-                <ul className="context-legend">
-                  {bar.segments.map((segment) => (
-                    <li key={segment.id}>
-                      <span
-                        className={`context-swatch ${segmentClasses[segment.id]}`}
-                        aria-hidden="true"
-                      />
-                      <span className="context-legend-label">
-                        {segment.id === "memory" && exact
-                          ? "Memory (estimated)"
-                          : segment.label}
-                      </span>
-                      <span className="context-legend-value">
-                        {formatTokens(segment.tokens)} ·{" "}
-                        {Math.round(segment.percent)}%
-                      </span>
-                    </li>
-                  ))}
-                  <li>
-                    <span
-                      className="context-swatch context-bar-free"
-                      aria-hidden="true"
-                    />
-                    <span className="context-legend-label">Free space</span>
-                    <span className="context-legend-value">
-                      {formatTokens(bar.freeTokens)} ·{" "}
-                      {Math.round((bar.freeTokens / bar.usable) * 100)}%
-                    </span>
-                  </li>
-                  {context.auto_compact ? (
-                    <li>
-                      <span
-                        className="context-swatch context-bar-buffer"
-                        aria-hidden="true"
-                      />
-                      <span className="context-legend-label">
-                        Auto-compact buffer
-                      </span>
-                      <span className="context-legend-value">
-                        {formatTokens(bar.bufferTokens)} ·{" "}
-                        {Math.round((bar.bufferTokens / bar.usable) * 100)}%
-                      </span>
-                    </li>
-                  ) : null}
-                </ul>
-              </>
             ) : (
-              <p className="context-ratio">
-                {formatTokens(current.total_tokens)} tokens · set the model
-                context window in Settings → Models to see a percentage
-              </p>
+              <div className="context-unknown">
+                <p className="context-ratio">
+                  {t("context.meter.unknownText", {
+                    tokens: formatTokens(current.total_tokens),
+                  })}
+                </p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenModelSettings();
+                  }}
+                >
+                  {t("context.meter.setWindow")}
+                </button>
+              </div>
             )}
 
             {full ? (
               <div className="context-full-warning" role="alert">
-                <strong>Context full.</strong>{" "}
+                <strong>{t("context.meter.fullTitle")}</strong>{" "}
                 {group
-                  ? `${current.agent_name || "This participant"} is skipped until this branch is compacted or cleared.`
-                  : "Sending is blocked until you compact, clear, or start a new conversation."}
+                  ? t("context.meter.fullGroup", {
+                      name:
+                        current.agent_name ||
+                        t("context.meter.participantFallback"),
+                    })
+                  : t("context.meter.fullSingle")}
                 <div className="context-actions">
                   <button
                     type="button"
@@ -444,14 +418,14 @@ export default function ContextMeter({
                     disabled={busy}
                     onClick={() => onCompact(group ? current.agent_id : undefined)}
                   >
-                    Compact now
+                    {t("context.meter.compactNow")}
                   </button>
                   <button
                     type="button"
                     className="ghost-button"
                     onClick={onNewConversation}
                   >
-                    New conversation
+                    {t("context.meter.newConversation")}
                   </button>
                 </div>
               </div>
@@ -463,184 +437,271 @@ export default function ContextMeter({
               aria-expanded={showDetails}
               onClick={() => setShowDetails((shown) => !shown)}
             >
-              {showDetails ? "Hide detailed breakdown" : "See detailed breakdown"}
+              {showDetails
+                ? t("context.meter.hideDetails")
+                : t("context.meter.showDetails")}
             </button>
 
             {showDetails ? (
               <>
                 <dl className="context-breakdown">
                   <div>
-                    <dt>System prompt</dt>
+                    <dt>{t("context.meter.systemPrompt")}</dt>
                     <dd>{formatTokens(current.system_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>Tools</dt>
+                    <dt>{t("context.meter.tools")}</dt>
                     <dd>{formatTokens(current.tool_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>History</dt>
+                    <dt>{t("context.meter.history")}</dt>
                     <dd>{formatTokens(current.history_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>Latest message</dt>
+                    <dt>{t("context.meter.latestMessage")}</dt>
                     <dd>{formatTokens(current.latest_tokens)}</dd>
                   </div>
                   <div>
                     <dt>
                       {exact
-                        ? "Memory (next turn, estimated)"
-                        : "Memory (next turn)"}
+                        ? t("context.meter.memoryNextEstimated")
+                        : t("context.meter.memoryNext")}
                     </dt>
                     <dd>{formatTokens(current.memory_tokens)}</dd>
                   </div>
                 </dl>
 
                 <div className="context-cache">
-                  <h4>Cache</h4>
+                  <h4>{t("context.meter.cacheTitle")}</h4>
                   <p>
-                    <span>{group ? "Latest run" : "Last turn"}</span>
+                    <span>
+                      {group
+                        ? t("context.meter.latestRun")
+                        : t("context.meter.lastTurn")}
+                    </span>
                     {cacheLabel(current.cache_last_run)}
                   </p>
                   <p>
-                    <span>{group ? "Conversation total" : "Conversation"}</span>
+                    <span>
+                      {group
+                        ? t("context.meter.conversationTotal")
+                        : t("context.meter.conversation")}
+                    </span>
                     {cacheLabel(current.cache_conversation)}
                   </p>
                 </div>
+                            {group ? (
+                              <div className="context-routing">
+                                <h4>{t("context.meter.routingTitle")}</h4>
+                                <label className="context-default-responder">
+                                  <span>{t("context.meter.unaddressedQuestion")}</span>
+                                  <select
+                                    value={context.routing_mode}
+                                    disabled={busy}
+                                    onChange={(event) =>
+                                      onRoutingModeChange(event.target.value as RoutingMode)
+                                    }
+                                  >
+                                    <option value="mention">
+                                      {t("context.meter.routingMention")}
+                                    </option>
+                                    <option value="rotation">
+                                      {t("context.meter.routingRotation")}
+                                    </option>
+                                    <option value="default">
+                                      {t("context.meter.routingDefault")}
+                                    </option>
+                                  </select>
+                                </label>
+                                {context.routing_mode === "mention" ? (
+                                  <label className="context-toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={context.router_enabled}
+                                      disabled={busy}
+                                      onChange={(event) => onRouterChange(event.target.checked)}
+                                    />
+                                    <span>{t("context.meter.routeWithModel")}</span>
+                                  </label>
+                                ) : null}
+                                <div className="context-mute">
+                                  <span>{t("context.meter.mute")}</span>
+                                  <div className="context-mute-list">
+                                    {participants.map((participant) => {
+                                      const muted = context.muted_participants.includes(
+                                        participant.agent_id,
+                                      );
+                                      return (
+                                        <label key={participant.agent_id} className="context-mute-item">
+                                          <input
+                                            type="checkbox"
+                                            checked={muted}
+                                            disabled={busy}
+                                            onChange={() =>
+                                              onMutedChange(
+                                                muted
+                                                  ? context.muted_participants.filter(
+                                                      (id) => id !== participant.agent_id,
+                                                    )
+                                                  : [...context.muted_participants, participant.agent_id],
+                                              )
+                                            }
+                                          />
+                                          <span>{participant.agent_name || participant.agent_id}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="context-hint">
+                                    {t("context.meter.muteHint")}
+                                  </p>
+                                </div>
+                                <label className="context-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={context.reply_cleanup}
+                                    disabled={busy}
+                                    onChange={(event) => onReplyCleanupChange(event.target.checked)}
+                                  />
+                                  <span>{t("context.meter.stripLabels")}</span>
+                                </label>
+                                <label className="context-default-responder">
+                                  <span>{t("context.meter.defaultResponder")}</span>
+                                  <select
+                                    value={context.default_responder ?? ""}
+                                    disabled={busy}
+                                    onChange={(event) => {
+                                      if (event.target.value) {
+                                        onDefaultResponderChange(event.target.value);
+                                      }
+                                    }}
+                                  >
+                                    {context.default_responder === null ? (
+                                      <option value="" disabled>
+                                        {t("context.meter.noneSilent")}
+                                      </option>
+                                    ) : null}
+                                    {participants.map((participant) => (
+                                      <option
+                                        key={participant.agent_id}
+                                        value={participant.agent_id}
+                                      >
+                                        {participant.agent_name || participant.agent_id}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <p className="context-hint">
+                                  {t("context.meter.participantsFixed")}
+                                </p>
+                              </div>
+                            ) : null}
+
+                            <div className="context-settings">
+                              <label className="context-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={context.auto_compact}
+                                  disabled={busy}
+                                  onChange={(event) => onAutoCompactChange(event.target.checked)}
+                                />
+                                <span>{t("context.meter.autoCompact")}</span>
+                              </label>
+                              <label className="context-threshold">
+                                <span>{t("context.meter.at")}</span>
+                                <select
+                                  value={context.compact_threshold}
+                                  disabled={busy || !context.auto_compact}
+                                  onChange={(event) => onThresholdChange(Number(event.target.value))}
+                                  aria-label={t("context.meter.thresholdAria")}
+                                >
+                                  {[60, 70, 80, 90].map((threshold) => (
+                                    <option key={threshold} value={threshold}>
+                                      {threshold}%
+                                    </option>
+                                  ))}
+                                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
+                                    <option value={context.compact_threshold}>
+                                      {context.compact_threshold}%
+                                    </option>
+                                  )}
+                                </select>
+                              </label>
+                            </div>
+
+                            <NotesEditor
+                              channelId={context.channel_id}
+                              label={t("context.meter.conversationNote")}
+                              hint={t("context.meter.conversationNoteHint")}
+                              onChanged={onMemoryChanged}
+                            />
+
+                            <p className="context-meta">
+                              {context.provider_id
+                                ? context.model
+                                : t("context.meter.offlineModel")}
+                              {context.provider_name
+                                ? ` · ${context.provider_name}`
+                                : ""}{" "}
+                              ·{" "}
+                              {context.model_follows_default
+                                ? t("context.meter.followsDefault")
+                                : t("context.meter.pinned")}
+                              {" · "}
+                              {t("context.meter.activeEntries", {
+                                count: current.active_entries,
+                              })}
+                              {current.excluded_entries > 0
+                                ? t("context.meter.excludedEntries", {
+                                    count: current.excluded_entries,
+                                  })
+                                : ""}
+                              {" · "}
+                              {tokenSourceLabel(context)}
+                            </p>
+
+                            <div className="context-actions">
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={() => {
+                                  setOpen(false);
+                                  onInspect(current.agent_id);
+                                }}
+                              >
+                                {t("context.meter.inspect")}
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                disabled={busy}
+                                onClick={() => onClear(group ? current.agent_id : undefined)}
+                              >
+                                {group
+                                  ? t("context.meter.clearBranch")
+                                  : t("context.meter.clearContext")}
+                              </button>
+                              {group ? (
+                                <button
+                                  type="button"
+                                  className="ghost-button"
+                                  disabled={busy}
+                                  onClick={() => onClear()}
+                                >
+                                  {t("context.meter.clearAll")}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={onNewConversation}
+                              >
+                                {t("context.meter.newConversation")}
+                              </button>
+                            </div>
               </>
             ) : null}
 
-            {group ? (
-              <div className="context-routing">
-                <h4>Routing</h4>
-                <label className="context-toggle">
-                  <input
-                    type="checkbox"
-                    checked={context.router_enabled}
-                    disabled={busy}
-                    onChange={(event) => onRouterChange(event.target.checked)}
-                  />
-                  <span>Route unaddressed messages with the model</span>
-                </label>
-                <label className="context-default-responder">
-                  <span>Default responder</span>
-                  <select
-                    value={context.default_responder ?? ""}
-                    disabled={busy}
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        onDefaultResponderChange(event.target.value);
-                      }
-                    }}
-                  >
-                    {context.default_responder === null ? (
-                      <option value="" disabled>
-                        None (unaddressed messages stay silent)
-                      </option>
-                    ) : null}
-                    {participants.map((participant) => (
-                      <option
-                        key={participant.agent_id}
-                        value={participant.agent_id}
-                      >
-                        {participant.agent_name || participant.agent_id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="context-hint">
-                  Participants are fixed at creation. Start a new conversation
-                  for a different team.
-                </p>
-              </div>
-            ) : null}
-
-            <div className="context-settings">
-              <label className="context-toggle">
-                <input
-                  type="checkbox"
-                  checked={context.auto_compact}
-                  disabled={busy}
-                  onChange={(event) => onAutoCompactChange(event.target.checked)}
-                />
-                <span>Compact automatically</span>
-              </label>
-              <label className="context-threshold">
-                <span>at</span>
-                <select
-                  value={context.compact_threshold}
-                  disabled={busy || !context.auto_compact}
-                  onChange={(event) => onThresholdChange(Number(event.target.value))}
-                  aria-label="Automatic compaction threshold percent"
-                >
-                  {[60, 70, 80, 90].map((threshold) => (
-                    <option key={threshold} value={threshold}>
-                      {threshold}%
-                    </option>
-                  ))}
-                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
-                    <option value={context.compact_threshold}>
-                      {context.compact_threshold}%
-                    </option>
-                  )}
-                </select>
-              </label>
-            </div>
-
-            <NotesEditor
-              channelId={context.channel_id}
-              label="Conversation note"
-              hint="Shared with every participant and injected before this branch."
-              onChanged={onMemoryChanged}
-            />
-
-            <p className="context-meta">
-              {context.model}
-              {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
-              {current.active_entries} active
-              {current.excluded_entries > 0
-                ? `, ${current.excluded_entries} excluded`
-                : ""}
-              {" · "}
-              {tokenSourceLabel(context)}
-            </p>
-
-            <div className="context-actions">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => {
-                  setOpen(false);
-                  onInspect(current.agent_id);
-                }}
-              >
-                Inspect
-              </button>
-              <button
-                type="button"
-                className="ghost-button"
-                disabled={busy}
-                onClick={() => onClear(group ? current.agent_id : undefined)}
-              >
-                {group ? "Clear this branch" : "Clear context"}
-              </button>
-              {group ? (
-                <button
-                  type="button"
-                  className="ghost-button"
-                  disabled={busy}
-                  onClick={() => onClear()}
-                >
-                  Clear all
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={onNewConversation}
-              >
-                New conversation
-              </button>
-            </div>
           </div>
         </div>
       ) : null}

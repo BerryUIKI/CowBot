@@ -117,21 +117,6 @@ impl std::str::FromStr for ConversationMode {
     }
 }
 
-impl ConversationMode {
-    /// The mode implied by a participant count.
-    ///
-    /// One participant is a single conversation; two or more are a group. The
-    /// service validates bounds separately because zero is invalid for a
-    /// conversation.
-    pub fn for_participant_count(count: usize) -> Self {
-        if count >= MIN_GROUP_PARTICIPANTS {
-            Self::Group
-        } else {
-            Self::Single
-        }
-    }
-}
-
 /// Default automatic compaction threshold, as a percentage of the usable window.
 pub const DEFAULT_COMPACT_THRESHOLD: u32 = 80;
 
@@ -149,11 +134,28 @@ pub struct ConversationSettings {
     pub provider_id: Option<String>,
     /// Model every turn of this conversation uses.
     pub model: String,
+    /// Whether this conversation follows the desktop's default model.
+    ///
+    /// A following conversation mirrors the default's provider and model
+    /// whenever the default changes, so its meter and compaction keep the
+    /// tokenizer the next turn will use. Settings written before ADR-0049
+    /// deserialize as pinned, which is how they behaved.
+    #[serde(default)]
+    pub model_follows_default: bool,
     /// Participant that answers an unaddressed message, when one is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_responder: Option<AgentId>,
     /// Whether an unaddressed group message may be routed by the model.
     pub router_enabled: bool,
+    /// How an unmentioned group message picks its responder (ADR-0042).
+    #[serde(default)]
+    pub routing_mode: RoutingMode,
+    /// Participants kept in the roster and history but never selected.
+    #[serde(default)]
+    pub muted_participants: Vec<AgentId>,
+    /// Whether a group reply is stripped of speaker labels and cross-talk.
+    #[serde(default = "default_true")]
+    pub reply_cleanup: bool,
     /// Whether the runtime may compact the context automatically.
     pub auto_compact: bool,
     /// Percentage of the usable window that triggers automatic compaction.
@@ -174,8 +176,12 @@ impl ConversationSettings {
             mode: ConversationMode::Single,
             provider_id,
             model: model.into(),
+            model_follows_default: true,
             default_responder: None,
             router_enabled: false,
+            routing_mode: RoutingMode::Mention,
+            muted_participants: Vec::new(),
+            reply_cleanup: true,
             auto_compact: false,
             compact_threshold: DEFAULT_COMPACT_THRESHOLD,
             created_at: now,
@@ -208,9 +214,24 @@ pub struct ConversationSettingsUpdate {
     pub compact_threshold: Option<u32>,
     /// Turn automatic routing on or off; single conversations ignore it.
     pub router_enabled: Option<bool>,
+    /// How an unmentioned group message picks its responder.
+    pub routing_mode: Option<RoutingMode>,
+    /// Replace the muted set; participants stay in the roster and history.
+    pub muted_participants: Option<Vec<AgentId>>,
+    /// Strip speaker labels and cross-talk from group replies.
+    pub reply_cleanup: Option<bool>,
     /// Replace the participant that answers unaddressed messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_responder: Option<AgentId>,
+    /// Replace the provider snapshot; an empty string clears it.
+    pub provider_id: Option<String>,
+    /// Replace the model snapshot; the service rejects a blank model.
+    pub model: Option<String>,
+    /// Make the conversation follow, or stop following, the default model.
+    ///
+    /// Following carries the default's provider and model in the same update,
+    /// so a reader never sees the flag without the pair it refers to.
+    pub model_follows_default: Option<bool>,
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
@@ -382,9 +403,9 @@ impl ContextEntry {
     pub fn recount(&mut self) {
         let mut tokens = estimate_tokens(&self.content);
         if let Some(tool_calls) = &self.tool_calls {
-            if let Ok(serialized) = serde_json::to_string(tool_calls) {
-                tokens = tokens.saturating_add(estimate_tokens(&serialized));
-            }
+            let serialized =
+                serde_json::to_string(tool_calls).expect("tool calls always serialize");
+            tokens = tokens.saturating_add(estimate_tokens(&serialized));
         }
         if let Some(tool_call_id) = &self.tool_call_id {
             tokens = tokens.saturating_add(estimate_tokens(tool_call_id));
@@ -466,9 +487,8 @@ impl ContextEvent {
 pub fn context_entry_tokens(counter: &dyn TokenCounter, entry: &ContextEntry) -> u32 {
     let mut tokens = counter.count_message(&entry.content);
     if let Some(tool_calls) = &entry.tool_calls {
-        if let Ok(serialized) = serde_json::to_string(tool_calls) {
-            tokens = tokens.saturating_add(counter.count(&serialized));
-        }
+        let serialized = serde_json::to_string(tool_calls).expect("tool calls always serialize");
+        tokens = tokens.saturating_add(counter.count(&serialized));
     }
     if let Some(tool_call_id) = &entry.tool_call_id {
         tokens = tokens.saturating_add(counter.count(tool_call_id));
@@ -604,6 +624,10 @@ pub struct CompactionOutcome {
     /// nothing-to-summarize paths.
     #[serde(default)]
     pub reason: Option<String>,
+    /// The branch's stored sequence numbers are not usable for compaction, so
+    /// nothing happened and the branch needs a new conversation or a re-import.
+    #[serde(default)]
+    pub invalid_sequences: bool,
 }
 
 /// Result of the guarded store write behind one compaction.
@@ -626,6 +650,161 @@ pub enum CompactionWrite {
     /// The branch was cleared while the summary was being generated. Nothing
     /// was written.
     Empty,
+    /// The branch carries non-positive sequence numbers, which the renumber
+    /// cannot stage. Only an imported or hand-edited database can produce this.
+    /// Nothing was written.
+    InvalidSequences,
+}
+
+/// Strip a group reply of the speaker labels models add on their own.
+///
+/// A model told the `[Name]` convention sometimes answers `Name: ...` anyway,
+/// or keeps writing after another participant's turn would have started. The
+/// cleanup removes a leading prefix for the speaker and cuts the reply at the
+/// first line another participant appears to have written. Direct
+/// conversations never see it, and a user can turn it off per conversation.
+pub fn clean_group_reply(content: &str, speaker: &str, other_participants: &[String]) -> String {
+    let mut lines = content.lines();
+    let first = lines.next().unwrap_or_default();
+    let mut kept: Vec<&str> = Vec::new();
+
+    // A leading `Name:` or `[Name]:` prefix for the speaker is redundant.
+    let mut first_line = first;
+    if let Some(rest) = strip_speaker_prefix(first_line, speaker) {
+        first_line = rest;
+    }
+    kept.push(first_line);
+
+    let others: Vec<&str> = other_participants
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !name.eq_ignore_ascii_case(speaker))
+        .collect();
+    for line in lines {
+        if others
+            .iter()
+            .any(|name| strip_speaker_prefix(line, name).is_some())
+        {
+            break;
+        }
+        kept.push(line);
+    }
+
+    let joined = kept.join(
+        "
+",
+    );
+    let trimmed = joined.trim();
+    // A cut that leaves the reply empty falls back to the original text, so
+    // cleanup never deletes an answer.
+    if trimmed.is_empty() {
+        content.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// The text after a leading `Name:` or `[Name]:` label, when it matches.
+fn strip_speaker_prefix<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let trimmed = line.trim_start();
+    let bracketed = format!("[{name}]");
+    let rest = trimmed
+        .strip_prefix(name)
+        .or_else(|| trimmed.strip_prefix(bracketed.as_str()))?;
+    let rest = rest.trim_start().strip_prefix(':')?;
+    Some(rest.trim_start())
+}
+
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
+/// How an unmentioned group message picks its responder.
+///
+/// An explicit mention always wins, whatever the mode. The mode only decides
+/// what happens when nobody is named (ADR-0042).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    /// The model router decides, when it is enabled.
+    #[default]
+    Mention,
+    /// The participant after the last assistant author takes the turn.
+    Rotation,
+    /// Only the stored default responder answers.
+    Default,
+}
+
+impl RoutingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mention => "mention",
+            Self::Rotation => "rotation",
+            Self::Default => "default",
+        }
+    }
+
+    /// Whether the model router may decide an unmentioned message.
+    ///
+    /// The router only runs in the mode that names it, so a rotation or a fixed
+    /// default never pays for a routing call.
+    pub fn uses_router(self, router_enabled: bool) -> bool {
+        matches!(self, Self::Mention) && router_enabled
+    }
+}
+
+impl std::str::FromStr for RoutingMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mention" => Ok(Self::Mention),
+            "rotation" => Ok(Self::Rotation),
+            "default" => Ok(Self::Default),
+            _ => Err(()),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The participant after `last` in roster order, skipping muted ones.
+///
+/// An unknown or absent last speaker starts the rotation at the first
+/// unmuted participant, so a fresh conversation and a roster change both
+/// behave predictably. Returns `None` when every participant is muted.
+pub fn next_rotation<'a, T>(
+    participants: &'a [T],
+    id_of: impl Fn(&T) -> AgentId,
+    muted: &[AgentId],
+    last: Option<&AgentId>,
+) -> Option<&'a T> {
+    let total = participants.len();
+    if total == 0 {
+        return None;
+    }
+    let is_unmuted = |participant: &T| !muted.contains(&id_of(participant));
+    if !participants.iter().any(is_unmuted) {
+        return None;
+    }
+    let Some(position) = last.and_then(|last| {
+        participants
+            .iter()
+            .position(|participant| &id_of(participant) == last)
+    }) else {
+        return participants
+            .iter()
+            .find(|participant| is_unmuted(participant));
+    };
+    // Walk forward from the last speaker's roster slot, wrapping, and skip
+    // muted participants. An unmuted participant exists, so the walk finds one.
+    let mut index = position;
+    for _ in 0..total {
+        index = (index + 1) % total;
+        if is_unmuted(&participants[index]) {
+            return participants.get(index);
+        }
+    }
+    unreachable!("an unmuted participant was checked above")
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
@@ -637,6 +816,8 @@ pub enum RouteSource {
     Mention,
     /// The router selected the participants.
     Router,
+    /// The roster's turn-taking rotation picked the next participant.
+    Rotation,
     /// No participant was mentioned; the default responder answers.
     Default,
     /// No participant was mentioned and no default responder is configured.
@@ -650,6 +831,7 @@ impl RouteSource {
         match self {
             Self::Mention => "mention",
             Self::Router => "router",
+            Self::Rotation => "rotation",
             Self::Default => "default",
             Self::Silent => "silent",
             Self::Unmatched => "unmatched",
@@ -664,6 +846,7 @@ impl std::str::FromStr for RouteSource {
         match value {
             "mention" => Ok(Self::Mention),
             "router" => Ok(Self::Router),
+            "rotation" => Ok(Self::Rotation),
             "default" => Ok(Self::Default),
             "silent" => Ok(Self::Silent),
             "unmatched" => Ok(Self::Unmatched),
@@ -673,7 +856,11 @@ impl std::str::FromStr for RouteSource {
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
-/// Unique identifier for one routed group message.
+/// Unique identifier for one live turn.
+///
+/// A turn is a group routing decision's id when the turn came from a routed
+/// group message, and is minted fresh for a direct chat, channel, or task turn
+/// (ADR-0041).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub String);
 
@@ -775,9 +962,6 @@ pub fn context_usage_state(
     let Some(window) = window else {
         return (None, ContextUsageState::Unknown);
     };
-    if window == 0 {
-        return (None, ContextUsageState::Unknown);
-    }
     let percent = used_tokens as f32 * 100.0 / window as f32;
     let state = if percent >= 100.0 {
         ContextUsageState::Full
@@ -797,20 +981,19 @@ pub const CONTEXT_KEEP_RECENT_TOKENS: u32 = 2_000;
 /// Largest transcript sent to the summarizer in one compaction call.
 pub const CONTEXT_SUMMARY_INPUT_TOKENS: u32 = 24_000;
 
-/// Where a compaction splits the active branch.
+/// Whether a branch's sequence numbers can be renumbered by a compaction.
 ///
-/// Entries before the returned index are summarized; entries from it onwards
-/// are kept. The split keeps the most recent [`CONTEXT_KEEP_RECENT_TOKENS`],
-/// at least the last two entries, and never separates a tool result from the
-/// assistant message that requested it.
-///
-/// This wrapper prices entries with the persisted estimate. Callers that know
-/// the conversation's model use [`compaction_split_by`] with the model counter
-/// instead (ADR-0035).
-pub fn compaction_split(entries: &[ContextEntry]) -> usize {
-    compaction_split_by(entries, |entry| entry.tokens)
+/// Compaction shifts the kept tail down through negative values so the summary
+/// can take the cutoff, which needs every existing sequence to be positive. An
+/// imported package normalizes them on the way in, so only a hand-edited
+/// database reaches this state — the store checks it again inside its
+/// transaction, and the service checks it before paying for a summary.
+pub fn compaction_sequences_are_valid(entries: &[ContextEntry]) -> bool {
+    entries.iter().all(|entry| entry.seq > 0)
 }
 
+/// Where a compaction splits the active branch.
+///
 /// Where a compaction splits the branch when every entry costs `cost`.
 ///
 /// The cost function lets a caller price entries for the conversation's model,
@@ -913,6 +1096,44 @@ mod tests {
     }
 
     #[test]
+    fn new_settings_follow_the_default_model() {
+        let settings = ConversationSettings::new(
+            ChannelId::new("channel"),
+            Some("provider-1".to_string()),
+            "deepseek-chat",
+        );
+        assert!(settings.model_follows_default);
+
+        let group = ConversationSettings::group(
+            ChannelId::new("group"),
+            None,
+            "deepseek-chat",
+            Some(AgentId::new("agent")),
+        );
+        assert!(group.model_follows_default);
+    }
+
+    #[test]
+    fn settings_without_the_scope_flag_load_as_pinned() {
+        let saved = serde_json::json!({
+            "channel_id": "channel",
+            "mode": "single",
+            "provider_id": "provider-1",
+            "model": "deepseek-chat",
+            "router_enabled": false,
+            "routing_mode": "mention",
+            "muted_participants": [],
+            "reply_cleanup": true,
+            "auto_compact": false,
+            "compact_threshold": 80,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        });
+        let settings: ConversationSettings = serde_json::from_value(saved).unwrap();
+        assert!(!settings.model_follows_default);
+    }
+
+    #[test]
     fn channel_kinds_round_trip_through_strings() {
         for kind in [
             ChannelKind::Channel,
@@ -956,7 +1177,7 @@ mod tests {
         // The tail budget reaches the first tool result; the split moves back
         // so the assistant that requested those tools is also summarized only
         // when the whole pair group moves together.
-        let split = compaction_split(&entries);
+        let split = compaction_split_by(&entries, |entry| entry.tokens);
         assert!(split <= entries.len() - 2);
         assert_ne!(entries[split].role, ContextRole::Tool);
     }
@@ -968,8 +1189,8 @@ mod tests {
             entry(ContextRole::Assistant, 5_000),
             entry(ContextRole::User, 5_000),
         ];
-        assert_eq!(compaction_split(&entries), 1);
-        assert_eq!(compaction_split(&entries[..2]), 0);
+        assert_eq!(compaction_split_by(&entries, |entry| entry.tokens), 1);
+        assert_eq!(compaction_split_by(&entries[..2], |entry| entry.tokens), 0);
     }
 
     #[test]
@@ -1120,7 +1341,7 @@ mod tests {
 
         // The persisted estimates are one token each, so the estimator path
         // finds nothing worth summarizing.
-        assert_eq!(compaction_split(&entries), 0);
+        assert_eq!(compaction_split_by(&entries, |entry| entry.tokens), 0);
         // A model counter that charges 500 tokens per entry keeps the recent
         // window and summarizes the older half.
         assert_eq!(compaction_split_by(&entries, |_| 500), 2);
@@ -1142,22 +1363,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.position, 0);
-    }
-
-    #[test]
-    fn conversation_mode_follows_participant_count() {
-        assert_eq!(
-            ConversationMode::for_participant_count(1),
-            ConversationMode::Single
-        );
-        assert_eq!(
-            ConversationMode::for_participant_count(MIN_GROUP_PARTICIPANTS),
-            ConversationMode::Group
-        );
-        assert_eq!(
-            ConversationMode::for_participant_count(MAX_GROUP_PARTICIPANTS),
-            ConversationMode::Group
-        );
     }
 
     #[test]
@@ -1311,12 +1516,122 @@ mod tests {
 
         // A summary plus the two kept entries: only the summary is old.
         assert_eq!(
-            compaction_split(&[summary.clone(), first.clone(), second.clone()]),
+            compaction_split_by(&[summary.clone(), first.clone(), second.clone()], |entry| {
+                entry.tokens
+            }),
             0
         );
 
         // A summary with an older message and two kept entries: there is new
         // material to fold into the next summary.
-        assert_eq!(compaction_split(&[summary, first, second, third]), 2);
+        assert_eq!(
+            compaction_split_by(&[summary, first, second, third], |entry| entry.tokens),
+            2
+        );
+    }
+
+    fn roster(ids: &[&str]) -> Vec<AgentId> {
+        ids.iter().map(|id| AgentId::new(*id)).collect()
+    }
+
+    #[test]
+    fn rotation_follows_the_roster_and_wraps() {
+        let participants = roster(&["a", "b", "c"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let pick = |last: &str| {
+            next_rotation(&participants, id_of, &[], Some(&AgentId::new(last)))
+                .map(|agent| agent.0.clone())
+        };
+        assert_eq!(pick("a").as_deref(), Some("b"));
+        assert_eq!(pick("b").as_deref(), Some("c"));
+        assert_eq!(pick("c").as_deref(), Some("a"), "the rotation wraps");
+    }
+
+    #[test]
+    fn rotation_starts_at_the_first_participant_without_a_last_speaker() {
+        let participants = roster(&["a", "b", "c"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let first = next_rotation(&participants, id_of, &[], None);
+        assert_eq!(first.map(|agent| agent.0.as_str()), Some("a"));
+
+        // An agent no longer on the roster starts it over rather than failing.
+        let stranger = AgentId::new("zzz");
+        let first = next_rotation(&participants, id_of, &[], Some(&stranger));
+        assert_eq!(first.map(|agent| agent.0.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn rotation_skips_muted_participants() {
+        let participants = roster(&["a", "b", "c", "d"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let muted = roster(&["b", "c"]);
+        let picked = next_rotation(&participants, id_of, &muted, Some(&AgentId::new("a")));
+        assert_eq!(picked.map(|agent| agent.0.as_str()), Some("d"));
+
+        // Coming back around, a muted run is skipped entirely.
+        let picked = next_rotation(&participants, id_of, &muted, Some(&AgentId::new("d")));
+        assert_eq!(picked.map(|agent| agent.0.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn a_fully_muted_rotation_selects_nobody() {
+        let participants = roster(&["a", "b"]);
+        let id_of = |agent: &AgentId| agent.clone();
+        let muted = roster(&["a", "b"]);
+        assert!(next_rotation(&participants, id_of, &muted, None).is_none());
+        assert!(next_rotation(&participants, id_of, &muted, Some(&AgentId::new("a"))).is_none());
+        let empty: Vec<AgentId> = Vec::new();
+        assert!(next_rotation(&empty, id_of, &[], None).is_none());
+    }
+
+    #[test]
+    fn cleanup_strips_the_speakers_own_prefix() {
+        let others = vec!["Reviewer".to_string()];
+        assert_eq!(
+            clean_group_reply("Coder: Here is the fix.", "Coder", &others),
+            "Here is the fix."
+        );
+        assert_eq!(
+            clean_group_reply("[Coder]: Here is the fix.", "Coder", &others),
+            "Here is the fix."
+        );
+        // A prefix that belongs to someone else is a cross-talk cut, so the
+        // reply falls back to what it produced rather than vanishing.
+        assert_eq!(
+            clean_group_reply("Reviewer: I disagree.", "Coder", &others),
+            "Reviewer: I disagree."
+        );
+    }
+
+    #[test]
+    fn cleanup_cuts_the_reply_at_another_participants_turn() {
+        let others = vec!["Reviewer".to_string(), "Planner".to_string()];
+        let reply = "Coder: Here is the fix.
+
+It compiles.
+
+Reviewer: Looks wrong to me.";
+        assert_eq!(
+            clean_group_reply(reply, "Coder", &others),
+            "Here is the fix.
+
+It compiles."
+        );
+
+        let bracketed = "Two things.
+[Planner]: and a third";
+        assert_eq!(
+            clean_group_reply(bracketed, "Coder", &others),
+            "Two things."
+        );
+    }
+
+    #[test]
+    fn cleanup_leaves_a_normal_reply_alone() {
+        let others = vec!["Reviewer".to_string()];
+        let reply = "The build passes.
+
+See `Reviewer::check` for the rule.";
+        assert_eq!(clean_group_reply(reply, "Coder", &others), reply);
     }
 }

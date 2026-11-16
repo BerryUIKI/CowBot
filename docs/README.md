@@ -4,14 +4,17 @@ Start with the root [README](../README.md) for implemented functionality and a r
 
 | Audience | Guide |
 | --- | --- |
-| Users | [Desktop user guide](USER_GUIDE.md) |
+| Users | [Desktop user guide](USER_GUIDE.md) and [what works today](LIMITATIONS.md) |
+| Operators | [Security, trust boundaries, and known gaps](../SECURITY.md) |
 | Developers | [Development and troubleshooting](DEVELOPMENT.md) |
+| Self-hosting | [Server deployment and operations](SERVER.md) |
 | Contributors | [Contributing](../CONTRIBUTING.md) |
 | Collaborators and reviewers | [Collaboration workflow](COLLABORATION.md) |
 | Maintainers | [Release checklist](RELEASING.md) |
 | Release history | [Release notes](releases/README.md) |
 | Community | [Code of Conduct](../CODE_OF_CONDUCT.md) and [security reporting](../SECURITY.md) |
 | Product contributors | [PRD](PRD.md) and [roadmap](ROADMAP.md) |
+| Model providers | [Provider capabilities](PROVIDER_CAPABILITIES.md) |
 | Architecture contributors | [Target architecture](ARCHITECTURE.md) and [decision records](ADR/README.md) |
 | Context management (implemented) | [M1 usage accounting plan](plans/M1-usage-accounting.md), [M2 conversations and context plan](plans/M2-conversations-and-context.md), [ADR-0029](ADR/0029-token-usage-accounting.md), and [ADR-0030](ADR/0030-conversation-sessions-and-context.md) |
 | Group conversations and routing (implemented) | [M3 group conversations and routing plan](plans/M3-group-conversations-and-routing.md) and [ADR-0032](ADR/0032-group-conversations-and-routing.md) |
@@ -20,7 +23,7 @@ Start with the root [README](../README.md) for implemented functionality and a r
 
 ## Reading design documents
 
-The PRD, architecture, roadmap, and ADRs include both implemented milestones and future scope. Phase 1 (milestones 1.1–1.7) is implemented: persistence, services, approvals, a local client, CLI integration with `cowbot.toml` and channel/message commands, the assignment scheduler with cross-root concurrency, the desktop shell with vendor-first model providers and model discovery, workspace transfer, automatic updates, release builds, and the user guide. Implemented on top of that baseline are token usage accounting and conversation context with compaction (M1/M2, ADR-0029/ADR-0030), approval rules, session decisions, Plan mode, and the Bypass Critical tri-state (ADR-0003), task worktrees with background cards (ADR-0031), group conversations with mention-scoped and opt-in model routing (M3, ADR-0032), and agent memory with shared notes, deterministic recall, a `remember` tool, reviewed extraction, package round-trips, and the colored context indicator (M4, ADR-0033). Phase 2 (self-hosted team mode) has not started. Check the root README and source for precise availability.
+The PRD, architecture, roadmap, and ADRs include both implemented milestones and future scope. Phase 1 (milestones 1.1–1.7) is implemented: persistence, services, approvals, a local client, CLI integration with `cowbot.toml` and channel/message commands, the assignment scheduler with cross-root concurrency, the desktop shell with vendor-first model providers and model discovery, workspace transfer, automatic updates, release builds, and the user guide. Implemented on top of that baseline are token usage accounting and conversation context with compaction (M1/M2, ADR-0029/ADR-0030), approval rules, session decisions, Plan mode, and the Bypass Critical tri-state (ADR-0003), task worktrees with background cards (ADR-0031), group conversations with mention-scoped and opt-in model routing (M3, ADR-0032), and agent memory with shared notes, deterministic recall, a `remember` tool, reviewed extraction, package round-trips, and the colored context indicator (M4, ADR-0033). Phase 2 (self-hosted team mode) is in progress: milestones 2.1–2.5 (accounts, workspaces and roles, the collaboration API with a remote client, deployment, and migration/compatibility) are implemented (ADR-0043 through ADR-0047). Check the root README and source for precise availability.
 
 ## Visual assets
 

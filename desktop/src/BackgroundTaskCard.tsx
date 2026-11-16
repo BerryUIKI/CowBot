@@ -1,4 +1,6 @@
 import { formatElapsed } from "./format";
+import { useT } from "./i18n";
+import { t as translate } from "./i18n/catalog";
 import type { TaskOverviewEntry, ToolCallRecord } from "./types";
 
 function stringArgument(call: ToolCallRecord, key: string): string | null {
@@ -9,16 +11,22 @@ function stringArgument(call: ToolCallRecord, key: string): string | null {
 
 /** One-line activity for a background card, derived from the latest tool call. */
 export function taskActivity(call: ToolCallRecord | null): string {
-  if (!call) return "Waiting for work";
+  if (!call) return translate("background.activityWaiting");
   const path = stringArgument(call, "path");
   const command = stringArgument(call, "command");
   switch (call.name) {
     case "read_file":
-      return path ? `Reading ${path}` : "Reading a file";
+      return path
+        ? translate("background.activityReadingPath", { path })
+        : translate("background.activityReadingFile");
     case "write_file":
-      return path ? `Writing ${path}` : "Writing a file";
+      return path
+        ? translate("background.activityWritingPath", { path })
+        : translate("background.activityWritingFile");
     case "execute_code":
-      return command ? `Running: ${command}` : "Running a command";
+      return command
+        ? translate("background.activityRunningCommand", { command })
+        : translate("background.activityRunningACommand");
     default:
       return call.name.replaceAll("_", " ");
   }
@@ -35,12 +43,13 @@ export default function BackgroundTaskCard({
   now,
   onOpen,
 }: BackgroundTaskCardProps) {
+  const t = useT();
   return (
     <button
       type="button"
       className="background-card"
       onClick={onOpen}
-      aria-label={`Open task ${entry.title}`}
+      aria-label={t("background.openTaskAria", { title: entry.title })}
     >
       <span className={`status-dot status-${entry.status}`} aria-hidden="true" />
       <span className="background-card-body">

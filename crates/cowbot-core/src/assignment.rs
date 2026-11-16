@@ -100,10 +100,6 @@ impl AssignmentStatus {
             AssignmentStatus::Completed | AssignmentStatus::Failed | AssignmentStatus::Cancelled
         )
     }
-
-    pub fn is_active(self) -> bool {
-        !self.is_terminal()
-    }
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]

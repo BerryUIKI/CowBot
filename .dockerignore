@@ -1,0 +1,12 @@
+# Keep the Docker build context small: the compiler only needs the workspace.
+target/
+target/**/target/
+desktop/
+site/
+assets/
+docs/
+.git/
+.claude/
+**/*.db
+**/*.db-wal
+**/*.db-shm

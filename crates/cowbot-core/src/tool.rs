@@ -13,6 +13,7 @@ pub struct ToolDefinition {
 }
 
 /// An invocation request for a tool emitted by an agent.
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
@@ -21,6 +22,7 @@ pub struct ToolCall {
 }
 
 /// The result returned from executing a tool.
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub call_id: String,

@@ -99,3 +99,80 @@ pub struct ChatCompletionResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_usage: Option<serde_json::Value>,
 }
+
+impl ChatCompletionResponse {
+    /// A response with text only.
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: Some(content.into()),
+            tool_calls: Vec::new(),
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            raw_usage: None,
+        }
+    }
+}
+
+/// One normalized piece of a streamed completion.
+///
+/// Every protocol is reduced to these four kinds, so the agent loop and the
+/// turn runner never branch on the provider (ADR-0041).
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// Visible answer text.
+    Text(String),
+    /// Model reasoning or thinking, shown apart from the answer.
+    Reasoning(String),
+    /// A complete tool call. Partial arguments are assembled by the decoder.
+    ToolCall(LlmToolCall),
+    /// Final token usage and the provider's raw usage object.
+    Usage {
+        usage: Option<TokenUsage>,
+        raw_usage: Option<serde_json::Value>,
+    },
+}
+
+/// Everything one streamed completion produced.
+#[derive(Debug, Clone, Default)]
+pub struct CompletionOutcome {
+    pub content: String,
+    pub reasoning: String,
+    pub tool_calls: Vec<LlmToolCall>,
+    pub finish_reason: Option<String>,
+    pub usage: Option<TokenUsage>,
+    pub raw_usage: Option<serde_json::Value>,
+}
+
+impl CompletionOutcome {
+    /// Present the outcome in the same shape as a non-streamed response.
+    pub fn into_response(self) -> ChatCompletionResponse {
+        ChatCompletionResponse {
+            content: if self.content.is_empty() {
+                None
+            } else {
+                Some(self.content)
+            },
+            tool_calls: self.tool_calls,
+            finish_reason: self.finish_reason,
+            usage: self.usage,
+            raw_usage: self.raw_usage,
+        }
+    }
+
+    /// Fold one chunk into the accumulated outcome.
+    pub fn apply(&mut self, chunk: StreamChunk) {
+        match chunk {
+            StreamChunk::Text(text) => self.content.push_str(&text),
+            StreamChunk::Reasoning(text) => self.reasoning.push_str(&text),
+            StreamChunk::ToolCall(call) => self.tool_calls.push(call),
+            StreamChunk::Usage { usage, raw_usage } => {
+                if usage.is_some() {
+                    self.usage = usage;
+                }
+                if raw_usage.is_some() {
+                    self.raw_usage = raw_usage;
+                }
+            }
+        }
+    }
+}

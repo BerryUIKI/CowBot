@@ -53,6 +53,17 @@ the only entry. API keys are stored in plain text in that file and are never
 sent back to the frontend. Environment variables do not configure the desktop
 (the CLI keeps its flags and environment variables).
 
+## Language and account menu
+
+The interface ships in English, Simplified Chinese, and Traditional Chinese.
+The bottom-left row shows the user and workspace name and opens an account
+menu: Settings, Language, Model configuration, Workspace settings, View
+changelog, and Learn more. Language opens a Claude-style picker grid; the choice
+applies immediately and is stored per device in `config.json`. Catalogues live
+in `src/i18n/`, with English as the typed source of truth; add a locale by
+adding a catalogue and a registry entry in `src/i18n/catalog.ts`. See
+[ADR-0050](../docs/ADR/0050-desktop-interface-localisation.md).
+
 ## Workspaces and packages
 
 Each workspace lives in its own local database. The default is

@@ -3,4 +3,4 @@
 /**
  * Why a group message selected the participants it did.
  */
-export type RouteSource = "mention" | "router" | "default" | "silent" | "unmatched";
+export type RouteSource = "mention" | "router" | "rotation" | "default" | "silent" | "unmatched";

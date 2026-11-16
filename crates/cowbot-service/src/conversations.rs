@@ -2,18 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::ApprovalLevel;
 use cowbot_core::assignment::{AssignmentOrigin, AssignmentRequester};
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
-    compaction_split_by, context_entry_tokens, context_usage_state, project_context,
-    CacheUsageSummary, CompactionOutcome, CompactionWrite, ContextEntry, ContextEntryKind,
-    ContextEvent, ContextEventKind, ContextRole, ConversationContext, ConversationMode,
-    ConversationParticipantContext, ConversationSettings, ConversationSettingsUpdate,
-    ConversationTurn, RouteSource, CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS,
-    MAX_ROUTED_AGENTS, MIN_GROUP_PARTICIPANTS,
+    compaction_sequences_are_valid, compaction_split_by, context_entry_tokens, context_usage_state,
+    next_rotation, project_context, CacheUsageSummary, CompactionOutcome, CompactionWrite,
+    ContextEntry, ContextEntryKind, ContextEvent, ContextEventKind, ContextProjection, ContextRole,
+    ConversationContext, ConversationMode, ConversationParticipantContext, ConversationSettings,
+    ConversationSettingsUpdate, ConversationTurn, RouteSource, RoutingMode, TurnId,
+    CONTEXT_SUMMARY_INPUT_TOKENS, MAX_GROUP_PARTICIPANTS, MAX_ROUTED_AGENTS,
+    MIN_GROUP_PARTICIPANTS,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
@@ -36,8 +38,10 @@ use crate::channels::{normalize_channel_name, ChannelService};
 use crate::compaction_locks::CompactionLocks;
 use crate::memory::{MemoryService, RecalledMemory};
 use crate::prompt_snapshots::{seal_with_context, PromptSnapshotService, SnapshotContext};
-use crate::scheduler::{AssignmentScheduler, CrewRunOptions};
+use crate::scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 use crate::session_decisions::SessionDecisions;
+use crate::turns::TurnRunner;
+use cowbot_core::turn::TurnControl;
 
 /// Longest conversation title accepted before a uniqueness suffix is added.
 const MAX_TITLE_CHARS: usize = 68;
@@ -90,13 +94,27 @@ pub struct ConversationService {
     memory: MemoryService,
     session_decisions: Option<Arc<SessionDecisions>>,
     compaction_locks: Arc<CompactionLocks>,
+    /// Shared turn registry for every turn this service spawns (ADR-0041).
+    turns: Arc<TurnRunner>,
+}
+
+/// The conversation and roster one reply works against.
+///
+/// Loaded once by `ConversationService::reply`, so neither reply path re-reads
+/// the roster.
+struct ReplyContext<'a> {
+    channel: &'a Channel,
+    settings: &'a ConversationSettings,
+    participants: &'a [AgentProfile],
 }
 
 impl ConversationService {
     pub fn new(store: Store, bus: EventBus, workspace_id: WorkspaceId) -> Self {
+        let turns = Arc::new(TurnRunner::new(store.clone(), bus.clone()));
         Self {
             channels: ChannelService::new(store.clone(), bus.clone()),
             memory: MemoryService::new(store.clone(), workspace_id.clone()),
+            turns,
             store,
             bus,
             workspace_id,
@@ -116,6 +134,17 @@ impl ConversationService {
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions;
         self
+    }
+
+    /// Share another service's turn registry.
+    pub fn with_turns(mut self, turns: Arc<TurnRunner>) -> Self {
+        self.turns = turns;
+        self
+    }
+
+    /// Stop a running turn of this conversation service.
+    pub fn cancel_turn(&self, turn: &TurnId) -> bool {
+        self.turns.cancel(turn)
     }
 
     /// Create a single-agent conversation with a fixed provider and model.
@@ -281,6 +310,52 @@ impl ConversationService {
             }
             settings.default_responder = Some(responder.clone());
         }
+        if let Some(mode) = update.routing_mode {
+            settings.routing_mode = mode;
+        }
+        if let Some(reply_cleanup) = update.reply_cleanup {
+            settings.reply_cleanup = reply_cleanup;
+        }
+        if let Some(muted) = &update.muted_participants {
+            // Muting keeps the roster, so an id outside it is a mistake worth
+            // reporting rather than silently storing.
+            let participants = self.store.list_channel_participants(channel_id).await?;
+            for agent_id in muted {
+                if !participants
+                    .iter()
+                    .any(|participant| &participant.agent_id == agent_id)
+                {
+                    return Err(CowError::Config(format!(
+                        "'{agent_id}' is not a participant of this conversation"
+                    )));
+                }
+            }
+            let mut unique = Vec::with_capacity(muted.len());
+            for agent_id in muted {
+                if !unique.contains(agent_id) {
+                    unique.push(agent_id.clone());
+                }
+            }
+            settings.muted_participants = unique;
+        }
+        if let Some(model) = &update.model {
+            let model = model.trim();
+            if model.is_empty() {
+                return Err(CowError::Config(
+                    "a conversation needs a model; configure a model provider first".into(),
+                ));
+            }
+            settings.model = model.to_string();
+        }
+        if let Some(provider_id) = &update.provider_id {
+            // An empty id means "no provider recorded", which happens when the
+            // desktop is running the offline mock.
+            let provider_id = provider_id.trim();
+            settings.provider_id = (!provider_id.is_empty()).then(|| provider_id.to_string());
+        }
+        if let Some(follows) = update.model_follows_default {
+            settings.model_follows_default = follows;
+        }
         settings.updated_at = chrono::Utc::now();
         self.store.update_conversation_settings(&settings).await?;
         Ok(settings)
@@ -387,7 +462,7 @@ impl ConversationService {
     ) -> CowResult<ChannelTurnReport> {
         let channel = self.conversation_channel(channel_id).await?;
         let settings = self.settings(channel_id).await?;
-        let participants = self.store.list_channel_participants(&channel.id).await?;
+        let participants = self.load_participants(&channel).await?;
         match participants.len() {
             0 => {
                 self.channels
@@ -410,11 +485,21 @@ impl ConversationService {
                 Ok(report)
             }
             1 => {
-                self.reply_single(&channel, &settings, message, llm, tools, options)
+                let context = ReplyContext {
+                    channel: &channel,
+                    settings: &settings,
+                    participants: &participants,
+                };
+                self.reply_single(&context, message, llm, tools, options)
                     .await
             }
             _ => {
-                self.reply_group(&channel, &settings, message, llm, tools, options)
+                let context = ReplyContext {
+                    channel: &channel,
+                    settings: &settings,
+                    participants: &participants,
+                };
+                self.reply_group(&context, message, llm, tools, options)
                     .await
             }
         }
@@ -422,14 +507,16 @@ impl ConversationService {
 
     async fn reply_single(
         &self,
-        channel: &Channel,
-        settings: &ConversationSettings,
+        context: &ReplyContext<'_>,
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
-        let Some(agent) = self.participant_or_none(channel).await? else {
+        let channel = context.channel;
+        let settings = context.settings;
+        let participants = context.participants;
+        let Some(agent) = participants.first() else {
             self.channels
                 .post_system_notice(
                     &channel.id,
@@ -462,7 +549,7 @@ impl ConversationService {
             .await;
         let assembled = assemble_conversation_messages(
             counter.as_ref(),
-            &agent,
+            agent,
             &agents,
             &entries,
             memory.as_ref().map(|memory| memory.block.as_str()),
@@ -492,7 +579,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         scheduler.register_agent(agent.clone(), llm.clone(), tools, settings.model.clone());
 
         let mut run_options = CrewRunOptions {
@@ -508,18 +596,26 @@ impl ConversationService {
         scheduler
             .enqueue_conversation_turn(
                 &task,
+                ConversationTurnRequest {
+                    messages,
+                    channel_id: channel.id.clone(),
+                    agent_id: agent.id.clone(),
+                    snapshot_context,
+                    record_context: true,
+                    // A single conversation has no peers to cross-talk with.
+                    cleanup: None,
+                },
                 requester,
                 AssignmentOrigin::User,
                 &run_options,
-                messages,
-                channel.id.clone(),
-                agent.id.clone(),
-                snapshot_context,
             )
             .await?;
 
         let outcome = scheduler.run_until_idle().await;
-        let reply = self.channels.post_task_outcome(channel, &task_id).await?;
+        // The turn runner posts a conversation reply with its text and its
+        // stopped marker, so this path only needs the text for memory
+        // extraction (ADR-0041).
+        let reply = self.store.task_output(&task_id).await?;
         outcome?;
 
         // A settled turn may contribute pending memory candidates. Extraction
@@ -539,7 +635,7 @@ impl ConversationService {
         }
 
         Ok(ChannelTurnReport {
-            agents: vec![agent.id],
+            agents: vec![agent.id.clone()],
             unknown_mentions: Vec::new(),
             tasks: vec![task_id],
             ..ChannelTurnReport::default()
@@ -552,14 +648,15 @@ impl ConversationService {
     /// answers; the model router arrives in M3.4 behind `router_enabled`.
     async fn reply_group(
         &self,
-        channel: &Channel,
-        settings: &ConversationSettings,
+        context: &ReplyContext<'_>,
         message: &ChannelMessage,
         llm: Arc<dyn LlmProvider>,
         tools: ToolRegistry,
         options: &ChannelTurnOptions,
     ) -> CowResult<ChannelTurnReport> {
-        let participants = self.load_participants(channel).await?;
+        let channel = context.channel;
+        let settings = context.settings;
+        let participants = context.participants;
         let counter = token_counter_for_model(&settings.model);
         if participants.is_empty() {
             self.channels
@@ -582,7 +679,7 @@ impl ConversationService {
 
         // Every participant stays current for later turns, including the ones
         // that do not answer this message.
-        for participant in &participants {
+        for participant in participants {
             let mut entry = ContextEntry::new(
                 channel.id.clone(),
                 participant.id.clone(),
@@ -593,7 +690,7 @@ impl ConversationService {
             self.store.append_context_entry(&entry).await?;
         }
 
-        let resolution = resolve_mentions(&message.content, &participants);
+        let resolution = resolve_mentions(&message.content, participants);
         let unknown = resolution.unknown.clone();
         let mut turn =
             ConversationTurn::new(channel.id.clone(), message.id.clone(), RouteSource::Silent);
@@ -604,13 +701,13 @@ impl ConversationService {
         let selected = if !resolution.agents.is_empty() {
             turn.source = RouteSource::Mention;
             if !resolution.unknown.is_empty() {
-                self.post_participant_notice(channel, &resolution.unknown, &participants)
+                self.post_participant_notice(channel, &resolution.unknown, participants)
                     .await?;
             }
             resolution.agents
         } else if !resolution.unknown.is_empty() {
             turn.source = RouteSource::Unmatched;
-            self.post_participant_notice(channel, &resolution.unknown, &participants)
+            self.post_participant_notice(channel, &resolution.unknown, participants)
                 .await?;
             self.record_turn(&turn).await?;
             return Ok(ChannelTurnReport {
@@ -620,21 +717,43 @@ impl ConversationService {
                 ..ChannelTurnReport::default()
             });
         } else {
+            // An explicit mention always wins above. What happens next follows
+            // the conversation's routing mode (ADR-0042).
             let mut routed = None;
-            if settings.router_enabled {
+            if settings.routing_mode == RoutingMode::Rotation {
+                let last = last_group_speaker(&self.store, channel, participants).await?;
+                match next_rotation(
+                    participants,
+                    |agent| agent.id.clone(),
+                    &settings.muted_participants,
+                    last.as_ref(),
+                ) {
+                    Some(agent) => {
+                        turn.source = RouteSource::Rotation;
+                        turn.reason = Some(rotation_reason(settings.muted_participants.len()));
+                        routed = Some(vec![agent.clone()]);
+                    }
+                    None => {
+                        turn.source = RouteSource::Silent;
+                        turn.reason =
+                            Some("Every participant is muted, so nobody answered.".to_string());
+                        self.record_turn(&turn).await?;
+                        return Ok(ChannelTurnReport {
+                            unknown_mentions: unknown,
+                            route: Some(turn.source),
+                            turn_id: Some(turn.id),
+                            ..ChannelTurnReport::default()
+                        });
+                    }
+                }
+            } else if settings.routing_mode.uses_router(settings.router_enabled) {
                 let decision = self
-                    .route_with_model(
-                        channel,
-                        &participants,
-                        message,
-                        llm.clone(),
-                        &settings.model,
-                    )
+                    .route_with_model(channel, participants, message, llm.clone(), &settings.model)
                     .await?;
                 turn.router_call_id = Some(decision.call_id.clone());
                 if let Some(failure) = decision.failure {
                     turn.reason = Some(failure.clone());
-                    let fallback = if resolve_default_responder(settings, &participants)
+                    let fallback = if resolve_default_responder(settings, participants)
                         .0
                         .is_some()
                     {
@@ -658,7 +777,7 @@ impl ConversationService {
             match routed {
                 Some(agents) => agents,
                 None => {
-                    let (responder, stale) = resolve_default_responder(settings, &participants);
+                    let (responder, stale) = resolve_default_responder(settings, participants);
                     let Some(responder) = responder else {
                         turn.source = RouteSource::Silent;
                         self.record_turn(&turn).await?;
@@ -687,7 +806,7 @@ impl ConversationService {
             }
         };
 
-        let default_name = resolve_default_responder(settings, &participants)
+        let default_name = resolve_default_responder(settings, participants)
             .0
             .map(|agent| agent.name.clone());
         let capacities: HashMap<&AgentId, &ParticipantCapacity> = options
@@ -705,22 +824,22 @@ impl ConversationService {
             if let Some(window) = window {
                 let tool_tokens = capacity.map(|capacity| capacity.tool_tokens).unwrap_or(0);
                 let mut compaction_notice = None;
-                if settings.auto_compact
-                    && self
-                        .branch_crosses_threshold(
-                            channel,
-                            agent,
-                            &participants,
-                            default_name.as_deref(),
-                            options.platform_context.as_deref(),
-                            &agents,
-                            counter.as_ref(),
-                            tool_tokens,
-                            window,
-                            settings.compact_threshold,
-                        )
-                        .await?
-                {
+                let mut projection = self
+                    .branch_projection(
+                        counter.as_ref(),
+                        channel,
+                        agent,
+                        participants,
+                        default_name.as_deref(),
+                        options.platform_context.as_deref(),
+                        &agents,
+                        tool_tokens,
+                    )
+                    .await?;
+                let percent = context_usage_state(projection.total_tokens(), Some(window)).0;
+                let crosses =
+                    percent.is_some_and(|percent| percent >= settings.compact_threshold as f32);
+                if settings.auto_compact && crosses {
                     match self
                         .compact_branch(channel, agent, llm.clone(), &settings.model, false)
                         .await
@@ -728,15 +847,25 @@ impl ConversationService {
                         Ok(outcome) => {
                             if outcome.compacted {
                                 auto_compacted.push(agent.name.clone());
+                                // The branch changed under us; the capacity
+                                // check below needs the new size.
+                                projection = self
+                                    .branch_projection(
+                                        counter.as_ref(),
+                                        channel,
+                                        agent,
+                                        participants,
+                                        default_name.as_deref(),
+                                        options.platform_context.as_deref(),
+                                        &agents,
+                                        tool_tokens,
+                                    )
+                                    .await?;
                             } else if outcome.in_progress {
                                 compaction_notice = Some(
                                     "its context is being compacted; try again shortly".to_string(),
                                 );
-                            } else if outcome
-                                .reason
-                                .as_deref()
-                                .is_some_and(|reason| reason.contains("invalid sequence numbers"))
-                            {
+                            } else if outcome.invalid_sequences {
                                 compaction_notice = Some(
                                     "its context branch cannot be compacted; start a new \
                                      conversation or re-import the workspace"
@@ -756,23 +885,6 @@ impl ConversationService {
                         }
                     }
                 }
-                let entries = self
-                    .store
-                    .list_context_entries(&channel.id, &agent.id)
-                    .await?;
-                let system_tokens = counter.count_message(
-                    &group_system_prompt(
-                        counter.as_ref(),
-                        agent,
-                        &participants,
-                        default_name.as_deref(),
-                        options.platform_context.as_deref(),
-                        &agents,
-                    )
-                    .text,
-                );
-                let projection =
-                    project_context(counter.as_ref(), system_tokens, tool_tokens, &entries);
                 if projection.total_tokens() >= window {
                     skipped.push(agent.id.clone());
                     let notice = match compaction_notice {
@@ -840,7 +952,8 @@ impl ConversationService {
         )
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
-        .with_session_decisions(self.session_decisions.clone());
+        .with_session_decisions(self.session_decisions.clone())
+        .with_turns(self.turns.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
             channel_id: Some(channel.id.clone()),
@@ -855,6 +968,14 @@ impl ConversationService {
         self.store.insert_conversation_turn(&turn).await?;
 
         let mut tasks = Vec::new();
+        // Every other participant's name, so a group reply that drifts into
+        // another speaker's line is cut where that line begins (ADR-0042).
+        let group_cleanup: Option<Vec<String>> = settings.reply_cleanup.then(|| {
+            participants
+                .iter()
+                .map(|participant| participant.name.clone())
+                .collect()
+        });
         for agent in &responders {
             scheduler.register_agent(
                 agent.clone(),
@@ -873,7 +994,7 @@ impl ConversationService {
             let assembled = assemble_group_messages(
                 counter.as_ref(),
                 agent,
-                &participants,
+                participants,
                 default_name.as_deref(),
                 platform,
                 &agents,
@@ -897,13 +1018,22 @@ impl ConversationService {
             scheduler
                 .enqueue_conversation_turn(
                     &task,
+                    ConversationTurnRequest {
+                        messages,
+                        channel_id: channel.id.clone(),
+                        agent_id: agent.id.clone(),
+                        snapshot_context,
+                        record_context: true,
+                        cleanup: group_cleanup
+                            .as_ref()
+                            .map(|others| crate::turns::ReplyCleanup {
+                                speaker: agent.name.clone(),
+                                others: others.clone(),
+                            }),
+                    },
                     requester.clone(),
                     AssignmentOrigin::User,
                     &task_options,
-                    messages,
-                    channel.id.clone(),
-                    agent.id.clone(),
-                    snapshot_context,
                 )
                 .await?;
             tasks.push(task.id);
@@ -918,7 +1048,7 @@ impl ConversationService {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let consumer = tokio::spawn(self.clone().consume_group_settlements(
             channel.clone(),
-            participants.clone(),
+            participants.to_vec(),
             receiver,
         ));
         let outcome = scheduler.run_until_idle_observed(sender).await;
@@ -1036,25 +1166,19 @@ impl ConversationService {
                 .unwrap_or_else(|| format!("Agent {}", assignee.0)),
         };
 
+        // The turn runner already posted the reply, including a stopped one, so
+        // settling mirrors it into the other branches and reports the outcome
+        // instead of posting a second copy (ADR-0041).
         match &task.status {
             cowbot_core::task::TaskStatus::Completed { output } => {
                 let content = output.trim();
                 if content.is_empty() {
-                    self.channels
-                        .post_system_notice(
-                            &channel.id,
-                            &format!("{name} finished without a reply."),
-                        )
-                        .await?;
-                    return Ok(None);
+                    return Ok(Some(SettledGroupReply {
+                        agent_id: assignee,
+                        replied: false,
+                        content: None,
+                    }));
                 }
-                self.channels
-                    .post_message(
-                        &channel.id,
-                        Sender::Agent(assignee.clone()),
-                        content.to_string(),
-                    )
-                    .await?;
                 for participant in participants
                     .iter()
                     .filter(|participant| participant.id != assignee)
@@ -1074,16 +1198,11 @@ impl ConversationService {
                     content: Some(content.to_string()),
                 }))
             }
-            cowbot_core::task::TaskStatus::Failed { error } => {
-                self.channels
-                    .post_system_notice(&channel.id, &format!("{name} could not answer: {error}"))
-                    .await?;
-                Ok(Some(SettledGroupReply {
-                    agent_id: assignee,
-                    replied: false,
-                    content: None,
-                }))
-            }
+            cowbot_core::task::TaskStatus::Failed { .. } => Ok(Some(SettledGroupReply {
+                agent_id: assignee,
+                replied: false,
+                content: None,
+            })),
             _ => Ok(None),
         }
     }
@@ -1131,20 +1250,20 @@ impl ConversationService {
         Ok(participants)
     }
 
+    /// The participant's next-request projection: its active branch plus the
+    /// system prompt it will be sent with.
     #[allow(clippy::too_many_arguments)]
-    async fn branch_crosses_threshold(
+    async fn branch_projection(
         &self,
+        counter: &dyn TokenCounter,
         channel: &Channel,
         agent: &AgentProfile,
         participants: &[AgentProfile],
         default_name: Option<&str>,
         platform_context: Option<&str>,
         agents: &[AgentProfile],
-        counter: &dyn TokenCounter,
         tool_tokens: u32,
-        window: u32,
-        compact_threshold: u32,
-    ) -> CowResult<bool> {
+    ) -> CowResult<ContextProjection> {
         let entries = self
             .store
             .list_context_entries(&channel.id, &agent.id)
@@ -1160,11 +1279,12 @@ impl ConversationService {
             )
             .text,
         );
-        let projection = project_context(counter, system_tokens, tool_tokens, &entries);
-        let (percent, _) = context_usage_state(projection.total_tokens(), Some(window));
-        Ok(percent
-            .map(|percent| percent >= compact_threshold as f32)
-            .unwrap_or(false))
+        Ok(project_context(
+            counter,
+            system_tokens,
+            tool_tokens,
+            &entries,
+        ))
     }
 
     /// Ask the conversation's fixed model which participants should answer.
@@ -1413,20 +1533,22 @@ impl ConversationService {
             .iter()
             .fold(0_u32, |total, entry| total.saturating_add(entry.tokens));
 
-        // The store's renumber uses negative sequences as a staging range.
-        // Reject a branch with non-positive rows before paying for a summary;
-        // the store still guards the write for a cross-process import or edit.
-        if entries.iter().any(|entry| entry.seq <= 0) {
+        // A paid summary is the first thing this method does, so refuse a
+        // branch the write could not stage before spending on one. The rule
+        // lives in `cowbot_core`; the store checks it again inside its
+        // transaction, which is a different job — a cross-process import or a
+        // hand-edited database can change the rows between here and the write.
+        if !compaction_sequences_are_valid(&entries) {
             return Ok(CompactionOutcome {
                 compacted: false,
                 summarized_entries: 0,
                 tokens_before,
                 tokens_after: tokens_before,
                 reason: Some(
-                    "This context branch has invalid sequence numbers; start a new \
-                     conversation or re-import the workspace."
+                    "This context branch has invalid sequence numbers; start a new                      conversation or re-import the workspace."
                         .to_string(),
                 ),
+                invalid_sequences: true,
                 ..CompactionOutcome::default()
             });
         }
@@ -1545,6 +1667,7 @@ impl ConversationService {
                     summary: Some(summary_text),
                     in_progress: false,
                     reason: None,
+                    invalid_sequences: false,
                 })
             }
             CompactionWrite::Stale => Ok(CompactionOutcome {
@@ -1567,6 +1690,21 @@ impl ConversationService {
                     "The context was cleared while it was being summarized; nothing was written."
                         .to_string(),
                 ),
+                ..CompactionOutcome::default()
+            }),
+            // The pre-check saw a valid branch, so rows changed under it. The
+            // summary was already paid for; report the branch as unfixable
+            // rather than retrying.
+            CompactionWrite::InvalidSequences => Ok(CompactionOutcome {
+                compacted: false,
+                summarized_entries: 0,
+                tokens_before: event.tokens_before,
+                tokens_after: event.tokens_before,
+                reason: Some(
+                    "This context branch has invalid sequence numbers; start a new                      conversation or re-import the workspace."
+                        .to_string(),
+                ),
+                invalid_sequences: true,
                 ..CompactionOutcome::default()
             }),
         }
@@ -1688,14 +1826,6 @@ impl ConversationService {
             )));
         }
         Ok(channel)
-    }
-
-    async fn participant_or_none(&self, channel: &Channel) -> CowResult<Option<AgentProfile>> {
-        let participants = self.store.list_channel_participants(&channel.id).await?;
-        let Some(participant) = participants.first() else {
-            return Ok(None);
-        };
-        self.store.get_agent(&participant.agent_id).await
     }
 
     async fn single_participant(&self, channel: &Channel) -> CowResult<AgentProfile> {
@@ -1900,6 +2030,53 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 /// participant named `main` (the built-in Main Assistant), then to the first
 /// participant in order. The boolean reports that fallback happened so the
 /// turn can explain it. An unset responder stays silent.
+/// The agent who wrote the last assistant entry any participant can see.
+///
+/// The rotation starts after this speaker. Direct branches diverge after a
+/// while, so the newest assistant entry across the roster is the best single
+/// answer to "who spoke last"; when there is none, the rotation starts at the
+/// first participant.
+async fn last_group_speaker(
+    store: &Store,
+    channel: &Channel,
+    participants: &[AgentProfile],
+) -> CowResult<Option<AgentId>> {
+    let mut latest: Option<(DateTime<Utc>, AgentId)> = None;
+    for participant in participants {
+        let entries = store
+            .list_context_entries(&channel.id, &participant.id)
+            .await?;
+        for entry in entries {
+            if entry.role != ContextRole::Assistant {
+                continue;
+            }
+            let author = entry
+                .author_agent_id
+                .clone()
+                .unwrap_or(entry.agent_id.clone());
+            if latest
+                .as_ref()
+                .is_none_or(|(at, _)| entry.created_at >= *at)
+            {
+                latest = Some((entry.created_at, author));
+            }
+        }
+    }
+    Ok(latest.map(|(_, author)| author))
+}
+
+/// Why the rotation picked the participant it did, for the Answered-by line.
+pub(crate) fn rotation_reason(muted: usize) -> String {
+    if muted > 0 {
+        format!(
+            "The rotation picked the next participant after the last speaker, \
+             skipping {muted} muted participant(s)."
+        )
+    } else {
+        "The rotation picked the next participant after the last speaker.".to_string()
+    }
+}
+
 pub(crate) fn resolve_default_responder<'a>(
     settings: &ConversationSettings,
     participants: &'a [AgentProfile],

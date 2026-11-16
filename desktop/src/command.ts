@@ -1,5 +1,5 @@
-import { listCommands, parseCommand } from "./api";
-import type { CommandInfo, CommandParseResult } from "./types";
+import { listCommands } from "./api";
+import type { CommandInfo } from "./types";
 
 /// The menu is open only while the whole draft is a single slash token:
 /// `/` followed by zero or more name characters and nothing else. Once the
@@ -21,6 +21,79 @@ export function isCommandDraft(draft: string): boolean {
   return draft.trimStart().startsWith("/");
 }
 
+/// The catalogue entry the draft's first token names, or `null` when the draft
+/// is not a slash command or names nothing in the catalogue.
+///
+/// This is the synchronous counterpart of `parse_command`: Escape needs to know
+/// whether the draft is a mistyped command (which may be sent as a message) or
+/// a real one (which Enter should still run) before the next Enter spends an
+/// IPC round trip.
+export function findDraftCommand(
+  draft: string,
+  catalogue: CommandInfo[],
+): CommandInfo | null {
+  const match = draft.trimStart().match(/^\/([\p{L}\p{N}_-]*)/u);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  return (
+    catalogue.find(
+      (command) =>
+        command.name.toLowerCase() === name ||
+        command.aliases.some((alias) => alias.toLowerCase() === name),
+    ) ?? null
+  );
+}
+
+/// Whether the slash token is followed by whitespace and more text.
+///
+/// A line such as `/usr/bin/env python` is a path, not a mistyped command, so
+/// the caller sends it as an ordinary message instead of showing the unknown
+/// command hint (ADR-0038, "Unknown input is never silently sent").
+export function hasArgumentsAfterCommandToken(line: string): boolean {
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith("/")) return false;
+  const rest = trimmed.slice(1);
+  const separator = rest.search(/\s/u);
+  return separator !== -1 && rest.slice(separator).trim().length > 0;
+}
+
+/// The command and partial first argument of an argument draft.
+export interface ArgumentDraft {
+  command: CommandInfo;
+  query: string;
+  /// Index in the draft where the argument text begins.
+  start: number;
+}
+
+/// A command followed by one argument token, with no second argument yet.
+const ARGUMENT_DRAFT = /^\s*\/([\p{L}\p{N}_-]+)[ \t]+([^\s]*)$/u;
+
+/// The command and first-argument query of a draft such as `/approval as`.
+///
+/// Returns `null` once a second argument starts or while a quoted argument is
+/// being typed, because those are free text and not completion candidates.
+export function argumentQuery(
+  draft: string,
+  catalogue: CommandInfo[],
+): ArgumentDraft | null {
+  const match = draft.match(ARGUMENT_DRAFT);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  const command = catalogue.find(
+    (candidate) =>
+      candidate.name.toLowerCase() === name ||
+      candidate.aliases.some((alias) => alias.toLowerCase() === name),
+  );
+  if (!command || command.args.length === 0) return null;
+  const query = match[2];
+  if (query.startsWith('"')) return null;
+  return {
+    command,
+    query,
+    start: draft.length - query.length,
+  };
+}
+
 /// Filter the catalogue by a case-insensitive prefix on the canonical name or
 /// an alias, ordered as the catalogue is.
 export function filterCommands(
@@ -40,7 +113,7 @@ export function filterCommands(
 }
 
 /// The first argument the command still needs, if any.
-export function requiredArgument(
+function requiredArgument(
   command: CommandInfo,
 ): CommandInfo["args"][number] | null {
   return command.args.find((arg) => arg.required) ?? null;
@@ -53,14 +126,6 @@ export function requiredArgument(
 /// composer for the argument.
 export function acceptedDraft(command: CommandInfo): string | null {
   return requiredArgument(command) ? `/${command.name} ` : null;
-}
-
-/// Read a draft through the shared Rust parser.
-///
-/// This is the only IPC round trip in the command path, and it happens once
-/// per Enter press.
-export function parseCommandDraft(input: string): Promise<CommandParseResult> {
-  return parseCommand(input);
 }
 
 let cataloguePromise: Promise<CommandInfo[]> | null = null;
@@ -77,9 +142,4 @@ export function loadCommands(): Promise<CommandInfo[]> {
     });
   }
   return cataloguePromise;
-}
-
-/// Forget the cached catalogue. Only tests and workspace switches need this.
-export function resetCommandCatalogue(): void {
-  cataloguePromise = null;
 }

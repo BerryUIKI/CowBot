@@ -4,7 +4,7 @@ use cowbot_core::channel::ChannelId;
 use cowbot_core::conversation::{
     ChannelParticipant, CompactionWrite, ContextEntry, ContextEntryKind, ContextEvent,
     ContextEventKind, ContextRole, ContextToolCall, ConversationMode, ConversationSettings,
-    ConversationTurn, RouteSource, TurnId,
+    ConversationTurn, RouteSource, RoutingMode, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::identity::WorkspaceId;
@@ -38,8 +38,12 @@ struct SettingsRow {
     mode: String,
     provider_id: Option<String>,
     model: String,
+    model_follows_default: i64,
     default_responder: Option<String>,
     router_enabled: i64,
+    routing_mode: String,
+    muted_participants: String,
+    reply_cleanup: i64,
     auto_compact: i64,
     compact_threshold: i64,
     created_at: String,
@@ -52,13 +56,23 @@ impl SettingsRow {
             .mode
             .parse::<ConversationMode>()
             .map_err(|_| CowError::Storage(format!("unknown conversation mode '{}'", self.mode)))?;
+        let routing_mode = self.routing_mode.parse::<RoutingMode>().map_err(|_| {
+            CowError::Storage(format!("unknown routing mode '{}'", self.routing_mode))
+        })?;
         Ok(ConversationSettings {
             channel_id: ChannelId(self.channel_id),
             mode,
             provider_id: self.provider_id,
             model: self.model,
+            model_follows_default: self.model_follows_default != 0,
             default_responder: self.default_responder.map(AgentId),
             router_enabled: self.router_enabled != 0,
+            routing_mode,
+            muted_participants: parse_json::<Vec<AgentId>>(
+                &self.muted_participants,
+                "muted_participants",
+            )?,
+            reply_cleanup: self.reply_cleanup != 0,
             auto_compact: self.auto_compact != 0,
             compact_threshold: self.compact_threshold.clamp(1, 100) as u32,
             created_at: parse_datetime(&self.created_at)?,
@@ -264,16 +278,29 @@ impl Store {
 
         sqlx::query(
             "INSERT INTO conversation_settings
-                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                (channel_id, mode, provider_id, model, model_follows_default,
+                 default_responder, router_enabled,
+                 routing_mode, muted_participants, reply_cleanup,
                  auto_compact, compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
+        .bind(settings.routing_mode.as_str())
+        .bind(
+            serde_json::to_string(&settings.muted_participants)
+                .map_err(|error| CowError::Storage(error.to_string()))?,
+        )
+        .bind(if settings.reply_cleanup { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
         .bind(settings.created_at.to_rfc3339())
@@ -357,7 +384,9 @@ impl Store {
         channel_id: &ChannelId,
     ) -> CowResult<Option<ConversationSettings>> {
         let row = sqlx::query_as::<_, SettingsRow>(
-            "SELECT channel_id, mode, provider_id, model, default_responder, router_enabled,
+            "SELECT channel_id, mode, provider_id, model, model_follows_default,
+                    default_responder, router_enabled,
+                    routing_mode, muted_participants, reply_cleanup,
                     auto_compact, compact_threshold, created_at, updated_at
              FROM conversation_settings WHERE channel_id = ?",
         )
@@ -373,8 +402,10 @@ impl Store {
         workspace_id: &WorkspaceId,
     ) -> CowResult<Vec<ConversationSettings>> {
         let rows = sqlx::query_as::<_, SettingsRow>(
-            "SELECT s.channel_id, s.mode, s.provider_id, s.model, s.default_responder,
-                    s.router_enabled, s.auto_compact, s.compact_threshold, s.created_at,
+            "SELECT s.channel_id, s.mode, s.provider_id, s.model,
+                    s.model_follows_default, s.default_responder,
+                    s.router_enabled, s.routing_mode, s.muted_participants, s.reply_cleanup,
+                    s.auto_compact, s.compact_threshold, s.created_at,
                     s.updated_at
              FROM conversation_settings s
              JOIN channels c ON c.id = s.channel_id
@@ -394,15 +425,28 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "UPDATE conversation_settings
-             SET mode = ?, provider_id = ?, model = ?, default_responder = ?,
-                 router_enabled = ?, auto_compact = ?, compact_threshold = ?, updated_at = ?
+             SET mode = ?, provider_id = ?, model = ?, model_follows_default = ?,
+                 default_responder = ?,
+                 router_enabled = ?, routing_mode = ?, muted_participants = ?,
+                 reply_cleanup = ?, auto_compact = ?, compact_threshold = ?, updated_at = ?
              WHERE channel_id = ?",
         )
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
+        .bind(settings.routing_mode.as_str())
+        .bind(
+            serde_json::to_string(&settings.muted_participants)
+                .map_err(|error| CowError::Storage(error.to_string()))?,
+        )
+        .bind(if settings.reply_cleanup { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
         .bind(settings.updated_at.to_rfc3339())
@@ -420,16 +464,29 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO conversation_settings
-                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                (channel_id, mode, provider_id, model, model_follows_default,
+                 default_responder, router_enabled,
+                 routing_mode, muted_participants, reply_cleanup,
                  auto_compact, compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
+        .bind(settings.routing_mode.as_str())
+        .bind(
+            serde_json::to_string(&settings.muted_participants)
+                .map_err(|error| CowError::Storage(error.to_string()))?,
+        )
+        .bind(if settings.reply_cleanup { 1i64 } else { 0i64 })
         .bind(if settings.auto_compact { 1i64 } else { 0i64 })
         .bind(i64::from(settings.compact_threshold))
         .bind(settings.created_at.to_rfc3339())
@@ -680,9 +737,7 @@ impl Store {
         .map_err(db)?;
         if non_positive > 0 {
             transaction.rollback().await.map_err(db)?;
-            return Err(CowError::Config(
-                "cannot compact a branch with non-positive context sequence numbers".to_string(),
-            ));
+            return Ok(CompactionWrite::InvalidSequences);
         }
 
         // A clear can remove every row while the summary is being generated.

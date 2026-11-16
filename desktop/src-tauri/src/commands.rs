@@ -17,7 +17,7 @@ use cowbot_core::command::{
 use cowbot_core::conversation::{
     context_usage_state, usable_window, CacheUsageSummary, ChannelParticipant, CompactionOutcome,
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
-    ConversationTurn,
+    ConversationTurn, RoutingMode, TurnId,
 };
 use cowbot_core::identity::WorkspaceId;
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
@@ -71,6 +71,15 @@ pub struct ChannelReplyFinished {
     pub turn_id: Option<String>,
 }
 
+/// The client as a local runtime, for operations that need files, a worktree,
+/// or an in-process crew. Server mode answers with a clear error instead of
+/// pretending the operation worked.
+fn local(state: &AppState) -> Result<&cowbot_client::LocalClient, String> {
+    state.local_client.as_deref().ok_or_else(|| {
+        "this action needs the local runtime and is not available in server mode".to_string()
+    })
+}
+
 #[tauri::command]
 pub async fn get_session(
     state: State<'_, AppState>,
@@ -108,8 +117,7 @@ pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, S
 /// that does not have one yet.
 #[tauri::command]
 pub async fn ensure_agent_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
-    state
-        .client
+    local(&state)?
         .ensure_agent_channels()
         .await
         .map_err(|error| error.to_string())
@@ -231,8 +239,7 @@ pub async fn post_message(
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
-                    let outcome = state
-                        .client
+                    let outcome = local(&state)?
                         .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
                         .await
                         .map_err(|error| error.to_string())?;
@@ -279,7 +286,10 @@ pub async fn post_message(
 
     // Agents answer in the background so the composer stays responsive; the
     // timeline refreshes from MessagePosted events and the turn-finished event.
-    let client = state.client.clone();
+    // The reply runs in-process, so server mode posts without a local turn.
+    let Some(client) = state.local_client.clone() else {
+        return Ok(message);
+    };
     let tools = state.tools.clone();
     let channel = channel_id.clone();
     let posted = message.clone();
@@ -460,8 +470,7 @@ pub async fn create_task(
         .map_err(|error| error.to_string())?;
 
     if let Some((project, base_branch)) = requested_worktree {
-        state
-            .client
+        local(&state)?
             .request_worktree(&created.id, &project.id, &project.path, &base_branch)
             .await
             .map_err(|error| error.to_string())?;
@@ -484,18 +493,25 @@ pub async fn run_task(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("task '{task_id}' was not found"))?;
 
+    // Running a task needs this machine; check before preparing anything so a
+    // server-mode call leaves no worktree behind.
+    let Some(client) = state.local_client.clone() else {
+        return Err(
+            "running a task needs the local runtime and is not available in server mode"
+                .to_string(),
+        );
+    };
+
     // A worktree task is prepared before spawning so a git failure rejects
     // the run and the task stays pending.
-    let worktree = match state
-        .client
+    let worktree = match local(&state)?
         .task_worktree(&task.id)
         .await
         .map_err(|error| error.to_string())?
     {
         Some(record) => match record.status {
             WorktreeStatus::Requested | WorktreeStatus::Ready => Some(
-                state
-                    .client
+                local(&state)?
                     .prepare_worktree(&task.id)
                     .await
                     .map_err(|error| format!("The worktree could not be prepared: {error}"))?,
@@ -521,7 +537,6 @@ pub async fn run_task(
         return Err(format!("task '{task_id}' is already running"));
     }
 
-    let client = state.client.clone();
     let (llm, model) = state.runtime_model();
     let tools = match &worktree {
         Some(record) => AppState::rooted_tools(
@@ -693,8 +708,7 @@ pub async fn get_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Option<TaskWorktree>, String> {
-    state
-        .client
+    local(&state)?
         .task_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -705,8 +719,7 @@ pub async fn task_worktree_diff(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<TaskWorktreeDiff, String> {
-    state
-        .client
+    local(&state)?
         .worktree_diff(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -717,8 +730,7 @@ pub async fn discard_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<TaskWorktree, String> {
-    state
-        .client
+    local(&state)?
         .discard_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -826,8 +838,7 @@ pub async fn list_task_overview(
         .list_tasks()
         .await
         .map_err(|error| error.to_string())?;
-    let worktree_by_task: HashMap<String, TaskWorktree> = state
-        .client
+    let worktree_by_task: HashMap<String, TaskWorktree> = local(&state)?
         .list_worktrees()
         .await
         .map_err(|error| error.to_string())?
@@ -848,8 +859,7 @@ pub async fn list_task_overview(
     let mut entries = Vec::new();
     for (run_id, group_tasks) in groups {
         let worktree = worktree_by_task.get(&run_id).cloned();
-        let assignments = state
-            .client
+        let assignments = local(&state)?
             .list_run_assignments(&TaskId::new(run_id.clone()))
             .await
             .map_err(|error| error.to_string())?;
@@ -890,8 +900,7 @@ pub async fn list_task_overview(
             .filter(|assignment| assignment.status.is_terminal())
             .count() as u32;
         let total = assignments.len() as u32;
-        let latest_tool_call = state
-            .client
+        let latest_tool_call = local(&state)?
             .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
             .await
             .map_err(|error| error.to_string())?;
@@ -945,6 +954,19 @@ pub async fn cancel_task(
     state
         .client
         .cancel_task(&TaskId::new(task_id), &reason)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Stop a running conversation, group, or task turn (ADR-0041).
+///
+/// Returns whether a live turn was stopped. The turn keeps the text it
+/// produced, stored with a stopped marker, and reloads show that state.
+#[tauri::command]
+pub async fn cancel_turn(state: State<'_, AppState>, turn_id: String) -> Result<bool, String> {
+    state
+        .client
+        .cancel_turn(&TurnId::new(turn_id))
         .await
         .map_err(|error| error.to_string())
 }
@@ -1277,6 +1299,10 @@ pub struct ConversationContextView {
     pub agent_id: String,
     pub model: String,
     pub provider_id: Option<String>,
+    /// Provider display name, when one supplies the model.
+    pub provider_name: Option<String>,
+    /// Whether the conversation follows the desktop's default model.
+    pub model_follows_default: bool,
     pub system_tokens: u32,
     pub tool_tokens: u32,
     pub history_tokens: u32,
@@ -1299,6 +1325,12 @@ pub struct ConversationContextView {
     pub auto_compact: bool,
     pub compact_threshold: u32,
     pub router_enabled: bool,
+    /// How an unmentioned group message picks its responder (ADR-0042).
+    pub routing_mode: String,
+    /// Participants kept in the roster but never selected.
+    pub muted_participants: Vec<String>,
+    /// Whether group replies are stripped of speaker labels and cross-talk.
+    pub reply_cleanup: bool,
     pub default_responder: Option<String>,
     pub cache_last_turn: CacheUsageSummary,
     pub cache_conversation: CacheUsageSummary,
@@ -1306,13 +1338,43 @@ pub struct ConversationContextView {
     pub participants: Vec<ConversationParticipantView>,
 }
 
-/// Fixed provider/model of a conversation, falling back to the active runtime
-/// when the recorded provider was removed from the desktop configuration.
+/// Provider and model a conversation's next turn will use.
+///
+/// A conversation that follows the default resolves through the active
+/// provider, so it picks up a changed default. A pinned conversation keeps the
+/// pair recorded at creation while that provider still exists; once the
+/// provider is gone it falls back to the active default instead of sending a
+/// model name the new endpoint may not serve (ADR-0049).
+fn effective_conversation_model(
+    state: &AppState,
+    settings: &cowbot_core::conversation::ConversationSettings,
+) -> (Option<String>, String) {
+    if !settings.model_follows_default {
+        if let Some(provider_id) = settings.provider_id.as_deref() {
+            let provider_exists = load_config(state)
+                .ok()
+                .and_then(|config| config.provider(provider_id).map(|_| ()))
+                .is_some();
+            if provider_exists {
+                return (Some(provider_id.to_string()), settings.model.clone());
+            }
+        }
+    }
+    let (_, model) = state.runtime_model();
+    let provider_id = load_config(state)
+        .ok()
+        .and_then(|config| config.active_provider().map(|provider| provider.id.clone()));
+    (provider_id, model)
+}
+
+/// Provider/model of a conversation, falling back to the active runtime when
+/// the conversation follows the default or its provider was removed.
 fn conversation_runtime(
     state: &AppState,
     settings: &cowbot_core::conversation::ConversationSettings,
 ) -> (Arc<dyn LlmProvider>, String) {
-    if let Some(provider_id) = settings.provider_id.as_deref() {
+    let (provider_id, model) = effective_conversation_model(state, settings);
+    if let Some(provider_id) = provider_id.as_deref() {
         if let Ok(config) = load_config(state) {
             if let Some(provider) = config.provider(provider_id) {
                 return (
@@ -1321,13 +1383,13 @@ fn conversation_runtime(
                         &provider.base_url,
                         provider.api_key.clone(),
                     ),
-                    settings.model.clone(),
+                    model,
                 );
             }
         }
     }
     let (llm, _) = state.runtime_model();
-    (llm, settings.model.clone())
+    (llm, model)
 }
 
 /// Context window and output limit metadata recorded for the conversation model.
@@ -1338,13 +1400,13 @@ fn conversation_window(
     let Ok(config) = load_config(state) else {
         return (None, None);
     };
-    let provider = settings
-        .provider_id
+    let (provider_id, model) = effective_conversation_model(state, settings);
+    let provider = provider_id
         .as_deref()
         .and_then(|id| config.provider(id))
         .or_else(|| config.active_provider());
     provider
-        .and_then(|provider| provider.model_metadata.get(&settings.model))
+        .and_then(|provider| provider.model_metadata.get(&model))
         .map(|metadata| (metadata.context_window, metadata.max_output_tokens))
         .unwrap_or((None, None))
 }
@@ -1391,13 +1453,23 @@ async fn conversation_context_view(
         .map_err(|error| error.to_string())?;
     let tool_tokens = participant_tool_tokens(state, &context, &agents);
     let (context_window, max_output_tokens) = conversation_window(state, &settings);
-    Ok(context_view_from_parts(
+    let mut view = context_view_from_parts(
         context,
         &settings,
         &tool_tokens,
         context_window,
         max_output_tokens,
-    ))
+    );
+    // Report the pair the next turn will actually use, not a stale snapshot.
+    let (provider_id, model) = effective_conversation_model(state, &settings);
+    view.model = model;
+    view.provider_id = provider_id.clone();
+    view.provider_name = provider_id.and_then(|id| {
+        load_config(state)
+            .ok()
+            .and_then(|config| config.provider(&id).map(|provider| provider.name.clone()))
+    });
+    Ok(view)
 }
 
 /// Tool-schema tokens each conversation participant pays in every request.
@@ -1476,6 +1548,8 @@ fn context_view_from_parts(
         agent_id: context.agent_id.0,
         model: context.model,
         provider_id: context.provider_id,
+        provider_name: None,
+        model_follows_default: settings.model_follows_default,
         system_tokens: first.system_tokens,
         tool_tokens: first.tool_tokens,
         history_tokens: first.history_tokens,
@@ -1494,6 +1568,13 @@ fn context_view_from_parts(
         auto_compact: settings.auto_compact,
         compact_threshold: settings.compact_threshold,
         router_enabled: settings.router_enabled,
+        routing_mode: settings.routing_mode.as_str().to_string(),
+        muted_participants: settings
+            .muted_participants
+            .iter()
+            .map(|agent| agent.0.clone())
+            .collect(),
+        reply_cleanup: settings.reply_cleanup,
         default_responder: settings
             .default_responder
             .as_ref()
@@ -1870,6 +1951,7 @@ pub async fn get_conversation_context(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_conversation_settings(
     state: State<'_, AppState>,
     channel_id: String,
@@ -1877,8 +1959,27 @@ pub async fn update_conversation_settings(
     compact_threshold: Option<u32>,
     router_enabled: Option<bool>,
     default_responder: Option<String>,
+    routing_mode: Option<String>,
+    muted_participants: Option<Vec<String>>,
+    reply_cleanup: Option<bool>,
+    provider_id: Option<String>,
+    model: Option<String>,
+    model_follows_default: Option<bool>,
 ) -> Result<ConversationContextView, String> {
     let channel_id = ChannelId::new(channel_id);
+    let (mut provider_id, mut model) = (provider_id, model);
+    if model_follows_default == Some(true) {
+        // Following always carries the default's pair, so no reader sees the
+        // flag without the snapshot it refers to (ADR-0049).
+        if model.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            model = Some(state.runtime_model().1);
+        }
+        if provider_id.is_none() {
+            provider_id = load_config(&state)
+                .ok()
+                .and_then(|config| config.active_provider().map(|provider| provider.id.clone()));
+        }
+    }
     state
         .client
         .update_conversation_settings(
@@ -1888,6 +1989,17 @@ pub async fn update_conversation_settings(
                 compact_threshold,
                 router_enabled,
                 default_responder: default_responder.map(AgentId::new),
+                routing_mode: routing_mode
+                    .as_deref()
+                    .map(str::parse::<RoutingMode>)
+                    .transpose()
+                    .map_err(|_| format!("unknown routing mode '{:?}'", routing_mode))?,
+                muted_participants: muted_participants
+                    .map(|ids| ids.into_iter().map(AgentId::new).collect()),
+                reply_cleanup,
+                provider_id,
+                model,
+                model_follows_default,
             },
         )
         .await
@@ -1909,13 +2021,11 @@ pub async fn compact_conversation(
         .map_err(|error| error.to_string())?;
     let (llm, model) = conversation_runtime(&state, &settings);
     match agent_id {
-        Some(agent_id) => state
-            .client
+        Some(agent_id) => local(&state)?
             .compact_conversation_agent(&channel_id, &AgentId::new(agent_id), llm, &model)
             .await
             .map_err(|error| error.to_string()),
-        None => state
-            .client
+        None => local(&state)?
             .compact_conversation(&channel_id, llm, &model)
             .await
             .map_err(|error| error.to_string()),
@@ -2158,11 +2268,49 @@ pub struct ProviderDraft {
     pub clear_api_key: bool,
 }
 
+/// Mirror a new default provider/model into every conversation that follows it.
+///
+/// The stored snapshot is what meters, compaction, and previews count with, so
+/// a following conversation is rewritten in the same command that changes the
+/// default (ADR-0049).
+async fn sync_following_conversations(
+    state: &AppState,
+    provider_id: Option<String>,
+    model: &str,
+) -> Result<(), String> {
+    let summaries = state
+        .client
+        .list_conversation_summaries()
+        .await
+        .map_err(|error| error.to_string())?;
+    let provider_id = provider_id.unwrap_or_default();
+    for summary in summaries {
+        if !summary.settings.model_follows_default {
+            continue;
+        }
+        let update = ConversationSettingsUpdate {
+            provider_id: Some(provider_id.clone()),
+            model: Some(model.to_string()),
+            ..Default::default()
+        };
+        state
+            .client
+            .update_conversation_settings(&summary.channel.id, &update)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Apply a create or update to an in-memory configuration.
 ///
 /// A blank API key keeps the stored one; `clear_api_key` removes it. The first
-/// provider added to an empty configuration becomes active.
-fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Result<(), String> {
+/// provider added to an empty configuration becomes active. Returns the id of
+/// the provider that was written.
+fn upsert_provider(
+    config: &mut config::AppConfig,
+    draft: &ProviderDraft,
+) -> Result<String, String> {
     let typed_key = config::normalize_api_key(draft.api_key.as_deref());
 
     match draft.provider_id.as_deref() {
@@ -2187,6 +2335,7 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 key.as_deref(),
                 draft.model_metadata.clone(),
             )?;
+            Ok(id.to_string())
         }
         None => {
             let id = config::new_provider_id(&config.providers);
@@ -2201,30 +2350,41 @@ fn upsert_provider(config: &mut config::AppConfig, draft: &ProviderDraft) -> Res
                 draft.model_metadata.clone(),
             )?);
             if config.active_provider().is_none() {
-                config.active_provider_id = Some(id);
+                config.active_provider_id = Some(id.clone());
             }
+            Ok(id)
         }
     }
-
-    Ok(())
 }
 
 /// Create a provider when `provider_id` is absent, otherwise update it.
 #[tauri::command]
-pub fn save_model_provider(
+pub async fn save_model_provider(
     state: State<'_, AppState>,
     draft: ProviderDraft,
 ) -> Result<ModelSettings, String> {
     let mut config = load_config(&state)?;
-    upsert_provider(&mut config, &draft)?;
+    let provider_id = upsert_provider(&mut config, &draft)?;
 
     let config = persist_config(&state, config)?;
+
+    // Saving the active provider can change the model runs use; keep the
+    // snapshot of conversations that follow the default on that model.
+    if config.active_provider_id.as_deref() == Some(provider_id.as_str()) {
+        if let Some(provider) = config.provider(&provider_id) {
+            let model = provider.model.clone();
+            sync_following_conversations(&state, Some(provider_id), &model).await?;
+        }
+    }
     Ok(model_settings(&state, &config))
 }
 
 /// Select one of a provider's known models without resaving the provider.
+///
+/// Selecting a model also makes its provider the active one, so one action
+/// answers "which model do my agents run" (ADR-0048).
 #[tauri::command]
-pub fn set_active_model(
+pub async fn set_active_model(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
@@ -2242,14 +2402,16 @@ pub fn set_active_model(
             provider.name
         ));
     }
-    config.providers[index].model = model;
+    config.providers[index].model = model.clone();
+    config.active_provider_id = Some(provider_id.clone());
 
     let config = persist_config(&state, config)?;
+    sync_following_conversations(&state, Some(provider_id), &model).await?;
     Ok(model_settings(&state, &config))
 }
 
 #[tauri::command]
-pub fn delete_model_provider(
+pub async fn delete_model_provider(
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<ModelSettings, String> {
@@ -2266,12 +2428,43 @@ pub fn delete_model_provider(
     }
 
     let config = persist_config(&state, config)?;
+
+    // A conversation pinned to the removed provider would otherwise keep a
+    // stale model name; move it onto the new default. Conversations that
+    // follow the default take the new snapshot too (ADR-0049).
+    let (_, model) = state.runtime_model();
+    let active_id = config
+        .active_provider()
+        .map(|provider| provider.id.clone())
+        .unwrap_or_default();
+    let summaries = state
+        .client
+        .list_conversation_summaries()
+        .await
+        .map_err(|error| error.to_string())?;
+    for summary in summaries {
+        let pinned_here = summary.settings.provider_id.as_deref() == Some(provider_id.as_str());
+        if !summary.settings.model_follows_default && !pinned_here {
+            continue;
+        }
+        let update = ConversationSettingsUpdate {
+            provider_id: Some(active_id.clone()),
+            model: Some(model.clone()),
+            model_follows_default: pinned_here.then_some(true),
+            ..Default::default()
+        };
+        state
+            .client
+            .update_conversation_settings(&summary.channel.id, &update)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     Ok(model_settings(&state, &config))
 }
 
 /// Select the provider used for crew runs; `None` selects the offline mock.
 #[tauri::command]
-pub fn activate_model_provider(
+pub async fn activate_model_provider(
     state: State<'_, AppState>,
     provider_id: Option<String>,
 ) -> Result<ModelSettings, String> {
@@ -2287,6 +2480,14 @@ pub fn activate_model_provider(
     }
 
     let config = persist_config(&state, config)?;
+    let snapshot = config
+        .active_provider()
+        .map(|provider| (provider.id.clone(), provider.model.clone()));
+    let (provider_id, model) = match snapshot {
+        Some((provider_id, model)) => (Some(provider_id), model),
+        None => (None, state.runtime_model().1),
+    };
+    sync_following_conversations(&state, provider_id, &model).await?;
     Ok(model_settings(&state, &config))
 }
 
@@ -2339,6 +2540,28 @@ pub fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInf
 pub fn set_auto_check_updates(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     let mut config = load_config(&state)?;
     config.auto_check_updates = enabled;
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
+}
+
+/// The stored interface locale preference, or `None` to follow the system.
+#[tauri::command]
+pub fn get_ui_locale(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(load_config(&state)?.ui_locale)
+}
+
+/// Persist the interface locale preference.
+///
+/// The backend stores the value without interpreting it; the frontend owns the
+/// locale registry and falls back to the system language for unknown values.
+#[tauri::command]
+pub fn set_ui_locale(state: State<'_, AppState>, locale: String) -> Result<(), String> {
+    let locale = locale.trim();
+    if locale.is_empty() || locale.len() > 35 {
+        return Err("Unsupported interface locale.".to_string());
+    }
+    let mut config = load_config(&state)?;
+    config.ui_locale = Some(locale.to_string());
     config::save(&state.config_path, &config)
         .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
 }
@@ -2448,8 +2671,7 @@ fn remove_database_files(path: &Path) {
 #[tauri::command]
 pub async fn export_workspace(state: State<'_, AppState>, path: String) -> Result<String, String> {
     let path = package_output_path(&path)?;
-    let bytes = state
-        .client
+    let bytes = local(&state)?
         .export_workspace()
         .await
         .map_err(|error| error.to_string())?;
@@ -2675,6 +2897,15 @@ pub async fn test_model_provider(
 ///
 /// The listing shape differs between protocols, so the request goes through
 /// the protocol client rather than a shared HTTP helper.
+/// One model the endpoint reported, with the window it advertises.
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchedModel {
+    pub id: String,
+    /// Absent when the endpoint does not report one.
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+}
+
 #[tauri::command]
 pub async fn fetch_provider_models(
     state: State<'_, AppState>,
@@ -2682,25 +2913,75 @@ pub async fn fetch_provider_models(
     protocol: config::ProviderProtocol,
     base_url: String,
     api_key: Option<String>,
-) -> Result<Vec<String>, String> {
-    let config = load_config(&state)?;
+) -> Result<Vec<FetchedModel>, String> {
+    let config_value = load_config(&state)?;
     let stored_key = provider_id
         .as_deref()
-        .and_then(|id| config.provider(id))
+        .and_then(|id| config_value.provider(id))
         .and_then(|provider| provider.api_key.clone());
     let api_key = config::normalize_api_key(api_key.as_deref()).or(stored_key);
     let base_url = config::normalize_base_url(&base_url)?;
     let provider = config::build_remote_provider(protocol, &base_url, api_key);
 
-    let models = tokio::time::timeout(Duration::from_secs(30), provider.list_models())
+    let discovered = tokio::time::timeout(Duration::from_secs(30), provider.list_models())
         .await
         .map_err(|_| "The provider did not respond within 30 seconds.".to_string())?
         .map_err(|error| error.to_string())?;
 
-    if models.is_empty() {
+    if discovered.is_empty() {
         return Err("The endpoint returned no models.".to_string());
     }
-    Ok(models)
+
+    // Only a saved provider has somewhere to keep the metadata, and a value
+    // the user typed always wins over what the endpoint claims.
+    if let Some(id) = provider_id.as_deref() {
+        if let Some(provider) = config_value.provider(id) {
+            let merged = merge_discovered_metadata(&provider.model_metadata, &discovered);
+            if merged != provider.model_metadata {
+                let mut updated = config_value.clone();
+                if let Some(target) = updated.providers.iter_mut().find(|entry| entry.id == id) {
+                    target.model_metadata = merged;
+                }
+                config::save(&state.config_path, &updated).map_err(|error| {
+                    format!("failed to write {}: {error}", state.config_path.display())
+                })?;
+            }
+        }
+    }
+
+    Ok(discovered
+        .into_iter()
+        .map(|model| FetchedModel {
+            id: model.id,
+            context_window: model.context_window,
+            max_output_tokens: model.max_output_tokens,
+        })
+        .collect())
+}
+
+/// Fill window metadata the provider does not already carry.
+///
+/// A model the user gave a window keeps it; only a missing entry, or one with
+/// no window at all, takes the endpoint's figure. The same rule applies per
+/// field, so a hand-typed output limit survives a fetch that reports none.
+fn merge_discovered_metadata(
+    existing: &BTreeMap<String, config::ModelMetadata>,
+    discovered: &[cowbot_llm::DiscoveredModel],
+) -> BTreeMap<String, config::ModelMetadata> {
+    let mut merged = existing.clone();
+    for model in discovered {
+        if model.context_window.is_none() && model.max_output_tokens.is_none() {
+            continue;
+        }
+        let entry = merged.entry(model.id.clone()).or_default();
+        if entry.context_window.is_none() {
+            entry.context_window = model.context_window;
+        }
+        if entry.max_output_tokens.is_none() {
+            entry.max_output_tokens = model.max_output_tokens;
+        }
+    }
+    merged
 }
 
 fn summarize_reply(reply: &str) -> String {
@@ -2768,7 +3049,7 @@ pub struct SideAnswerView {
 /// recorded; the view returns the answer for an ephemeral panel. `agent_id`
 /// picks the responder and defaults to the chat's own agent or its default
 /// responder. The model comes from the conversation's settings, or from
-/// `model` for an agent chat and a group channel (ADR-0039).
+/// `model` for an agent chat and a group channel (ADR-0041).
 #[tauri::command]
 pub async fn ask_side_question(
     state: State<'_, AppState>,
@@ -2800,12 +3081,10 @@ pub async fn ask_side_question(
         .filter(|model| !model.trim().is_empty())
         .unwrap_or(default_model);
 
-    let gate = state
-        .client
+    let gate = local(&state)?
         .side_question_gate(AssignmentId::new(format!("side-question-{}", channel_id.0)));
     let responder = agent_id.as_deref().map(AgentId::new);
-    let answer = state
-        .client
+    let answer = local(&state)?
         .ask_side_question(
             &channel_id,
             responder.as_ref(),

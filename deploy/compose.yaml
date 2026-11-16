@@ -1,0 +1,58 @@
+# A one-service deployment: the server plus a reverse proxy that terminates TLS.
+#
+# The server binds inside the container network and is never published directly;
+# Caddy is the only thing reachable from outside. That is what makes the
+# "localhost only until TLS lands" caveat moot: TLS is the proxy's job, which is
+# what SECURITY.md tells an operator to do.
+#
+#   1. Put the server's name in Caddyfile and your domains in .env.
+#   2. docker compose up -d
+#   3. docker compose logs server | grep "password:"   # the owner's first sign-in
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      COWBOT_SERVER_DATABASE: /data/cowbot-server.db
+      # Loopback inside the container network: only the proxy can reach it.
+      COWBOT_SERVER_ADDRESS: 127.0.0.1:8787
+      COWBOT_SERVER_OWNER_NAME: ${COWBOT_OWNER_NAME:-Owner}
+      COWBOT_SERVER_OWNER_EMAIL: ${COWBOT_OWNER_EMAIL:?set COWBOT_OWNER_EMAIL}
+      COWBOT_SERVER_WORKSPACE: ${COWBOT_WORKSPACE:-Team Workspace}
+      COWBOT_SERVER_SESSION_HOURS: ${COWBOT_SESSION_HOURS:-336}
+      RUST_LOG: ${RUST_LOG:-cowbot_server=info}
+    volumes:
+      - cowbot-data:/data
+    # The proxy shares the container network, so no port mapping is needed here.
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # TLS termination and a single public entry point. Caddy obtains a
+  # certificate automatically for a real domain.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  cowbot-data:
+  caddy-data:
+  caddy-config:

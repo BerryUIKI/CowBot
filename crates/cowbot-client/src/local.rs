@@ -17,7 +17,7 @@ use cowbot_core::audit::AuditEvent;
 use cowbot_core::channel::{Channel, ChannelId, ChannelMessage, Sender};
 use cowbot_core::conversation::{
     ChannelParticipant, CompactionOutcome, ConversationContext, ConversationSettings,
-    ConversationSettingsUpdate, ConversationTurn,
+    ConversationSettingsUpdate, ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
@@ -109,7 +109,7 @@ impl LocalClient {
             ConversationService::new(store.clone(), bus.clone(), context.workspace.id.clone())
                 .with_session_decisions(Some(session_decisions.clone()))
                 .with_compaction_locks(compaction_locks);
-        let templates = TemplateService::new(store.clone());
+        let templates = TemplateService::new(store.clone(), context.workspace.id.clone());
         let tasks = TaskService::new(store.clone(), bus.clone());
         let agents = AgentService::new(store.clone(), bus.clone());
         let permissions = PermissionService::new(store.clone(), context.workspace.id.clone());
@@ -244,6 +244,7 @@ impl LocalClient {
     ) -> CowResult<HashMap<TaskId, String>> {
         CrewRunner::new(self.store.clone(), self.bus.clone())
             .with_session_decisions(self.session_decisions.clone())
+            .with_turns(self.channel_agents.turns())
             .run_with_options(
                 crew,
                 &self.session.workspace.id,
@@ -306,7 +307,8 @@ impl LocalClient {
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
         .with_session_decisions(Some(self.session_decisions.clone()))
-        .with_task_memory();
+        .with_task_memory()
+        .with_turns(self.channel_agents.turns());
         scheduler.register_instance(&agent);
         scheduler
             .enqueue(
@@ -593,6 +595,9 @@ impl Client for LocalClient {
     }
 
     async fn clear_channel_messages(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        // A reply still streaming into this channel would land in the history
+        // the user just cleared, so stop the channel's turns first (ADR-0041).
+        self.channel_agents.cancel_channel_turns(channel_id);
         self.channels.clear_channel_messages(channel_id).await
     }
 
@@ -785,6 +790,8 @@ impl Client for LocalClient {
     }
 
     async fn clear_conversation_context(&self, channel_id: &ChannelId) -> CowResult<u64> {
+        // A turn in flight would append to the branch just excluded.
+        self.channel_agents.cancel_channel_turns(channel_id);
         self.conversations.clear_context(channel_id).await
     }
 
@@ -908,6 +915,12 @@ impl Client for LocalClient {
         self.tasks.cancel(task_id, reason).await
     }
 
+    async fn cancel_turn(&self, turn_id: &TurnId) -> CowResult<bool> {
+        // Every turn the client starts — conversation, group, channel, and task
+        // run — registers with this one runner, so one lookup covers them all.
+        Ok(self.channel_agents.cancel_turn(turn_id))
+    }
+
     async fn archive_task(&self, task_id: &TaskId) -> CowResult<Task> {
         self.tasks.set_archived(task_id, true).await
     }
@@ -1018,9 +1031,11 @@ impl Client for LocalClient {
         } else {
             ApprovalStatus::Rejected
         };
-        self.approvals
+        let (approval, _remembered) = self
+            .approvals
             .decide_for_session(approval_id, status, &self.session.user.id.0)
-            .await
+            .await?;
+        Ok(approval)
     }
 
     async fn session_decisions(&self) -> CowResult<Vec<SessionDecisionView>> {
@@ -1072,6 +1087,17 @@ impl Client for LocalClient {
     async fn instantiate_agents(&self, template_id: &str) -> CowResult<Vec<AgentProfile>> {
         self.templates
             .instantiate_agents(&self.session.workspace.id, template_id)
+            .await
+    }
+
+    async fn request_task_worktree(
+        &self,
+        task_id: &TaskId,
+        project_id: &str,
+        project_path: &str,
+        base_branch: &str,
+    ) -> CowResult<TaskWorktree> {
+        self.request_worktree(task_id, project_id, project_path, base_branch)
             .await
     }
 
@@ -1444,8 +1470,7 @@ mod tests {
                 &cowbot_core::conversation::ConversationSettingsUpdate {
                     auto_compact: Some(true),
                     compact_threshold: Some(70),
-                    router_enabled: None,
-                    default_responder: None,
+                    ..Default::default()
                 },
             )
             .await

@@ -129,9 +129,10 @@ impl Store {
     /// same condition as a flag so a viewer can label it.
     pub async fn get_prompt_snapshot(
         &self,
+        workspace_id: &WorkspaceId,
         llm_call_id: &str,
     ) -> CowResult<Option<LlmPromptSnapshot>> {
-        let Some(snapshot) = self.read_prompt_snapshot(llm_call_id).await? else {
+        let Some(snapshot) = self.read_prompt_snapshot(workspace_id, llm_call_id).await? else {
             return Ok(None);
         };
         if !snapshot.hash_matches() {
@@ -146,15 +147,19 @@ impl Store {
     ///
     /// The document is returned even when its hash no longer matches;
     /// `hash_mismatch` marks it so the caller can label instead of trust it.
+    /// The caller names the workspace it is acting for, because a raw snapshot
+    /// payload is the most sensitive row in the database and the id comes from
+    /// outside: without the scope one workspace could read another's prompt.
     pub async fn get_prompt_snapshot_detail(
         &self,
+        workspace_id: &WorkspaceId,
         llm_call_id: &str,
     ) -> CowResult<Option<PromptSnapshotDetail>> {
-        let Some(snapshot) = self.read_prompt_snapshot(llm_call_id).await? else {
+        let Some(snapshot) = self.read_prompt_snapshot(workspace_id, llm_call_id).await? else {
             return Ok(None);
         };
         let summary = self
-            .find_snapshot_summary(llm_call_id)
+            .find_snapshot_summary(workspace_id, llm_call_id)
             .await?
             .unwrap_or_else(|| PromptSnapshotSummary::from_snapshot(llm_call_id, &snapshot));
         Ok(Some(PromptSnapshotDetail {
@@ -336,7 +341,7 @@ impl Store {
         )
         .bind(&settings.workspace_id.0)
         .bind(bool_int(settings.enabled))
-        .bind(i64::from(clamp_retention_days(settings.retention_days)))
+        .bind(i64::from(settings.retention_days))
         .bind(settings.updated_at.to_rfc3339())
         .execute(self.pool())
         .await
@@ -346,12 +351,15 @@ impl Store {
 
     async fn read_prompt_snapshot(
         &self,
+        workspace_id: &WorkspaceId,
         llm_call_id: &str,
     ) -> CowResult<Option<LlmPromptSnapshot>> {
         let row = sqlx::query_as::<_, PromptSnapshotRow>(
-            "SELECT payload FROM llm_prompt_snapshots WHERE llm_call_id = ?",
+            "SELECT payload FROM llm_prompt_snapshots
+             WHERE llm_call_id = ? AND workspace_id = ?",
         )
         .bind(llm_call_id)
+        .bind(&workspace_id.0)
         .fetch_optional(self.pool())
         .await
         .map_err(db)?;
@@ -365,16 +373,18 @@ impl Store {
 
     async fn find_snapshot_summary(
         &self,
+        workspace_id: &WorkspaceId,
         llm_call_id: &str,
     ) -> CowResult<Option<PromptSnapshotSummary>> {
         let sql = format!(
             "SELECT {SUMMARY_COLUMNS}
              FROM llm_prompt_snapshots s
              JOIN llm_calls c ON c.id = s.llm_call_id
-             WHERE s.llm_call_id = ?"
+             WHERE s.llm_call_id = ? AND s.workspace_id = ?"
         );
         let row = sqlx::query_as::<_, SnapshotSummaryRow>(&sql)
             .bind(llm_call_id)
+            .bind(&workspace_id.0)
             .fetch_optional(self.pool())
             .await
             .map_err(db)?;

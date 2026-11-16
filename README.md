@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
-  <a href="docs/ROADMAP.md"><img src="https://img.shields.io/badge/status-Phase_1_complete-22c55e.svg" alt="Phase 1 complete"></a>
+  <a href="docs/ROADMAP.md"><img src="https://img.shields.io/badge/status-Phase_2_in_progress-c9a66b.svg" alt="Phase 2 in progress"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-22c55e.svg" alt="Contributions welcome"></a>
 </p>
 
@@ -24,6 +24,7 @@
   <a href="#what-works-today">Features</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="docs/LIMITATIONS.md">Limitations</a> ·
   <a href="assets/README.md">Brand assets</a>
 </p>
 
@@ -31,7 +32,7 @@
 
 CowBot brings role-based agent teams, tasks, and channel-based collaboration into one modular platform. It draws on [CrewAI](https://github.com/crewAIInc/crewAI)'s role-and-task orchestration and [Mattermost](https://github.com/mattermost/mattermost)'s channel-based collaboration model.
 
-The Rust runtime and CLI work today. Phase 1 (the local/offline MVP) is complete; self-hosted team mode is planned next.
+The Rust runtime, CLI, desktop app, and self-hosted server work today. Phase 1 (the local/offline MVP) is complete, and Phase 2 (self-hosted team mode) milestones 2.1–2.5 are implemented: the server, workspace roles and invitations, the collaboration API with `RemoteClient`, Docker deployment, and hosted workspace data. The desktop does not yet switch to a server from its settings, and agent turns still execute in the desktop process.
 
 ## What works today
 
@@ -41,19 +42,20 @@ The Rust runtime and CLI work today. Phase 1 (the local/offline MVP) is complete
 | Assignment runtime | Task trees, run groups, lifecycle event logs, budgets, stall guards, restart reconciliation, and a scheduler with wake/re-entry and cross-root concurrency |
 | Local persistence | Embedded SQLite migrations and repositories for workspaces, channels, agents, tasks, assignments, approvals, audit events, conversations and context, notes, memory entries and settings with an FTS5 index, per-call token usage, permission rules, and task worktrees |
 | Collaboration services | Idempotent local owner/workspace bootstrap; channel and message persistence connected to the event bus; agent direct conversations provisioned per agent; user-created single-agent and group conversations with independent append-only context branches and a header context meter; `@Agent` mentions that turn a message into an assignment-backed answer in the channel; participant-scoped group routing with an opt-in model router and default responder |
+| Self-hosted server | Optional `cowbot-server` with Argon2id accounts, hashed bearer sessions, workspace roles and invitations, channels, messages, tasks, approvals, audit, API tokens, a workspace-scoped WebSocket stream, hosted memory/conversation/preview/snapshot/template/package surfaces, and `RemoteClient`; Dockerfile and Compose with Caddy |
 | Context management | Per-call token usage with cache hit/miss fields, conversation cache hit rate, manual compaction, optional automatic compaction at a configurable threshold, and a colored stacked context bar with memory and auto-compact-buffer segments |
 | Memory and notes | Workspace and conversation notes plus memory entries scoped to the workspace, an agent, a conversation, or one agent in one conversation; deterministic budgeted FTS5 recall for conversation turns, direct conversations, and task executions; an approval-gated `remember` tool; opt-in reviewed extraction; Settings → Memory, a conversation note editor, and "Remember this message" |
 | CLI | `init`, `run`, `tools`, `export`, `import`, `channel`, `message`, and `memory`, with optional `cowbot.toml` configuration, `--channel`/`--concurrency` for runs, and `message post --wait` to let mentioned agents answer |
 | Agent and team templates | Built-in JSON templates, validation, template management, and `.cowtemplate` import/export |
-| Desktop shell | First-run onboarding with a Main Assistant (`main`) that can create channels, start teams, and queue tasks through desktop workspace tools; a conversation-first React shell with searchable agent contacts, direct conversations that need no mention, user-created single and group conversations with a colored context bar and compaction controls, group channels with mention-driven replies and a per-channel approval policy, right-click channel and conversation management (pin, rename, delete, clear history/context), agent editing (name, role, tools), Markdown and sandboxed HTML artifact rendering, task creation and history, run history and tool calls, cancellation, approval decisions with tool arguments and risk, workspace permission rules, session decisions, Plan mode with approve-to-continue, a Bypass Critical tri-state, a source-filtered audit view, task worktrees and background task cards, crew execution from a task, Settings → Memory with pending review, workspace creation/export/import/switching, vendor-first model providers with model discovery, agents/templates, and automatic update checks with in-app installation via Tauri |
+| Desktop shell | First-run onboarding with a Main Assistant (`main`) that can create channels, start teams, and queue tasks through desktop workspace tools; a conversation-first React shell with searchable agent contacts, direct conversations that need no mention, user-created single and group conversations with a colored context bar and compaction controls, group channels with mention-driven replies and a per-channel approval policy, right-click channel and conversation management (pin, rename, delete, clear history/context), agent editing (name, role, tools), Markdown and sandboxed HTML artifact rendering, task creation and history, run history and tool calls, cancellation, approval decisions with tool arguments and risk, workspace permission rules, session decisions, Plan mode with approve-to-continue, a Bypass Critical tri-state, a source-filtered audit view, task worktrees and background task cards, crew execution from a task, Settings → Memory with pending review, workspace creation/export/import/switching, a default model with switchable connections, a trilingual interface (English, Simplified Chinese, Traditional Chinese) with a language picker and account menu, agents/templates, and automatic update checks with in-app installation via Tauri |
 | Desktop installers | Unsigned NSIS/MSI, universal DMG, and deb/AppImage builds from the release workflow, plus signed updater artifacts and a `latest.json` manifest |
 | Tools | Subprocess execution and file operations with execution timeouts and output limits |
 | Approvals | Static risk classification, five approval modes (Auto / Manual / Accept edits / Plan / Bypass permissions), workspace allow / ask / deny rules, session decisions, plan artifacts with approve-to-continue, a Bypass Critical tri-state, pending approvals, and source-attributed audit records |
 | Git worktrees | Settings → Projects registers device-local repositories; a task can run in a per-task `cowbot/<slug>` worktree with rooted tools, branch/diff/discard actions, run groups, sidebar background cards, and a Background panel |
 | Workspace packages | `.cowpkg` export and verified import with SHA-256 checksums, including notes and memory with redaction, via the CLI and desktop |
-| Model providers | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints, including DeepSeek, Ollama, OpenRouter, and Claude Code-compatible relays; model listing, several models per provider, and mock providers for offline testing |
+| Model providers | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses endpoints, including DeepSeek, Ollama, OpenRouter, and Claude Code-compatible relays; one default model separate from connections, model listing and discovery, per-model context windows, several models per provider, per-conversation model scope, and mock providers for offline testing |
 
-**Phase 1 complete:** milestones 1.1–1.7 are implemented. The local client and Tauri desktop shell cover agent direct conversations, user-created single and group conversations with independent context branches and a context meter, group channels, tasks, approval rules and session decisions, Plan mode with approve-to-continue, a Bypass Critical tri-state, source-filtered audit, per-task git worktrees with background task cards, agent memory with shared notes and reviewed extraction, and settings, the assignment scheduler with cross-root concurrency, CLI configuration with `cowbot.toml` and channel/message/memory commands, vendor-first model providers with endpoint model discovery across three API protocols, desktop-initiated crew execution, first-run onboarding, workspace creation and switching, `.cowpkg` export/import through both the CLI and desktop, and signed in-app updates delivered through GitHub Releases. Every LLM completion records normalized token usage, including cache hit/miss fields. The release workflow produces unsigned Windows, macOS, and Linux installers. The [user guide](docs/USER_GUIDE.md) covers installation, model setup, workspaces, tasks, approvals, updates, and troubleshooting. Operating-system code signing and remote mode (Phase 2) remain follow-up work. See the [roadmap](docs/ROADMAP.md) for scope and acceptance criteria.
+**Phase 1 complete:** milestones 1.1–1.7 are implemented. The local client and Tauri desktop shell cover agent direct conversations, user-created single and group conversations with independent context branches and a context meter, group channels, tasks, approval rules and session decisions, Plan mode with approve-to-continue, a Bypass Critical tri-state, source-filtered audit, per-task git worktrees with background task cards, agent memory with shared notes and reviewed extraction, and settings, the assignment scheduler with cross-root concurrency, CLI configuration with `cowbot.toml` and channel/message/memory commands, vendor-first model providers with endpoint model discovery across three API protocols, desktop-initiated crew execution, first-run onboarding, workspace creation and switching, `.cowpkg` export/import through both the CLI and desktop, and signed in-app updates delivered through GitHub Releases. Every LLM completion records normalized token usage, including cache hit/miss fields. The release workflow produces unsigned Windows, macOS, and Linux installers. The [user guide](docs/USER_GUIDE.md) covers installation, model setup, workspaces, tasks, approvals, updates, and troubleshooting. Operating-system code signing remains follow-up work. Phase 2 milestones 2.1–2.5 are implemented; the open work is desktop server selection, remote turn execution, and the remaining concurrency and orchestration gaps in the [roadmap](docs/ROADMAP.md).
 
 ## Naming and compatibility
 
@@ -70,6 +72,8 @@ Desktop installers are built by the [release workflow](.github/workflows/release
 - **Linux:** `.deb` and `.AppImage`
 
 Builds are unsigned: macOS may require allowing the app in System Settings, and Windows may show a SmartScreen prompt. See [ADR-0014](docs/ADR/0014-desktop-release-builds.md) for the release policy. Until a release is published, build from source with the quick start below.
+
+To run CowBot as a self-hosted team server instead, see the [server operations guide](docs/SERVER.md) and the Docker/Compose files under `deploy/`.
 
 From 0.1.2 onward, CowBot checks GitHub Releases at launch and can download and install signed updates from **Settings → About**. Users upgrading from 0.1.1 or earlier must install 0.1.2 manually once. See [ADR-0018](docs/ADR/0018-desktop-auto-updates.md) and the [user guide](docs/USER_GUIDE.md#updates).
 
@@ -189,11 +193,11 @@ Install Node.js 22.13+, pnpm, and the platform's Tauri native prerequisites firs
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/architecture-light.svg">
-    <img src="docs/assets/architecture-light.svg" alt="Current local runtime: CLI and desktop use cowbot-client; services persist state and coordinate approvals and agents." width="100%">
+    <img src="docs/assets/architecture-light.svg" alt="Current runtime: CLI and desktop use cowbot-client, the self-hosted server serves the collaboration API, and services persist state and coordinate approvals and agents." width="100%">
   </picture>
 </p>
 
-Ten focused crates keep the domain model, runtime, and application services separate:
+Eleven focused crates keep the domain model, runtime, and application services separate:
 
 | Crate | Responsibility |
 | --- | --- |
@@ -206,9 +210,10 @@ Ten focused crates keep the domain model, runtime, and application services sepa
 | [`cowbot-client`](crates/cowbot-client) | Transport-neutral client and local backend shared by CLI and desktop |
 | [`cowbot-package`](crates/cowbot-package) | `.cowpkg` workspace packages with checksums and verified import |
 | [`cowbot-service`](crates/cowbot-service) | Local bootstrap, collaboration, templates, and assignment services |
+| [`cowbot-server`](crates/cowbot-server) | Self-hosted HTTP/WebSocket server, accounts, roles, and the collaboration API |
 | [`cowbot-cli`](crates/cowbot-cli) | The `cowbot` command-line interface |
 
-Read the [functional and system architecture](docs/ARCHITECTURE.md) for the planned desktop and server boundaries.
+Read the [functional and system architecture](docs/ARCHITECTURE.md) for the desktop and server boundaries.
 
 ## Workspace concept
 
@@ -231,9 +236,13 @@ Start with the [documentation index](docs/README.md), [developer guide](docs/DEV
 | [Product requirements](docs/PRD.md) | Users, workflows, and product scope |
 | [Architecture](docs/ARCHITECTURE.md) | Functional domains and system design |
 | [Roadmap](docs/ROADMAP.md) | Local MVP → self-hosted teams → ecosystem extensions |
+| [Limitations](docs/LIMITATIONS.md) | What works, what does not, and deliberate surprises |
+| [Security](SECURITY.md) | Assets, trust boundaries, known gaps, and an operator checklist |
+| [Provider capabilities](docs/PROVIDER_CAPABILITIES.md) | Protocol matrix across Chat Completions, Messages, and Responses |
 | [Architecture decisions](docs/ADR) | Recorded design decisions and tradeoffs |
 | [Template format](docs/TEMPLATE_FORMAT.md) | Agent and team template schema |
 | [Design references](docs/REFERENCES.md) | External references informing the platform |
+| [Server deployment](docs/SERVER.md) | Self-hosted team mode: configuration, Docker Compose, backup, and tokens |
 | [Brand assets](assets/README.md) | Canonical icon, exports, and asset maintenance |
 
 ## Development

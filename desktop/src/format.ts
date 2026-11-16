@@ -1,26 +1,45 @@
-const timeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-});
+import { currentIntlLocale, t } from "./i18n/catalog";
 
-const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+interface Formatters {
+  locale: string;
+  time: Intl.DateTimeFormat;
+  dateTime: Intl.DateTimeFormat;
+  day: Intl.DateTimeFormat;
+  fullDay: Intl.DateTimeFormat;
+}
 
-const dayFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-});
+let formatters: Formatters | null = null;
+
+/** Build (or rebuild) formatters when the interface language changes. */
+function activeFormatters(): Formatters {
+  const locale = currentIntlLocale();
+  if (!formatters || formatters.locale !== locale) {
+    formatters = {
+      locale,
+      time: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }),
+      dateTime: new Intl.DateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      day: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }),
+      fullDay: new Intl.DateTimeFormat(locale, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }),
+    };
+  }
+  return formatters;
+}
 
 export function formatTime(value: string): string {
-  return timeFormatter.format(new Date(value));
+  return activeFormatters().time.format(new Date(value));
 }
 
 export function formatDateTime(value: string): string {
-  return dateTimeFormatter.format(new Date(value));
+  return activeFormatters().dateTime.format(new Date(value));
 }
 
 /** Compact timestamp for conversation rows: a time today, a date otherwise. */
@@ -28,15 +47,9 @@ export function formatListTime(value: string): string {
   const date = new Date(value);
   const now = new Date();
   return date.toDateString() === now.toDateString()
-    ? timeFormatter.format(date)
-    : dayFormatter.format(date);
+    ? activeFormatters().time.format(date)
+    : activeFormatters().day.format(date);
 }
-
-const fullDayFormatter = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-});
 
 /** Stable local day key used to group timeline messages. */
 export function dayKey(value: string): string {
@@ -48,11 +61,11 @@ export function dayKey(value: string): string {
 export function formatDayLabel(value: string): string {
   const date = new Date(value);
   const now = new Date();
-  if (dayKey(value) === dayKey(now.toISOString())) return "Today";
+  if (dayKey(value) === dayKey(now.toISOString())) return t("time.today");
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (dayKey(value) === dayKey(yesterday.toISOString())) return "Yesterday";
-  return fullDayFormatter.format(date);
+  if (dayKey(value) === dayKey(yesterday.toISOString())) return t("time.yesterday");
+  return activeFormatters().fullDay.format(date);
 }
 
 /** Compact token count: 987, 12.3k, 1.2M. */

@@ -1,0 +1,21 @@
+# The public entry point. Caddy terminates TLS and forwards everything to the
+# server over the container network, which is also what lets the server keep
+# binding to loopback and trust `X-Forwarded-For` for sign-in rate limiting.
+#
+# Replace `team.example.com` with the deployment's real name. Caddy obtains and
+# renews the certificate automatically when the name resolves to this host.
+
+team.example.com {
+	encode zstd gzip
+
+	# The WebSocket stream needs the upgrade headers passed through.
+	reverse_proxy server:8787 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

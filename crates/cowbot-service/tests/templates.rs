@@ -67,7 +67,8 @@ async fn builtin_templates_are_valid() {
 #[tokio::test]
 async fn template_crud_import_export_roundtrip() {
     let store = test_store().await;
-    let service = TemplateService::new(store.clone());
+    let context = bootstrap_local(&store).await.unwrap();
+    let service = TemplateService::new(store.clone(), context.workspace.id.clone());
     let document = sample_team("user-sample-team");
 
     service.save(&document).await.unwrap();
@@ -98,7 +99,7 @@ async fn template_crud_import_export_roundtrip() {
 async fn instantiate_agents_from_template() {
     let store = test_store().await;
     let context = bootstrap_local(&store).await.unwrap();
-    let service = TemplateService::new(store.clone());
+    let service = TemplateService::new(store.clone(), context.workspace.id.clone());
 
     let profiles = service
         .instantiate_agents(&context.workspace.id, "builtin-software-team")

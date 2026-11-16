@@ -24,7 +24,11 @@ pub struct ModelRuntime {
 
 /// Shared state for Tauri commands.
 pub struct AppState {
-    pub client: Arc<LocalClient>,
+    /// The active transport: local SQLite or a remote server.
+    pub client: Arc<dyn Client>,
+    /// The same client when it is local, for file, worktree, and crew
+    /// operations that only the in-process runtime can do.
+    pub local_client: Option<Arc<LocalClient>>,
     pub tools: ToolRegistry,
     /// Active model provider; replaced when the user switches providers.
     pub model: RwLock<ModelRuntime>,
@@ -61,14 +65,6 @@ impl AppState {
         runtime.remote = remote;
     }
 
-    fn build_tools(
-        workspace_dir: &std::path::Path,
-        config_path: PathBuf,
-        client: Arc<LocalClient>,
-    ) -> ToolRegistry {
-        Self::rooted_tools(workspace_dir, config_path, client)
-    }
-
     /// Build a registry whose file, code, and working directory tools are
     /// rooted at `root`, plus the client-backed workspace tools.
     ///
@@ -78,7 +74,7 @@ impl AppState {
     pub fn rooted_tools(
         root: &std::path::Path,
         config_path: PathBuf,
-        client: Arc<LocalClient>,
+        client: Arc<dyn Client>,
     ) -> ToolRegistry {
         let sandbox = Arc::new(SubprocessSandbox::new(Some(root.to_path_buf())));
         let mut tools = Self::workspace_tools(config_path, client);
@@ -88,7 +84,7 @@ impl AppState {
         tools
     }
 
-    fn workspace_tools(config_path: PathBuf, client: Arc<LocalClient>) -> ToolRegistry {
+    fn workspace_tools(config_path: PathBuf, client: Arc<dyn Client>) -> ToolRegistry {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(workspace_tools::ListAgentsTool::new(
             client.clone(),
@@ -201,9 +197,10 @@ pub fn run() {
                 }
             });
 
-            let tools = AppState::build_tools(&data_dir, config_path.clone(), client.clone());
+            let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
             app.manage(AppState {
-                client,
+                local_client: Some(client.clone()),
+                client: client as Arc<dyn Client>,
                 tools,
                 model: RwLock::new(ModelRuntime {
                     llm: config::build_provider(&resolved),
@@ -272,6 +269,7 @@ pub fn run() {
             commands::discard_task_worktree,
             commands::list_task_overview,
             commands::cancel_task,
+            commands::cancel_turn,
             commands::archive_task,
             commands::unarchive_task,
             commands::approve_task_plan,
@@ -301,6 +299,8 @@ pub fn run() {
             commands::complete_onboarding,
             commands::get_app_info,
             commands::set_auto_check_updates,
+            commands::get_ui_locale,
+            commands::set_ui_locale,
             commands::restart_app,
             commands::list_workspaces,
             commands::switch_workspace,

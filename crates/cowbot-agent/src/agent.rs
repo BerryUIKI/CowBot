@@ -1,11 +1,12 @@
 use cowbot_bus::EventBus;
 use cowbot_core::agent::{AgentId, AgentProfile};
+use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::task::{task_execution_prompt, Task};
 use cowbot_core::tool::{ToolAuthorization, ToolCall, ToolCallRecorder, ToolGate};
 use cowbot_core::usage::{LlmCallKind, LlmCallUsage, LlmUsageRecorder};
-use cowbot_llm::{ChatCompletionRequest, ChatMessage, ChatRole, LlmProvider};
+use cowbot_llm::{ChatCompletionRequest, ChatMessage, ChatRole, LlmProvider, StreamChunk};
 use cowbot_tools::ToolRegistry;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -16,6 +17,21 @@ use tracing::{debug, info, warn};
 #[async_trait::async_trait]
 pub trait ConversationRecorder: Send + Sync {
     async fn record_message(&self, message: &ChatMessage) -> CowResult<()>;
+}
+
+/// Receives the incremental output and tool progress of one agent run.
+///
+/// The turn runner implements this to publish turn events; the agent loop stays
+/// unaware of turn ids, transports, and persistence (ADR-0041).
+pub trait TurnObserver: Send + Sync {
+    /// Model reasoning, shown apart from the answer.
+    fn reasoning_delta(&self, _text: &str) {}
+    /// Visible answer text, as it is produced.
+    fn text_delta(&self, _text: &str) {}
+    /// A tool call was authorized and is about to run.
+    fn tool_call_started(&self, _call: &ToolCall) {}
+    /// A tool call finished, whether it succeeded or not.
+    fn tool_call_finished(&self, _result: &cowbot_core::tool::ToolResult) {}
 }
 
 /// An active agent runtime instance backed by an LLM provider and tool registry.
@@ -31,6 +47,12 @@ pub struct AgentInstance {
     mode_instruction: Option<String>,
     /// Reference data injected as a system message before a task's instructions.
     memory_block: Option<String>,
+    /// Cancellation scope of the turn this agent runs in.
+    cancel: CancelSignal,
+    /// Incremental output sink for the turn this agent runs in.
+    observer: Option<Arc<dyn TurnObserver>>,
+    /// Text the model has produced and that no tool call has continued yet.
+    draft: String,
 }
 
 impl AgentInstance {
@@ -51,7 +73,28 @@ impl AgentInstance {
             conversation_recorder: None,
             mode_instruction: None,
             memory_block: None,
+            cancel: CancelSignal::new(),
+            observer: None,
+            draft: String::new(),
         }
+    }
+
+    /// Run inside a turn's cancellation scope.
+    pub fn set_cancel(&mut self, cancel: CancelSignal) {
+        self.cancel = cancel;
+    }
+
+    /// Report incremental output and tool progress to the turn.
+    pub fn set_observer(&mut self, observer: Option<Arc<dyn TurnObserver>>) {
+        self.observer = observer;
+    }
+
+    /// Text produced so far, including the final answer once it finishes.
+    ///
+    /// A stopped or failed turn reports this so its partial reply can be
+    /// persisted instead of being lost.
+    pub fn draft(&self) -> &str {
+        &self.draft
     }
 
     pub fn set_tool_gate(&mut self, gate: Option<Arc<dyn ToolGate>>) {
@@ -196,7 +239,19 @@ impl AgentInstance {
                 temperature: Some(0.2),
             };
 
-            let response = self.llm.chat_complete(&req).await?;
+            let llm = self.llm.clone();
+            let cancel = self.cancel.clone();
+            let observer = self.observer.clone();
+            let mut draft = std::mem::take(&mut self.draft);
+            let streamed = {
+                let draft_ref = &mut draft;
+                llm.chat_stream(&req, &cancel, &mut |chunk| {
+                    observe_chunk(chunk, draft_ref, observer.as_deref());
+                })
+                .await
+            };
+            self.draft = draft;
+            let response = streamed.map(|outcome| outcome.into_response())?;
 
             if let Some(recorder) = &self.usage_recorder {
                 let call = LlmCallUsage {
@@ -233,9 +288,13 @@ impl AgentInstance {
             // Check if tool calls were requested
             if response.tool_calls.is_empty() {
                 // Task is finished
-                let final_output = response
-                    .content
-                    .unwrap_or_else(|| "Task completed without output".to_string());
+                let answer = response.content.unwrap_or_default();
+                let final_output = if answer.trim().is_empty() {
+                    "Task completed without output".to_string()
+                } else {
+                    self.draft = answer;
+                    self.draft.clone()
+                };
                 if let Some(recorder) = &self.conversation_recorder {
                     recorder
                         .record_message(&ChatMessage::assistant(final_output.clone()))
@@ -260,6 +319,9 @@ impl AgentInstance {
 
             // Execute each tool call and emit events to the bus
             for call in response.tool_calls {
+                if self.cancel.is_cancelled() {
+                    return Err(CowError::Cancelled);
+                }
                 let tool_call = ToolCall {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -283,6 +345,10 @@ impl AgentInstance {
                     ToolAuthorization::Denied { .. } => None,
                 };
 
+                if let Some(observer) = &self.observer {
+                    observer.tool_call_started(&tool_call);
+                }
+
                 let tool_res = match authorization {
                     ToolAuthorization::Denied { reason } => cowbot_core::tool::ToolResult::failure(
                         &call.id,
@@ -304,6 +370,10 @@ impl AgentInstance {
                     result: tool_res.clone(),
                 }));
 
+                if let Some(observer) = &self.observer {
+                    observer.tool_call_finished(&tool_res);
+                }
+
                 if let Some(recorder) = &self.tool_recorder {
                     recorder
                         .record_tool_call(&tool_call, &tool_res, approved_by.as_deref())
@@ -321,6 +391,10 @@ impl AgentInstance {
                     recorder.record_message(&tool_message).await?;
                 }
                 messages.push(tool_message);
+                // The next model call starts a new passage; keep the draft
+                // markers so tool activity between passages is visible.
+                self.draft
+                    .push_str(&format!("\n\n_[{}]_\n\n", tool_call.name));
             }
         }
 
@@ -328,5 +402,23 @@ impl AgentInstance {
             "Agent '{}' exceeded maximum allowed iterations ({})",
             self.profile.name, max_iters
         )))
+    }
+}
+
+/// Report one streamed chunk and keep the draft in step with it.
+fn observe_chunk(chunk: StreamChunk, draft: &mut String, observer: Option<&dyn TurnObserver>) {
+    match chunk {
+        StreamChunk::Text(text) => {
+            draft.push_str(&text);
+            if let Some(observer) = observer {
+                observer.text_delta(&text);
+            }
+        }
+        StreamChunk::Reasoning(text) => {
+            if let Some(observer) = observer {
+                observer.reasoning_delta(&text);
+            }
+        }
+        StreamChunk::ToolCall(_) | StreamChunk::Usage { .. } => {}
     }
 }

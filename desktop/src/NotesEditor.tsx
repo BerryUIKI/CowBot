@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import { deleteMemoryNote, getMemoryNotes, saveMemoryNote } from "./api";
 import { errorMessage } from "./errors";
+import { useT } from "./i18n";
 
 interface NotesEditorProps {
   channelId?: string;
@@ -23,6 +24,7 @@ export default function NotesEditor({
   hint,
   onChanged,
 }: NotesEditorProps) {
+  const t = useT();
   const [content, setContent] = useState("");
   const [hasNote, setHasNote] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -64,8 +66,8 @@ export default function NotesEditor({
       setHasNote(true);
       setNotice(
         saved.redacted
-          ? "Saved. Credential-shaped text was redacted."
-          : "Saved.",
+          ? t("notes.savedRedacted")
+          : t("notes.saved"),
       );
       onChanged?.();
     } catch (err) {
@@ -84,7 +86,7 @@ export default function NotesEditor({
       await deleteMemoryNote(channelId);
       setContent("");
       setHasNote(false);
-      setNotice("Note deleted.");
+      setNotice(t("notes.deleted"));
       onChanged?.();
     } catch (err) {
       setError(errorMessage(err));
@@ -106,13 +108,13 @@ export default function NotesEditor({
           disabled={busy}
           placeholder={
             channelId
-              ? "Notes shared with every participant of this conversation."
-              : "Notes shared with every agent and conversation in this workspace."
+              ? t("notes.conversationPlaceholder")
+              : t("notes.workspacePlaceholder")
           }
           onChange={(event) => setContent(event.target.value)}
         />
       ) : (
-        <p className="settings-empty">Loading note…</p>
+        <p className="settings-empty">{t("notes.loading")}</p>
       )}
       <div className="notes-editor-actions">
         <button
@@ -120,7 +122,7 @@ export default function NotesEditor({
           className="primary-button"
           disabled={busy || !loaded || !content.trim()}
         >
-          {busy ? "Saving…" : "Save note"}
+          {busy ? t("notes.saving") : t("notes.save")}
         </button>
         {channelId && hasNote ? (
           <button
@@ -129,7 +131,7 @@ export default function NotesEditor({
             disabled={busy}
             onClick={() => void handleDelete()}
           >
-            Delete note
+            {t("notes.delete")}
           </button>
         ) : null}
         {notice ? (

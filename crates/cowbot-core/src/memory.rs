@@ -258,11 +258,6 @@ impl MemoryEntry {
         self
     }
 
-    pub fn with_source_ref(mut self, source_ref: impl Into<String>) -> Self {
-        self.source_ref = Some(source_ref.into());
-        self
-    }
-
     pub fn with_pinned(mut self, pinned: bool) -> Self {
         self.pinned = pinned;
         self
@@ -276,30 +271,6 @@ impl MemoryEntry {
     /// Whether the entry may be injected.
     pub fn is_active(&self) -> bool {
         self.status == MemoryStatus::Active
-    }
-
-    /// Whether the entry applies to a turn in the given scopes.
-    ///
-    /// A workspace-shared entry applies everywhere; an agent entry applies to
-    /// that agent; a conversation entry applies to that conversation; an
-    /// agent-in-conversation entry needs both to match. Passing `None` for a
-    /// scope only matches entries that are themselves unscoped on that axis.
-    pub fn matches_scope(
-        &self,
-        channel_id: Option<&ChannelId>,
-        agent_id: Option<&AgentId>,
-    ) -> bool {
-        let channel_matches = match (&self.channel_id, channel_id) {
-            (None, _) => true,
-            (Some(own), Some(asked)) => own == asked,
-            (Some(_), None) => false,
-        };
-        let agent_matches = match (&self.agent_id, agent_id) {
-            (None, _) => true,
-            (Some(own), Some(asked)) => own == asked,
-            (Some(_), None) => false,
-        };
-        channel_matches && agent_matches
     }
 
     /// How specific the entry's scope is; higher wins ties.
@@ -392,12 +363,6 @@ impl Note {
     pub fn is_workspace_note(&self) -> bool {
         self.channel_id.is_none()
     }
-
-    /// Replace the content and refresh the update time.
-    pub fn set_content(&mut self, content: impl Into<String>) {
-        self.content = content.into().trim().to_string();
-        self.updated_at = Utc::now();
-    }
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
@@ -459,10 +424,23 @@ pub struct RedactionOutcome {
 /// (`api_key = …`, `Authorization: …`), a bearer token, a known token prefix,
 /// or a JWT-shaped token is replaced. Ordinary prose is left alone.
 pub fn redact_secrets(content: &str) -> RedactionOutcome {
-    let mut output = String::with_capacity(content.len());
-    let mut redacted = false;
+    let mut content = content.to_string();
+    let redacted = redact_lines(&mut content, redact_line);
+    RedactionOutcome { content, redacted }
+}
 
-    for piece in content.split_inclusive('\n') {
+/// Apply one line-scoped redactor, preserving the original line endings.
+///
+/// Both redaction paths — memory text and prompt snapshots — walk the text the
+/// same way and differ only in what they replace on a line, so the walk lives
+/// here and each caller passes its own line rule. Keeping it in one place is
+/// the point: a new credential shape must not be added to one copy and missed
+/// by the other, because one copy redacts agent memory and the other redacts
+/// audit evidence (ADR-0033, ADR-0037).
+pub(crate) fn redact_lines(text: &mut String, redact: fn(&str) -> (String, bool)) -> bool {
+    let mut changed = false;
+    let mut rebuilt = String::with_capacity(text.len());
+    for piece in text.split_inclusive('\n') {
         let (body, ending) = match piece.strip_suffix("\r\n") {
             Some(body) => (body, "\r\n"),
             None => match piece.strip_suffix('\n') {
@@ -470,16 +448,13 @@ pub fn redact_secrets(content: &str) -> RedactionOutcome {
                 None => (piece, ""),
             },
         };
-        let (line, changed) = redact_line(body);
-        redacted |= changed;
-        output.push_str(&line);
-        output.push_str(ending);
+        let (line, line_changed) = redact(body);
+        changed |= line_changed;
+        rebuilt.push_str(&line);
+        rebuilt.push_str(ending);
     }
-
-    RedactionOutcome {
-        content: output,
-        redacted,
-    }
+    *text = rebuilt;
+    changed
 }
 
 fn redact_line(line: &str) -> (String, bool) {
@@ -495,24 +470,40 @@ fn redact_line(line: &str) -> (String, bool) {
         changed = true;
     }
 
-    let mut rebuilt = String::with_capacity(value.len());
+    changed |= replace_token_spans(&mut value, |inner| {
+        !inner.is_empty() && is_secret_token(inner)
+    });
+    (value, changed)
+}
+
+/// Replace the words a predicate accepts with `[redacted]`, keeping the rest of
+/// the line as it was.
+///
+/// The word span and its surrounding quotes are resolved once here so the
+/// memory and snapshot paths cannot drift apart on which bytes count as part of
+/// a token.
+pub(crate) fn replace_token_spans(line: &mut String, accept: fn(&str) -> bool) -> bool {
+    let mut rebuilt = String::with_capacity(line.len());
     let mut cursor = 0;
-    for (start, end) in word_spans(&value) {
-        let word = &value[start..end];
+    let mut changed = false;
+    for (start, end) in word_spans(line) {
+        let word = &line[start..end];
         let inner = trim_quotes(word);
-        if !inner.is_empty() && is_secret_token(inner) {
-            let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
-            rebuilt.push_str(&value[cursor..inner_start]);
-            rebuilt.push_str("[redacted]");
-            cursor = inner_start + inner.len();
-            changed = true;
+        if !accept(inner) {
+            continue;
         }
+        let inner_start = start + (inner.as_ptr() as usize - word.as_ptr() as usize);
+        rebuilt.push_str(&line[cursor..inner_start]);
+        rebuilt.push_str("[redacted]");
+        cursor = inner_start + inner.len();
+        changed = true;
     }
-    if cursor == 0 {
-        return (value, changed);
+    if !changed {
+        return false;
     }
-    rebuilt.push_str(&value[cursor..]);
-    (rebuilt, changed)
+    rebuilt.push_str(&line[cursor..]);
+    *line = rebuilt;
+    true
 }
 
 /// Span of the value after a sensitive `key = value` or `key: value`.
@@ -707,17 +698,6 @@ fn compare_scores(left: Option<f64>, right: Option<f64>) -> Ordering {
     }
 }
 
-/// Walk ranked candidates and keep those that fit the recall budget.
-///
-/// An entry that does not fit is skipped; smaller entries later in the list
-/// may still be added. Costs include the rendered bullet, not just content.
-pub fn select_recalled_entries<'a>(
-    ranked: &[ScoredMemory<'a>],
-    budget_tokens: u32,
-) -> Vec<&'a MemoryEntry> {
-    plan_recalled_entries(ranked, budget_tokens).selected
-}
-
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Why one ranked candidate was not injected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -751,9 +731,9 @@ pub struct RecallPlan<'a> {
 
 /// Rank-ordered recall decisions for a budget.
 ///
-/// This is the single implementation behind [`select_recalled_entries`]; the
-/// trace records inactive entries and over-budget skips without changing which
-/// entries are selected.
+/// An entry that does not fit is skipped; smaller entries later in the list
+/// may still be added. Costs include the rendered bullet, not just content.
+/// The trace records inactive entries and over-budget skips.
 pub fn plan_recalled_entries<'a>(
     ranked: &[ScoredMemory<'a>],
     budget_tokens: u32,
@@ -985,10 +965,9 @@ mod tests {
     }
 
     #[test]
-    fn scope_matching_covers_all_four_scopes() {
+    fn scope_reports_all_four_scopes() {
         let channel = ChannelId::new("channel-1");
         let agent = AgentId::new("agent-1");
-        let other_agent = AgentId::new("agent-2");
 
         let shared = MemoryEntry::new(
             workspace(),
@@ -1016,13 +995,10 @@ mod tests {
         );
         let both = entry("both", MemoryKind::Fact);
 
-        assert!(shared.matches_scope(Some(&channel), Some(&agent)));
-        assert!(agent_only.matches_scope(Some(&channel), Some(&agent)));
-        assert!(!agent_only.matches_scope(Some(&channel), Some(&other_agent)));
-        assert!(conversation.matches_scope(Some(&channel), Some(&agent)));
-        assert!(!conversation.matches_scope(Some(&ChannelId::new("channel-2")), Some(&agent)));
-        assert!(both.matches_scope(Some(&channel), Some(&agent)));
-        assert!(!both.matches_scope(None, Some(&agent)));
+        assert_eq!(shared.scope(), MemoryScope::Workspace);
+        assert_eq!(agent_only.scope(), MemoryScope::Agent);
+        assert_eq!(conversation.scope(), MemoryScope::Conversation);
+        assert_eq!(both.scope(), MemoryScope::AgentInConversation);
 
         assert_eq!(shared.scope_rank(), 1);
         assert_eq!(conversation.scope_rank(), 2);
@@ -1034,10 +1010,6 @@ mod tests {
     fn status_controls_injection_and_scope_ignores_status() {
         let pending = entry("candidate", MemoryKind::Fact).with_status(MemoryStatus::Pending);
         assert!(!pending.is_active());
-        assert!(pending.matches_scope(
-            Some(&ChannelId::new("channel-1")),
-            Some(&AgentId::new("agent-1"))
-        ));
         assert!(entry("active", MemoryKind::Fact).is_active());
     }
 
@@ -1146,7 +1118,7 @@ mod tests {
                 score: Some(0.3),
             },
         ]);
-        let selected = select_recalled_entries(&ranked, 100);
+        let selected = plan_recalled_entries(&ranked, 100).selected;
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].content, "small fact");
     }
@@ -1194,9 +1166,6 @@ mod tests {
         assert_eq!(plan.candidates[2].skip_reason, None);
         assert_eq!(plan.candidates[2].score, Some(0.2));
         assert!(plan.candidates[2].tokens > 0);
-
-        // The plan is the same selection the plain selector returns.
-        assert_eq!(select_recalled_entries(&ranked, 100), plan.selected);
     }
 
     #[test]

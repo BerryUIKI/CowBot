@@ -46,36 +46,49 @@ You can skip setup at any point. Everything is available later in **Settings**
 
 ## Connect a model
 
-Open **Settings → Model**. Providers are model endpoints; CowBot ships with an
-offline mock model and uses it whenever no provider is active.
+Open **Settings → Models**. The page has two parts: the default model at the
+top, and the connections that supply models below it. CowBot runs the offline
+echo model whenever no connection is active.
 
-1. **Add provider** opens a vendor catalogue grouped into model vendors,
+### Default model
+
+The default model is what tasks, channels, agent direct chats, and new
+conversations run. Pick one from the selector; choosing a model from another
+connection also makes that connection the active one. **Offline (no model)**
+runs without calling an endpoint. **Test** sends one small request to the
+selected model. The line below the selector shows the protocol, endpoint, and
+the model's known context window.
+
+### Connections
+
+1. **Add connection** opens a vendor catalogue grouped into model vendors,
    third-party platforms and relays, cloud providers, and local runtimes. Search
    the catalogue by name or URL.
 2. Pick a vendor to pre-fill the form, or **Custom** for a blank form and any
    compatible endpoint. Every field stays editable.
-3. **Protocol** is a dropdown in the form:
+3. Enter the name, base URL, and the first model. **Fetch models** asks the
+   endpoint which models the key can use; if it has no usable listing, type a
+   model name instead. Discovery is optional and never blocks saving.
+4. Enter the API key if the endpoint needs one. Local endpoints usually do not.
+5. **Advanced** holds the protocol:
    - **OpenAI Chat** — the Chat Completions API, used by OpenAI, DeepSeek,
      Ollama, OpenRouter, and most relays.
    - **Anthropic** — the Messages API, used by Claude and Claude
      Code-compatible relays.
    - **Responses** — the OpenAI Responses API, used by Codex-style endpoints.
+6. **Test connection** sends one small request. **Add connection** saves it.
 
-   Changing the protocol keeps the name, base URL, and model you entered.
-4. **Fetch models** asks the endpoint which models the key can use and adds them
-   to the model dropdown. Pick the active model there. If the endpoint has no
-   usable listing, the error appears beside the field; use **Add manually** to
-   type a model name instead. Discovery is optional and never blocks saving.
-5. Enter the API key if the endpoint needs one. Local endpoints usually do not.
-6. **Test connection** sends one small request. The result appears in the
-   editor.
-7. **Save provider**. The first provider becomes active; use **Use** on another
-   card to switch, or **Use offline mock** to run without a model. Each card
-   shows its active model and how many models the provider knows.
+The first connection becomes the default. A saved connection lists its models:
 
-A provider can hold several models. To change the active one, choose **Edit**,
-pick another model, and save; the stored API key is kept, so you never retype
-it.
+- Choose a model to make it the default.
+- **Limits** sets that model's context window and output limit.
+- **Manage models** fetches, adds, and removes the models the connection knows.
+- **Edit connection** changes the name, base URL, API key, or protocol.
+- **Delete** removes the connection; conversations that used it switch to the
+  default.
+
+Saving a connection never changes which model runs. A connection can hold
+several models, and each keeps its own limits.
 
 The base URL may be a bare host (`https://api.anthropic.com`), include `/v1`, or
 be the full endpoint (`https://api.anthropic.com/v1/messages`). CowBot appends
@@ -93,8 +106,8 @@ file as sensitive data.
   Check that the protocol matches the provider (for example, a Claude relay
   needs **Anthropic**, not **OpenAI Chat**).
 - **Model listing failed** — the endpoint does not expose a models catalogue, or
-  it returned an unexpected shape. Type the model name with **Add manually** and
-  continue.
+  it returned an unexpected shape. Type the model name with **Manage models**
+  and continue.
 
 ## Workspaces
 
@@ -111,7 +124,9 @@ automatically; **Settings → Workspace** manages the rest.
   with SHA-256 checksums; credentials are never included.
 - **Import package** — verifies a `.cowpkg` package, creates a new workspace
   database named `<name> (imported)`, registers it, and restarts into it. Import
-  never merges with or overwrites existing data.
+  never merges with or overwrites existing data; the desktop always imports into
+  a new database, and the CLI refuses a package whose ids collide with the
+  target database.
 
 Creating, importing, and switching restart the app; finish running tasks first,
 or CowBot refuses the change. Workspace databases and `config.json` live in the
@@ -132,7 +147,23 @@ direct chats and group channels together, sorted by pin and then recent
 activity — and a **Conversations** section for user-created sessions, which
 collapses and expands from its header. The header row switches back to Chat,
 opens the task list, and starts a new channel; the local user row at the bottom
-holds Settings.
+shows `Your name · Workspace name` and opens the account menu, with Settings
+available both there and from the gear beside it.
+
+### Language and the account menu
+
+The account menu contains **Settings**, **Language**, **Model configuration**,
+**Workspace settings**, **View changelog**, and **Learn more**. The last two open
+the project's GitHub releases page and repository.
+
+**Language** opens a picker with English, 简体中文, and 繁體中文. Each option is
+shown in its own script with its English name underneath, and the active one is
+checked. The choice applies immediately, controls date and time formatting, and
+is stored per device in `config.json`. On first launch the interface follows the
+operating system language. Interface copy is translated; diagnostic messages
+from the local service, agent profiles, templates, and stored audit reasons
+remain in English. Agent replies follow the language you write in. See
+[ADR-0050](ADR/0050-desktop-interface-localisation.md).
 
 Tasks live in the right inspector. The **Tasks** button in the sidebar header
 opens the **Task** tab: select a task there to read its detail, and use
@@ -217,7 +248,16 @@ from templates; a standalone agent editor is not part of this release.
   time. Select one and write in the composer: the message goes to that agent
   directly and no mention is needed. The header shows the agent's
   role and the approval policy for this conversation; messages appear as a
-  chat timeline, and a typing bubble marks a turn in progress.
+  chat timeline, and a live bubble streams the reply as it is produced:
+  model thinking sits behind a collapsible, tool calls appear as chips that
+  tick from running to done, and the text arrives incrementally. While a
+  reply streams, the composer shows a **Stop** button — it ends the turn,
+  keeps the text produced so far in the timeline with a stopped marker, and
+  a reload shows the same stored state. A task run streams to no chat, so the
+  composer names it and offers the same stop while it works. Clearing a chat's
+  history or a conversation's context stops its open turn first. Approval
+  requests still interrupt mid-stream with their usual card, and the same reply
+  continues after you decide (ADR-0041).
 - **Conversations** — the collapsible **Conversations** section holds
   user-created sessions with one agent or a group of two to eight. Choose **New conversation**, give
   it a title, and select participants in the order you want them listed; use
@@ -231,11 +271,24 @@ from templates; a standalone agent editor is not part of this release.
   deleted, compacted, and cleared like other sidebar rows.
 - **Group routing** — in a group conversation, `@Agent` addresses that
   participant and `@team` (also `@all`, `@everyone`, `@here`) addresses every
-  participant; names outside the group are rejected with a notice. A message
-  that addresses nobody goes to the default responder. With routing enabled,
-  the conversation's model picks up to three participants first and falls back
-  to the default responder when it cannot. Type `@` in the composer to open a
-  participant list: arrow keys move, Enter or Tab inserts, and Escape closes it.
+  participant; names outside the group are rejected with a notice. A mention
+  always wins. When a message addresses nobody, the conversation's **routing
+  mode** in the context popover decides: **Default responder** hands it to the
+  stored default responder, and if **Route unaddressed messages with the
+  model** is on, the conversation's model picks up to three participants first;
+  **Rotation** gives the turn to the next participant after the last speaker in
+  roster order, without a model call; **Default responder only** never asks the
+  model. Type `@` in the composer to open a participant list: arrow keys move,
+  Enter or Tab inserts, and Escape closes it. If a full roster fills up, the
+  full participant is skipped and the rest of the turn continues (ADR-0032).
+- **Muting and reply cleanup** — the context popover's Routing section lists
+  each participant with a **mute** toggle. A muted participant stays in the
+  roster and keeps receiving messages in its own branch, but is never picked to
+  answer; muting everyone leaves the message unanswered with a notice. **Strip
+  speaker labels and cross-talk** (on by default) removes a leading `Name:`
+  prefix and cuts a reply where another participant appears to have started
+  speaking, so a model that ignores the `[Name]` convention cannot put words in
+  another agent's mouth (ADR-0042).
 - **Channels** — group rooms share the **Chats** list with agent chats and are
   marked with their channel avatar. Create one with **New channel** or the
   **+** button, post messages, and follow the timeline. Names
@@ -344,11 +397,18 @@ or compacting the context never deletes messages.
   GPT-3.5-turbo), or **Estimated from characters** for every other model. The
   memory figure stays labelled as an estimate because the next turn's memory
   block is still counted heuristically.
+- **Model scope.** A conversation records the model it runs. New conversations
+  follow the default model, so a change in **Settings → Models** applies to them
+  too; choosing a model from the composer's model button pins the conversation
+  to that model, and **Follow the default model** in the same menu returns it.
+  The button shows `· default` or `· pinned`, and the popover's meta line names
+  the provider and the scope. Channels, agent direct chats, and task runs always
+  use the default model.
 - In a group, the popover has one tab per participant with that branch's
   breakdown, latest-run cache figure, and conversation-total cache figure. The
   tabs are keyboard accessible with the left and right arrow keys.
-- Percentages need a context window. Set **Context window** (and optionally
-  **Max output**) for the model in **Settings → Model**. Without it the ring
+- Percentages need a context window. Set **Limits** (context window and output
+  limit) for the model from its row in **Settings → Models**. Without it the ring
   shows absolute tokens only.
 - **Cache hit rate** for the latest run and the whole conversation comes from
   the usage the provider reports. Router and compaction calls count toward the
@@ -386,12 +446,14 @@ or compacting the context never deletes messages.
   changes recall statistics or the conversation, so it is safe to use while
   checking why an agent ignored a remembered fact.
 - Each user message in a group gets an **Answered by** line under it, showing
-  whether mentions, routing, or the default responder chose the responders,
+  whether a mention, the model router, the rotation, or the default responder
+  chose the responders,
   which participants replied, and any failures or skips. Open **Routing** for
   the selected roster, unmatched names, the router's reason, and outcome counts.
   These details survive a restart because the route is stored with the message.
-- A message that addresses nobody in a group with no default responder stays
-  unanswered; the timeline shows a short note instead of inventing an agent.
+- A message that addresses nobody in a group with no default responder, or with
+  every participant muted, stays unanswered; the timeline shows a short note
+  instead of inventing an agent.
 - The fixed model is recorded when the conversation is created; changing the
   active provider in Settings does not switch existing conversations. A
   conversation whose provider was deleted falls back to the active provider
@@ -472,7 +534,10 @@ model-generated commands as untrusted.
 Type `/` at the start of the composer to open the command menu. Keep typing to
 filter by name or alias, move with the arrow keys, and press Enter or Tab to
 choose a row. A command that needs an argument inserts `/name ` and leaves the
-cursor in the composer; a command that needs nothing runs at once. Commands are
+cursor in the composer; a command that needs nothing runs at once. While the
+first argument is being typed, the menu completes model names on the active
+provider, approval modes, Settings sections, and participant names; Enter or Tab
+inserts the highlighted value and Escape closes the list. Commands are
 actions, never messages: nothing is posted to the chat, nothing enters the
 context branch, and no command appears in the timeline or the context meter.
 Feedback appears in the notice area above the chat.
@@ -493,7 +558,7 @@ Feedback appears in the notice area above the chat.
 | `/model [name]` | Switches the active model, or opens the model menu when no name is given. |
 | `/approval [mode]` | Sets the composer approval mode. Modes: `safe_auto`, `ask`, `accept_edits`, `plan_only`, `trusted`, with `auto`, `manual`, `accept-edits`, `plan`, and `bypass` as aliases. |
 | `/stop` | Cancels the running tasks in this chat after a confirmation. |
-| `/settings [section]` | Opens Settings at `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
+| `/settings [section]` | Opens Settings at `general`, `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
 
 `compact`, `clear`, and `note` only work in a user-created conversation, because
 that is where a context branch exists; in an agent chat or a group channel they
@@ -621,7 +686,7 @@ cowbot import --input my-workspace.cowpkg --db other.db
   they are mentioned by name (`@Planner`); an unknown name posts a notice
   listing the agents that exist.
 - **An agent answer stops with an error** — the conversation shows a system
-  notice with the model error; check the active provider in **Settings → Model**.
+  notice with the model error; check the default model in **Settings → Models**.
 - **A workspace cannot be switched** — finish or cancel running tasks first.
 - **A workspace shows Missing** — its database file was moved or deleted; remove
   it from the registry by restarting, or restore the file.
@@ -632,7 +697,10 @@ cowbot import --input my-workspace.cowpkg --db other.db
   `-wal`/`-shm` sidecars and report the message; do not delete rows from
   `_sqlx_migrations` by hand.
 - **Package import fails** — the package may be corrupt, from an unsupported
-  schema version, or larger than 512 MB.
+  schema version, larger than 512 MB, or it reuses ids that already exist in the
+  target database (a second import of the same package, or an import into the
+  database it was exported from); import it into a database that has not seen
+  the source workspace.
 - **An update check fails** — CowBot needs to reach `github.com`. Check the
   network or proxy; automatic checks stay silent when offline. A manual check
   reports an error when the newest published release has no `latest.json` yet.
@@ -649,11 +717,18 @@ reporting, see [SECURITY.md](../SECURITY.md).
 
 ## Known limitations in 0.1.x
 
-- Local/offline single-user mode only: no server, remote sessions, or
-  multi-user workspaces.
+The [limitations page](LIMITATIONS.md) is the full, current account of what
+works, what does not, and which behaviours are deliberate. This section is the
+short version for the version you are running.
+
+- The desktop app remains local-first: it does not yet offer choosing a server
+  from Settings. The optional self-hosted server and `RemoteClient` are covered
+  in [SERVER.md](SERVER.md); worktrees, in-process crew execution, live-turn
+  cancellation, and process-local session decisions are not available in server
+  mode.
 - Channel answers are one turn per addressed agent: no threads as conversation
-  scope, no proactive agent replies to unmentioned messages in group channels,
-  and no streaming.
+  scope, and no proactive agent replies to unmentioned messages in group
+  channels.
 - HTML previews cannot reach the network, external images, or the app, and a
   button inside one cannot send a message back to the agent yet. Reply in the
   composer after using the preview.
@@ -668,14 +743,17 @@ reporting, see [SECURITY.md](../SECURITY.md).
   instead.
 - Sequential Planner → Coder → Reviewer crews; no hierarchical orchestration or
   DAG workflows.
-- No streaming responses, retries, or rate limiting. Token usage is recorded per
-  model call, but there are no cost or billing views.
+- No retries or rate limiting, and no cost or billing views. Token usage is
+  recorded per model call.
 - Context occupancy and compaction use a model-aware token count: exact for
   the OpenAI-compatible families CowBot ships a tokenizer for, and a labelled
   character estimate for every other model, including Claude, DeepSeek, and
   local runtimes. Memory budgets and the next turn's memory block remain
   estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Interface languages are English, Simplified Chinese, and Traditional Chinese.
+  Service diagnostics, agent profiles, template content, and stored audit
+  reasons are not translated, and right-to-left layouts are not implemented.
 - Slash commands are executed by the desktop only. The `cowbot` CLI uses the
   same catalogue and parser but does not yet run commands, command history is
   not kept, and `/model` cannot switch to a model on an inactive provider.

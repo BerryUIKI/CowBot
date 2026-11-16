@@ -18,7 +18,6 @@ import type {
   CompactionOutcome,
   ContextPreview,
   ConversationContext,
-  ConversationParticipant,
   ConversationSummary,
   ConversationTurn,
   CowEvent,
@@ -29,10 +28,12 @@ import type {
   MemoryNotes,
   MemorySave,
   MemorySettings,
+  RecalledMemory,
   MemorySettingsUpdate,
   ModelMetadata,
   ModelSettings,
   NoteSave,
+  RoutingMode,
   OnboardingState,
   PermissionRule,
   Project,
@@ -41,7 +42,6 @@ import type {
   PromptSnapshotSettings,
   PromptSnapshotSummary,
   ProviderProtocol,
-  RecalledMemory,
   RuleDecision,
   Run,
   SessionDecisionEntry,
@@ -103,12 +103,6 @@ export function listMessages(channelId: string, limit = 200): Promise<ChannelMes
   return invoke<ChannelMessage[]>("list_messages", { channelId, limit });
 }
 
-export function createConversation(
-  title: string | null,
-  agentId: string,
-): Promise<Channel> {
-  return invoke<Channel>("create_conversation", { title, agentId });
-}
 
 /** Create a group conversation with an ordered participant list. */
 export function createGroupConversation(
@@ -129,13 +123,6 @@ export function listConversationSummaries(): Promise<ConversationSummary[]> {
   return invoke<ConversationSummary[]>("list_conversation_summaries");
 }
 
-export function listConversationParticipants(
-  channelId: string,
-): Promise<ConversationParticipant[]> {
-  return invoke<ConversationParticipant[]>("list_conversation_participants", {
-    channelId,
-  });
-}
 
 export function listConversationTurns(
   channelId: string,
@@ -214,6 +201,12 @@ export function updateConversationSettings(
   compactThreshold: number,
   routerEnabled?: boolean,
   defaultResponder?: string | null,
+  routingMode?: RoutingMode,
+  mutedParticipants?: string[],
+  replyCleanup?: boolean,
+  providerId?: string | null,
+  model?: string,
+  modelFollowsDefault?: boolean,
 ): Promise<ConversationContext> {
   return invoke<ConversationContext>("update_conversation_settings", {
     channelId,
@@ -221,6 +214,12 @@ export function updateConversationSettings(
     compactThreshold,
     routerEnabled,
     defaultResponder,
+    routingMode,
+    mutedParticipants,
+    replyCleanup,
+    providerId,
+    model,
+    modelFollowsDefault,
   });
 }
 
@@ -304,17 +303,6 @@ export function deleteMemoryEntry(entryId: string): Promise<number> {
   return invoke<number>("delete_memory_entry", { entryId });
 }
 
-export function previewMemoryRecall(
-  agentId: string,
-  query: string,
-  channelId?: string,
-): Promise<RecalledMemory | null> {
-  return invoke<RecalledMemory | null>("preview_memory_recall", {
-    channelId,
-    agentId,
-    query,
-  });
-}
 
 export function postMessage(
   channelId: string,
@@ -326,6 +314,18 @@ export function postMessage(
 
 export function onCowbotEvent(handler: (event: CowEvent) => void): Promise<UnlistenFn> {
   return listen<CowEvent>("cowbot-event", (event) => handler(event.payload));
+}
+
+export function previewMemoryRecall(
+  agentId: string,
+  query: string,
+  channelId: string | null,
+): Promise<RecalledMemory | null> {
+  return invoke<RecalledMemory | null>("preview_memory_recall", {
+    agentId,
+    query,
+    channelId,
+  });
 }
 
 export function listAgents(): Promise<AgentProfile[]> {
@@ -429,6 +429,11 @@ export function onChannelReply(handler: (event: ChannelReplyFinished) => void): 
 
 export function cancelTask(taskId: string, reason: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId, reason });
+}
+
+/// Stop a running turn; returns whether a live turn was stopped (ADR-0041).
+export function cancelTurn(turnId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_turn", { turnId });
 }
 
 export function archiveTask(taskId: string): Promise<Task> {
@@ -587,13 +592,21 @@ export function testModelProvider(input: {
   });
 }
 
+/// One model an endpoint reports. `contextWindow` is null when the endpoint
+/// does not advertise one, and is never guessed.
+export interface FetchedModel {
+  id: string;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+}
+
 export function fetchProviderModels(input: {
   providerId: string | null;
   protocol: ProviderProtocol;
   baseUrl: string;
   apiKey: string;
-}): Promise<string[]> {
-  return invoke<string[]>("fetch_provider_models", {
+}): Promise<FetchedModel[]> {
+  return invoke<FetchedModel[]>("fetch_provider_models", {
     providerId: input.providerId,
     protocol: input.protocol,
     baseUrl: input.baseUrl,
@@ -673,6 +686,15 @@ export function listProjectBranches(projectId: string): Promise<ProjectBranches>
 
 export function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("get_app_info");
+}
+
+/** Stored interface locale preference (`system`, `en`, or a locale tag). */
+export function getUiLocale(): Promise<string | null> {
+  return invoke<string | null>("get_ui_locale");
+}
+
+export function setUiLocale(locale: string): Promise<void> {
+  return invoke<void>("set_ui_locale", { locale });
 }
 
 export function setAutoCheckUpdates(enabled: boolean): Promise<void> {

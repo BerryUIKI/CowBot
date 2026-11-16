@@ -85,18 +85,24 @@ fn template_kind_from_str(value: &str) -> CowResult<TemplateKind> {
 }
 
 impl Store {
+    /// Insert an agent, or update it when its id already exists.
+    ///
+    /// An id that already belongs to a *different* workspace matches no row:
+    /// the profile is not written and the call returns `false`. The conflict
+    /// clause deliberately never assigns `workspace_id`, so an agent id can
+    /// never move a row across workspaces and a caller that accepts an id from
+    /// outside its workspace gets a no-op instead of a silent takeover.
     pub async fn upsert_agent(
         &self,
         workspace_id: &WorkspaceId,
         profile: &AgentProfile,
-    ) -> CowResult<()> {
-        sqlx::query(
+    ) -> CowResult<bool> {
+        let result = sqlx::query(
             "INSERT INTO agent_profiles
                 (id, workspace_id, name, role, goal, backstory, model, tools,
                  allow_delegation, max_iterations, verbose, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO UPDATE SET
-                workspace_id = excluded.workspace_id,
                 name = excluded.name,
                 role = excluded.role,
                 goal = excluded.goal,
@@ -105,7 +111,8 @@ impl Store {
                 tools = excluded.tools,
                 allow_delegation = excluded.allow_delegation,
                 max_iterations = excluded.max_iterations,
-                verbose = excluded.verbose",
+                verbose = excluded.verbose
+             WHERE agent_profiles.workspace_id = excluded.workspace_id",
         )
         .bind(&profile.id.0)
         .bind(&workspace_id.0)
@@ -122,7 +129,7 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Whether an agent belongs to the given workspace.
@@ -177,18 +184,31 @@ impl Store {
         Ok(())
     }
 
-    pub async fn upsert_template(&self, template: &Template) -> CowResult<()> {
-        sqlx::query(
-            "INSERT INTO templates (id, kind, name, description, version, payload, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+    /// Insert a workspace's template, or update it when the id belongs to that
+    /// same workspace.
+    ///
+    /// Like [`Self::upsert_agent`], the conflict clause never reassigns
+    /// `workspace_id`, so one workspace cannot take over another's template by
+    /// naming its id.
+    pub async fn upsert_template(
+        &self,
+        workspace_id: &WorkspaceId,
+        template: &Template,
+    ) -> CowResult<bool> {
+        let result = sqlx::query(
+            "INSERT INTO templates
+                (id, workspace_id, kind, name, description, version, payload, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
                 description = excluded.description,
                 version = excluded.version,
-                payload = excluded.payload",
+                payload = excluded.payload
+             WHERE templates.workspace_id = excluded.workspace_id",
         )
         .bind(&template.id)
+        .bind(&workspace_id.0)
         .bind(template_kind_to_str(template.kind))
         .bind(&template.name)
         .bind(&template.description)
@@ -198,35 +218,46 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db)?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
-    pub async fn get_template(&self, id: &str) -> CowResult<Option<Template>> {
+    pub async fn get_template(
+        &self,
+        workspace_id: &WorkspaceId,
+        id: &str,
+    ) -> CowResult<Option<Template>> {
         let row = sqlx::query_as::<_, TemplateRow>(
             "SELECT id, kind, name, description, version, payload, created_at
-             FROM templates WHERE id = ?",
+             FROM templates WHERE id = ? AND workspace_id = ?",
         )
         .bind(id)
+        .bind(&workspace_id.0)
         .fetch_optional(self.pool())
         .await
         .map_err(db)?;
         row.map(TemplateRow::into_domain).transpose()
     }
 
-    pub async fn list_templates(&self, kind: Option<TemplateKind>) -> CowResult<Vec<Template>> {
+    pub async fn list_templates(
+        &self,
+        workspace_id: &WorkspaceId,
+        kind: Option<TemplateKind>,
+    ) -> CowResult<Vec<Template>> {
         let rows = match kind {
             Some(kind) => sqlx::query_as::<_, TemplateRow>(
                 "SELECT id, kind, name, description, version, payload, created_at
-                     FROM templates WHERE kind = ? ORDER BY name",
+                     FROM templates WHERE workspace_id = ? AND kind = ? ORDER BY name",
             )
+            .bind(&workspace_id.0)
             .bind(template_kind_to_str(kind))
             .fetch_all(self.pool())
             .await
             .map_err(db)?,
             None => sqlx::query_as::<_, TemplateRow>(
                 "SELECT id, kind, name, description, version, payload, created_at
-                     FROM templates ORDER BY name",
+                     FROM templates WHERE workspace_id = ? ORDER BY name",
             )
+            .bind(&workspace_id.0)
             .fetch_all(self.pool())
             .await
             .map_err(db)?,
@@ -234,9 +265,11 @@ impl Store {
         rows.into_iter().map(TemplateRow::into_domain).collect()
     }
 
-    pub async fn delete_template(&self, id: &str) -> CowResult<()> {
-        sqlx::query("DELETE FROM templates WHERE id = ?")
+    /// Delete one template the given workspace owns.
+    pub async fn delete_template(&self, workspace_id: &WorkspaceId, id: &str) -> CowResult<()> {
+        sqlx::query("DELETE FROM templates WHERE id = ? AND workspace_id = ?")
             .bind(id)
+            .bind(&workspace_id.0)
             .execute(self.pool())
             .await
             .map_err(db)?;

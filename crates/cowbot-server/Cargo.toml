@@ -1,0 +1,33 @@
+[package]
+name = "cowbot-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cowbot-core = { workspace = true }
+cowbot-store = { workspace = true }
+cowbot-service = { workspace = true }
+cowbot-package = { workspace = true }
+cowbot-bus = { workspace = true }
+
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower = "0.5"
+sha2 = "0.10"
+argon2 = { version = "0.5", features = ["std"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+cowbot-bus = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+http-body-util = "0.1"
+chrono = { workspace = true }

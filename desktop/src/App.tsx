@@ -4,10 +4,12 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import { TitleBar } from "./TitleBar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
 import GroupAvatar from "./GroupAvatar";
 import Inspector from "./Inspector";
@@ -25,19 +27,24 @@ import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
 import SideAnswerPanel from "./SideAnswerPanel";
 import SlashCommandMenu from "./SlashCommandMenu";
-import { planCommand } from "./commandActions";
-import type { CommandAction } from "./commandActions";
+import CommandArgumentMenu from "./CommandArgumentMenu";
+import { argumentSuggestions, planCommand } from "./commandActions";
+import type { ArgumentSuggestion, CommandAction } from "./commandActions";
 import {
   acceptedDraft,
+  argumentQuery,
   filterCommands,
+  findDraftCommand,
+  hasArgumentsAfterCommandToken,
   isCommandDraft,
   loadCommands,
-  parseCommandDraft,
   slashQuery,
 } from "./command";
 import TaskDetail from "./TaskDetail";
 import TaskList from "./TaskList";import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
+import LanguageDialog from "./LanguageDialog";
+import ProfileMenu from "./ProfileMenu";
 import {
   addMemoryEntry,
   addProject,
@@ -45,6 +52,7 @@ import {
   archiveTask,
   approveTaskPlan,
   cancelTask,
+  cancelTurn,
   clearChannelMessages,
   clearConversationContext,
   compactConversation,
@@ -81,6 +89,7 @@ import {
   onCowbotEvent,
   onChannelReply,
   onRunFinished,
+  parseCommand,
   pendingApprovals,
   postMessage,
   removeProject,
@@ -94,10 +103,13 @@ import {
   updateConversationSettings,
 } from "./api";
 import type { ChannelReplyFinished } from "./api";
+import type { TurnEvent } from "./types";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
 import { dayKey, formatDayLabel, formatListTime, formatTime } from "./format";
+import { useT } from "./i18n";
+import { t as translate } from "./i18n/catalog";
 import type {
   AgentProfile,
   Approval,
@@ -114,6 +126,7 @@ import type {
   Project,
   ProjectBranches,
   RouteSource,
+  RoutingMode,
   SideAnswer,
   Task,
   TaskOverviewEntry,
@@ -136,7 +149,7 @@ interface PendingReply {
 
 interface MenuState {
   kind: "agent" | "channel" | "conversation" | "task";
-  channel: Channel | null;
+  channel: Channel;
   agent: AgentProfile | null;
   task: Task | null;
   x: number;
@@ -154,11 +167,13 @@ const broadcastNames = ["team", "all", "everyone", "here"];
 
 function senderName(message: ChannelMessage, session: ClientSession | null): string {
   const sender = message.sender;
-  if (sender.type === "System") return "System";
+  if (sender.type === "System") return translate("app.sender.system");
   if (sender.type === "User") {
-    return session && sender.id === session.user.id ? "You" : "Teammate";
+    return session && sender.id === session.user.id
+      ? translate("app.sender.you")
+      : translate("app.sender.teammate");
   }
-  return `Agent ${sender.id.slice(0, 8)}`;
+  return translate("app.sender.agent", { id: sender.id.slice(0, 8) });
 }
 
 function senderLabel(
@@ -174,14 +189,37 @@ function senderLabel(
 }
 
 function agentName(agents: AgentProfile[], id: string | null): string {
-  if (!id) return "Unassigned";
-  return agents.find((agent) => agent.id === id)?.name ?? `Agent ${id.slice(0, 8)}`;
+  if (!id) return translate("app.agent.unassigned");
+  return (
+    agents.find((agent) => agent.id === id)?.name ??
+    translate("app.agent.fallback", { id: id.slice(0, 8) })
+  );
+}
+
+/** Localized label for the persisted source of a routing decision. */
+function routeSourceLabel(source: RouteSource): string {
+  switch (source) {
+    case "mention":
+      return translate("app.route.sourceMention");
+    case "router":
+      return translate("app.route.sourceRouting");
+    case "rotation":
+      return translate("app.route.sourceRotation");
+    case "default":
+      return translate("app.route.sourceDefault");
+    case "silent":
+      return translate("app.route.sourceSilent");
+    case "unmatched":
+      return translate("app.route.sourceUnmatched");
+    default:
+      return source;
+  }
 }
 
 /** Compact plain text for sidebar previews; strips Markdown and HTML. */
 function plainTextPreview(content: string): string {
   return content
-    .replace(/```[\s\S]*?```/g, " [code] ")
+    .replace(/```[\s\S]*?```/g, translate("app.previewCode"))
     .replace(/`([^`]*)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -282,7 +320,10 @@ function PinMark() {
 }
 
 export default function App() {
+  const t = useT();
   const [view, setView] = useState<View>("chat");
+  const [languageOpen, setLanguageOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [session, setSession] = useState<ClientSession | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -309,10 +350,30 @@ export default function App() {
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [commandHint, setCommandHint] = useState<string | null>(null);
   const [commandExpanded, setCommandExpanded] = useState(false);
+  /// Escape on a mistyped command marks this draft to be sent as a message.
+  const [commandAsMessage, setCommandAsMessage] = useState(false);
+  const [argumentIndex, setArgumentIndex] = useState(0);
+  const [argumentDismissed, setArgumentDismissed] = useState(false);
   const [contextOpenSignal, setContextOpenSignal] = useState(0);
   const [sideAnswer, setSideAnswer] = useState<SideAnswer | null>(null);
   const [sideQuestionBusy, setSideQuestionBusy] = useState(false);
   const [pendingReply, setPendingReply] = useState<PendingReply | null>(null);
+  /// Live turns keyed by turn id: streamed text, tool activity, and channel.
+  const [streamingTurns, setStreamingTurns] = useState<
+    Record<string, {
+      channelId: string | null;
+      /// The run a task turn belongs to; null for a chat turn.
+      runId: string | null;
+      agentId: string | null;
+      text: string;
+      reasoning: string;
+      tools: { name: string; running: boolean }[];
+    }>
+  >({});
+  /// The live state of `streamingTurns`, readable from event callbacks that
+  /// were registered once and would otherwise close over a stale copy.
+  const streamingTurnsRef = useRef(streamingTurns);
+  streamingTurnsRef.current = streamingTurns;
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [channelName, setChannelName] = useState("");
   const [channelTopic, setChannelTopic] = useState("");
@@ -401,6 +462,7 @@ export default function App() {
   const [modelMenu, setModelMenu] = useState<{ x: number; y: number } | null>(null);  const [dialogError, setDialogError] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
   const channelNameRef = useRef<HTMLInputElement | null>(null);
   const taskDescriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -425,6 +487,13 @@ export default function App() {
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
   );
+
+  const selectedChannelLabel = useMemo(() => {
+    if (!selectedChannel) return undefined;
+    if (selectedChannel.kind === "conversation") return selectedChannel.name;
+    if (selectedAgent) return selectedAgent.name;
+    return `#${selectedChannel.name}`;
+  }, [selectedAgent, selectedChannel]);
 
   const availableProjects = useMemo(
     () => projects.filter((project) => project.available),
@@ -667,7 +736,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [contextVersion, selectedChannel]);
+  }, [contextVersion, selectedChannel, view]);
 
   // A preview belongs to one conversation; switching chats clears it so the
   // inspector never shows another conversation's request.
@@ -741,7 +810,7 @@ export default function App() {
       .catch((err: unknown) => {
         if (cancelled) return;
         setNotice(
-          `Slash commands are unavailable; drafts starting with / are sent as messages. ${errorMessage(err)}`,
+          t("app.notice.slashUnavailable", { detail: errorMessage(err) }),
         );
       });
     return () => {
@@ -815,6 +884,10 @@ export default function App() {
 
     onCowbotEvent((event) => {
       const type = event.payload.type;
+      if (type === "Turn") {
+        const turn = event.payload.payload as TurnEvent | undefined;
+        if (turn) handleTurnEvent(turn);
+      }
       if (
         type === "TaskCreated" ||
         type === "TaskUpdated" ||
@@ -890,6 +963,22 @@ export default function App() {
         const message = event.payload.payload as ChannelMessage | undefined;
         if (message && typeof message.channel_id === "string") {
           setPreviews((current) => ({ ...current, [message.channel_id]: message }));
+        }
+        setContextVersion((version) => version + 1);
+        refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "ChannelCleared") {
+        // Another client cleared the history; the timeline must not keep
+        // showing messages that no longer exist.
+        const cleared = event.payload.payload as { channel_id?: string } | undefined;
+        const clearedChannelId = cleared?.channel_id;
+        if (clearedChannelId) {
+          setPreviews((current) => {
+            if (!(clearedChannelId in current)) return current;
+            const next = { ...current };
+            delete next[clearedChannelId];
+            return next;
+          });
         }
         setContextVersion((version) => version + 1);
         refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
@@ -1006,6 +1095,22 @@ export default function App() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, pendingReply]);
+
+  // Streaming text, approval cards, and late-loading images all grow the
+  // thread without changing `messages`, so follow the content height itself.
+  // A reader who scrolled up keeps their place until they return to the end.
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    const follow = () => {
+      const distance =
+        thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+      if (distance < 120) endRef.current?.scrollIntoView({ block: "end" });
+    };
+    const observer = new ResizeObserver(follow);
+    for (const child of Array.from(thread.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [selectedId, messages.length]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -1146,6 +1251,45 @@ export default function App() {
     return filterCommands(commandCatalogue, commandQuery);
   }, [commandCatalogue, commandDismissed, commandExpanded, commandQuery]);
 
+  /// The state the command planner and the argument completion read.
+  const commandTargets = useMemo(
+    () => ({
+      channel: selectedChannel,
+      participants: conversationParticipants.map((participant) => ({
+        agentId: participant.agent_id,
+        name: participant.agent_name,
+      })),
+      providers: (modelSettings?.providers ?? []).map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        active: provider.active,
+        model: provider.model,
+        models: provider.models,
+      })),
+      approval: channelApproval,
+    }),
+    [channelApproval, conversationParticipants, modelSettings, selectedChannel],
+  );
+
+  const argumentDraft = useMemo(
+    () => argumentQuery(draft, commandCatalogue),
+    [commandCatalogue, draft],
+  );
+
+  const argumentCandidates = useMemo(() => {
+    if (!argumentDraft || argumentDismissed) return [];
+    return argumentSuggestions(
+      argumentDraft.command.name,
+      argumentDraft.query,
+      commandTargets,
+    );
+  }, [argumentDismissed, argumentDraft, commandTargets]);
+
+  const activeArgumentIndex = Math.min(
+    argumentIndex,
+    Math.max(0, argumentCandidates.length - 1),
+  );
+
   const activeCommandIndex = Math.min(
     commandIndex,
     Math.max(0, commandCandidates.length - 1),
@@ -1214,6 +1358,35 @@ export default function App() {
   }, [mentionQuery]);
 
   const replyingHere = pendingReply !== null && pendingReply.channelId === selectedId;
+  /// Live turns streaming into the selected channel, oldest first.
+  const channelStreams = Object.entries(streamingTurns)
+    .filter(([, turn]) => selectedId && turn.channelId === selectedId)
+    .map(([id, turn]) => ({
+      id,
+      ...turn,
+      name:
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? t("app.sender.agentFallback"),
+    }));
+  const channelIsStreaming = channelStreams.length > 0;
+  /// A task run's turn streams to no chat, so the composer names it instead of
+  /// letting it run invisibly; a task turn is the only one with a run id.
+  /// It only claims the composer when it runs the agent this chat talks to —
+  /// an unrelated background task must not turn the send button into a stop.
+  const composerAgentId = selectedAgent?.id ?? null;
+  const taskStream = Object.entries(streamingTurns)
+    .filter(
+      ([, turn]) =>
+        turn.channelId === null &&
+        turn.runId !== null &&
+        composerAgentId !== null &&
+        turn.agentId === composerAgentId,
+    )
+    .map(([id, turn]) => ({
+      id,
+      ...turn,
+      name:
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? t("app.sender.agentFallback"),
+    }))[0];
   const conversationParticipantNames = conversationParticipants.map(
     (participant) => participant.agent_name,
   );
@@ -1340,11 +1513,20 @@ export default function App() {
       const outcome = await compactConversation(channel.id, agentId);
       setNotice(
         outcome.compacted
-          ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
+          ? t(
+              outcome.summarized_entries === 1
+                ? "app.notice.compactedOne"
+                : "app.notice.compactedOther",
+              {
+                count: outcome.summarized_entries,
+                before: outcome.tokens_before,
+                after: outcome.tokens_after,
+              },
+            )
           : outcome.reason ??
               (outcome.in_progress
-                ? "A compaction is already running for this branch."
-                : "Nothing to compact yet."),
+                ? t("app.notice.compactionRunning")
+                : t("app.notice.nothingToCompact")),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);
@@ -1357,13 +1539,9 @@ export default function App() {
 
   async function clearContextForChannel(channel: Channel, agentId?: string) {
     const target = agentId
-      ? "this participant's context branch"
-      : "this conversation's context";
-    if (
-      !window.confirm(
-        `Clear ${target}? Messages stay visible, but the model will no longer see them.`,
-      )
-    ) {
+      ? t("app.contextTarget.participant")
+      : t("app.contextTarget.conversation");
+    if (!window.confirm(t("app.confirm.clearContext", { target }))) {
       return;
     }
 
@@ -1373,8 +1551,13 @@ export default function App() {
       const cleared = await clearConversationContext(channel.id, agentId);
       setNotice(
         cleared > 0
-          ? `Cleared ${cleared} context entries.`
-          : "The context was already empty.",
+          ? t(
+              cleared === 1
+                ? "app.notice.clearedOne"
+                : "app.notice.clearedOther",
+              { count: cleared },
+            )
+          : t("app.notice.contextAlreadyEmpty"),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);
@@ -1407,13 +1590,30 @@ export default function App() {
     channel: Channel,
     routerEnabled: boolean,
   ) {
+    await updateConversationSetting(channel, { routerEnabled });
+  }
+
+  /// Change one routing setting and keep the rest as they are.
+  async function updateConversationSetting(
+    channel: Channel,
+    change: {
+      routerEnabled?: boolean;
+      routingMode?: RoutingMode;
+      mutedParticipants?: string[];
+      replyCleanup?: boolean;
+    },
+  ) {
     setError(null);
     try {
       const context = await updateConversationSettings(
         channel.id,
         conversationContext?.auto_compact ?? false,
         conversationContext?.compact_threshold ?? 80,
-        routerEnabled,
+        change.routerEnabled,
+        undefined,
+        change.routingMode,
+        change.mutedParticipants,
+        change.replyCleanup,
       );
       setConversationContext(context);
     } catch (err) {
@@ -1510,21 +1710,72 @@ export default function App() {
   }
 
   function openModelMenuAt(left: number, top: number) {
-    const modelCount =
-      modelSettings?.providers.find((provider) => provider.active)?.models
-        .length ?? 1;
+    const scopeProvider =
+      selectedChannel?.kind === "conversation" && conversationContext
+        ? modelSettings?.providers.find(
+            (provider) => provider.id === conversationContext.provider_id,
+          )
+        : modelSettings?.providers.find((provider) => provider.active);
+    const followItem =
+      selectedChannel?.kind === "conversation" &&
+      conversationContext &&
+      !conversationContext.model_follows_default
+        ? 1
+        : 0;
+    const modelCount = (scopeProvider?.models.length ?? 1) + followItem;
     setModelMenu({
       x: left,
       y: Math.max(8, top - 12 - (modelCount + 1) * 34),
     });
   }
 
-  async function handleComposerModel(model: string) {
-    const provider = modelSettings?.providers.find((candidate) => candidate.active);
-    if (!provider) return;
+  /// Change the model that answers here: the conversation's own model in a
+  /// conversation, the default everywhere else (ADR-0049).
+  async function handleComposerModel(providerId: string, model: string) {
     setError(null);
     try {
-      setModelSettings(await setActiveModel(provider.id, model));
+      if (selectedChannel?.kind === "conversation" && conversationContext) {
+        const context = await updateConversationSettings(
+          selectedChannel.id,
+          conversationContext.auto_compact,
+          conversationContext.compact_threshold,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          providerId,
+          model,
+          false,
+        );
+        setConversationContext(context);
+        return;
+      }
+      setModelSettings(await setActiveModel(providerId, model));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  /// Drop a conversation's pinned model and follow the default again.
+  async function handleFollowDefaultModel() {
+    if (selectedChannel?.kind !== "conversation" || !conversationContext) return;
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        selectedChannel.id,
+        conversationContext.auto_compact,
+        conversationContext.compact_threshold,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      setConversationContext(context);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -1635,15 +1886,14 @@ export default function App() {
     }
   }
 
-  function handleEditAgent(agent: AgentProfile) {
-    openEditAgentDialog(agent);
-  }
-
   function acceptCommand(command: CommandInfo) {
     setCommandHint(null);
     setCommandExpanded(false);
     setCommandDismissed(true);
+    setCommandAsMessage(false);
     setCommandIndex(0);
+    setArgumentIndex(0);
+    setArgumentDismissed(false);
     const next = acceptedDraft(command);
     if (next) {
       setDraft(next);
@@ -1653,44 +1903,40 @@ export default function App() {
     void runCommand(`/${command.name}`);
   }
 
+  function acceptArgument(suggestion: ArgumentSuggestion) {
+    if (!argumentDraft) return;
+    setDraft(`${draft.slice(0, argumentDraft.start)}${suggestion.value}`);
+    setArgumentDismissed(true);
+    setArgumentIndex(0);
+    composerRef.current?.focus();
+  }
+
   /// Dispatch a complete command line through the pure command planner, then
   /// carry out the action. #186 owns the menu and the parser; this owns what
   /// each command does.
   async function runCommand(line: string) {
-    const parsed = await parseCommandDraft(line);
+    const parsed = await parseCommand(line);
     switch (parsed.kind) {
       case "not_a_command":
         await sendMessage(line);
         return;
       case "unknown":
+        // A slash token followed by more text is a path or prose, not a
+        // mistyped command, so it is sent instead of blocked (ADR-0038).
+        if (hasArgumentsAfterCommandToken(line)) {
+          await sendMessage(line);
+          return;
+        }
         setCommandHint(
-          "Unknown command. Press Esc to send as a message, or type /help.",
+          t("app.commandHint.unknown"),
         );
         setCommandDismissed(true);
         return;
       case "missing_argument":
-        setCommandHint(`Usage: ${parsed.usage}`);
+        setCommandHint(t("app.commandHint.usage", { usage: parsed.usage }));
         return;
       case "invocation": {
-        const action = planCommand(
-          parsed,
-          {
-            channel: selectedChannel,
-            participants: conversationParticipants.map((participant) => ({
-              agentId: participant.agent_id,
-              name: participant.agent_name,
-            })),
-            providers: (modelSettings?.providers ?? []).map((provider) => ({
-              id: provider.id,
-              name: provider.name,
-              active: provider.active,
-              model: provider.model,
-              models: provider.models,
-            })),
-            approval: channelApproval,
-          },
-          runningTaskIds,
-        );
+        const action = planCommand(parsed, commandTargets, runningTaskIds);
         // A notice keeps the draft so the user can correct an argument; a
         // command that did something clears it.
         if (action.kind === "notice" || action.kind === "error") {
@@ -1703,6 +1949,9 @@ export default function App() {
         setCommandHint(null);
         setCommandDismissed(false);
         setCommandExpanded(false);
+        setCommandAsMessage(false);
+        setArgumentIndex(0);
+        setArgumentDismissed(false);
         setDraft("");
         await applyCommandAction(action);
         return;
@@ -1755,14 +2004,16 @@ export default function App() {
       case "set-approval": {
         if (
           action.mode === "trusted" &&
-          !window.confirm(
-            "Bypass permissions runs every tool call. Critical-risk calls follow the workspace policy in Settings → Approvals. Continue?",
-          )
+          !window.confirm(t("app.confirm.bypass"))
         ) {
           return;
         }
         setChannelApproval(action.mode);
-        setNotice(`Approval mode set to ${approvalLevelLabel(action.mode)}.`);
+        setNotice(
+          t("app.notice.approvalModeSet", {
+            mode: approvalLevelLabel(action.mode),
+          }),
+        );
         return;
       }
 
@@ -1783,7 +2034,7 @@ export default function App() {
         try {
           await renameChannel(action.channelId, action.name, action.topic);
           await refreshChannels(action.channelId);
-          setNotice(`Renamed to ${action.name}.`);
+          setNotice(t("app.notice.renamed", { name: action.name }));
         } catch (err) {
           setError(errorMessage(err));
         }
@@ -1795,7 +2046,9 @@ export default function App() {
         try {
           await setChannelPinned(action.channelId, action.pinned);
           await refreshChannels(action.channelId);
-          setNotice(action.pinned ? "Chat pinned." : "Chat unpinned.");
+          setNotice(
+            action.pinned ? t("app.notice.pinned") : t("app.notice.unpinned"),
+          );
         } catch (err) {
           setError(errorMessage(err));
         }
@@ -1805,7 +2058,12 @@ export default function App() {
       case "stop": {
         if (
           !window.confirm(
-            `Cancel ${action.taskIds.length} running ${action.taskIds.length === 1 ? "task" : "tasks"} in this chat?`,
+            t(
+              action.taskIds.length === 1
+                ? "app.confirm.cancelTasksOne"
+                : "app.confirm.cancelTasksOther",
+              { count: action.taskIds.length },
+            ),
           )
         ) {
           return;
@@ -1823,8 +2081,13 @@ export default function App() {
         await refreshTasks(selectedChannel?.id ?? undefined);
         setNotice(
           cancelled > 0
-            ? `Cancelled ${cancelled} ${cancelled === 1 ? "task" : "tasks"}.`
-            : "No tasks were cancelled.",
+            ? t(
+                cancelled === 1
+                  ? "app.notice.cancelledOne"
+                  : "app.notice.cancelledOther",
+                { count: cancelled },
+              )
+            : t("app.notice.noTasksCancelled"),
         );
         return;
       }
@@ -1837,15 +2100,15 @@ export default function App() {
             channelId: action.channelId ?? undefined,
           });
           const scope = action.channelId
-            ? "this conversation"
+            ? t("app.scope.thisConversation")
             : action.agentId
-              ? "this agent"
-              : "the workspace";
+              ? t("app.scope.thisAgent")
+              : t("app.scope.workspace");
           setContextVersion((version) => version + 1);
           setNotice(
             saved.redacted
-              ? `Saved to ${scope} with credentials redacted.`
-              : `Saved to ${scope}.`,
+              ? t("app.notice.savedWithRedaction", { scope })
+              : t("app.notice.saved", { scope }),
           );
         } catch (err) {
           setError(errorMessage(err));
@@ -1879,8 +2142,8 @@ export default function App() {
           setContextVersion((version) => version + 1);
           setNotice(
             saved.redacted
-              ? "Conversation note saved with credentials redacted."
-              : "Conversation note saved.",
+              ? t("app.notice.noteSavedWithRedaction")
+              : t("app.notice.noteSaved"),
           );
         } catch (err) {
           setError(errorMessage(err));
@@ -1902,6 +2165,117 @@ export default function App() {
     } finally {
       setSending(false);
     }
+  }
+
+  /// Fold one turn lifecycle event into the streaming state (ADR-0041).
+  function handleTurnEvent(turn: TurnEvent) {
+    const id = turn.turn_id;
+    if (turn.type === "turn_started") {
+      const target = turn.target;
+      const channelId = target.kind === "conversation" ? target.channel_id : null;
+      const runId = target.kind === "task" ? target.run_id : null;
+      const agentId = target.agent_id;
+      setStreamingTurns((current) => ({
+        ...current,
+        [id]: current[id] ?? {
+          channelId,
+          runId,
+          agentId,
+          text: "",
+          reasoning: "",
+          tools: [],
+        },
+      }));
+      return;
+    }
+    if (turn.type === "text_delta" || turn.type === "reasoning_delta") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        return {
+          ...current,
+          [id]:
+            turn.type === "text_delta"
+              ? { ...existing, text: existing.text + turn.text }
+              : { ...existing, reasoning: existing.reasoning + turn.text },
+        };
+      });
+      return;
+    }
+    if (turn.type === "tool_call_started") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        return {
+          ...current,
+          [id]: {
+            ...existing,
+            tools: [...existing.tools, { name: turn.call.name, running: true }],
+          },
+        };
+      });
+      return;
+    }
+    if (turn.type === "tool_call_finished") {
+      setStreamingTurns((current) => {
+        const existing = current[id];
+        if (!existing) return current;
+        const tools = [...existing.tools];
+        for (let index = tools.length - 1; index >= 0; index -= 1) {
+          if (tools[index].running) {
+            tools[index] = { ...tools[index], running: false };
+            break;
+          }
+        }
+        return { ...current, [id]: { ...existing, tools } };
+      });
+      return;
+    }
+    if (turn.type === "turn_done" || turn.type === "turn_error") {
+      // The terminal event follows persistence, so the stored message is
+      // authoritative: refresh and drop the live bubble. Read from the live
+      // ref, because `setStreamingTurns` has not re-rendered yet and this
+      // callback's closure holds the map from its registration.
+      const finished = streamingTurnsRef.current[id];
+      setStreamingTurns((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      if (finished?.channelId) {
+        setContextVersion((version) => version + 1);
+        refreshMessages(finished.channelId).catch((err) => setError(errorMessage(err)));
+      }
+      // A task turn settles into the task list and, when open, its detail.
+      if (finished?.runId) {
+        refreshTasks().catch((err) => setError(errorMessage(err)));
+        if (selectedTaskId) {
+          refreshTaskDetail(selectedTaskId).catch((err) => setError(errorMessage(err)));
+        }
+      }
+      if (turn.type === "turn_error" && turn.error) {
+        setError(turn.error);
+      }
+    }
+  }
+
+  /// Stop one live turn by id (ADR-0041).
+  async function stopTurn(turnId: string) {
+    try {
+      await cancelTurn(turnId);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  /// Stop the one live turn answering in the selected channel.
+  async function stopCurrentTurn() {
+    const entries = Object.entries(streamingTurns);
+    const match = entries.find(
+      ([, turn]) => selectedId && turn.channelId === selectedId,
+    );
+    if (!match) return;
+    await stopTurn(match[0]);
   }
 
   async function sendMessage(text: string = draft) {
@@ -1964,6 +2338,34 @@ export default function App() {
   }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (argumentCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setArgumentIndex(
+          (current) => (current + 1) % argumentCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setArgumentIndex(
+          (current) =>
+            (current - 1 + argumentCandidates.length) % argumentCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const candidate = argumentCandidates[activeArgumentIndex];
+        if (candidate) acceptArgument(candidate);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setArgumentDismissed(true);
+        return;
+      }
+    }
     if (commandCandidates.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -1989,6 +2391,7 @@ export default function App() {
         setCommandDismissed(true);
         setCommandExpanded(false);
         setCommandHint(null);
+        setCommandAsMessage(findDraftCommand(draft, commandCatalogue) === null);
         return;
       }
     }
@@ -2018,17 +2421,36 @@ export default function App() {
         return;
       }
     }
+    if (event.key === "Escape" && isCommandDraft(draft)) {
+      event.preventDefault();
+      setCommandDismissed(true);
+      setCommandExpanded(false);
+      setCommandHint(null);
+      // A mistyped command becomes a plain message on the next Enter; a real
+      // command keeps its command path, so the draft is only downgraded when
+      // the catalogue does not know it.
+      setCommandAsMessage(findDraftCommand(draft, commandCatalogue) === null);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (conversationFull) return;
-      // After Escape or any dispatch failure the draft is a slash line that is
-      // not a catalogue command, and the user chose to send it as a message.
-      if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+      // Escape on an unknown command marks this draft as a message; every
+      // other slash draft goes through the command path.
+      if (
+        commandCatalogue.length > 0 &&
+        isCommandDraft(draft) &&
+        !commandAsMessage
+      ) {
         void sendCommandDraft();
         return;
       }
       void sendMessage();
     }
+  }
+
+  function openExternal(url: string) {
+    openUrl(url).catch((err) => setError(errorMessage(err)));
   }
 
   function openNewChannel() {
@@ -2184,7 +2606,7 @@ export default function App() {
 
   async function handleCancelTask() {
     if (!selectedTaskId) return;
-    if (!window.confirm("Cancel this task and its active assignment?")) return;
+    if (!window.confirm(t("app.confirm.cancelTaskDetail"))) return;
 
     setBusy("cancel-task");
     setError(null);
@@ -2206,7 +2628,7 @@ export default function App() {
     setError(null);
     try {
       await discardTaskWorktree(selectedTaskId);
-      setNotice("Worktree discarded.");
+      setNotice(t("app.notice.worktreeDiscarded"));
       await refreshTasks();
       await refreshTaskDetail(selectedTaskId);
     } catch (err) {
@@ -2275,7 +2697,7 @@ export default function App() {
     ? selectedAgent.name
     : selectedChannel
       ? `#${selectedChannel.name}`
-      : "your team";
+      : t("app.composer.targetTeam");
 
   function previewSnippet(message: ChannelMessage, channel: Channel): string {
     const text = plainTextPreview(message.content);
@@ -2319,18 +2741,20 @@ export default function App() {
     const answered = replied.length > 0 ? replied : selected;
     const routeLabel =
       source === "mention"
-        ? "by mention"
+        ? t("app.route.byMention")
         : source === "router"
-          ? "by routing"
-          : source === "default"
-            ? "by the default responder"
-            : "";
+          ? t("app.route.byRouting")
+          : source === "rotation"
+            ? t("app.route.byRotation")
+            : source === "default"
+              ? t("app.route.byDefault")
+              : "";
 
     if (source === "silent") {
       return (
         <li className="chat-route-row">
           <span className="route-note">
-            No one answered. Mention a participant or set a default responder.
+            {t("app.route.nobody")}
           </span>
         </li>
       );
@@ -2340,11 +2764,12 @@ export default function App() {
       return (
         <li className="chat-route-row">
           <span className="route-note route-note-warning">
-            No participant matched{" "}
-            {unknown.length > 0
-              ? unknown.map((name) => `@${name}`).join(", ")
-              : "the mention"}
-            .
+            {t("app.route.unmatched", {
+              names:
+                unknown.length > 0
+                  ? unknown.map((name) => `@${name}`).join(", ")
+                  : t("app.route.theMention"),
+            })}
           </span>
         </li>
       );
@@ -2356,56 +2781,61 @@ export default function App() {
     return (
       <li className="chat-route-row">
         <span className="route-answered">
-          {answered.length > 0 ? (
-            <>
-              Answered {routeLabel} by{" "}
-              <strong>{answered.map(participantLabel).join(", ")}</strong>
-            </>
-          ) : (
-            "No reply was posted."
-          )}
+          {answered.length > 0
+            ? t("app.route.answered", {
+                route: routeLabel,
+                names: answered.map(participantLabel).join(", "),
+              })
+            : t("app.route.noReply")}
         </span>
         {failed.length > 0 ? (
           <span className="route-chip route-chip-failed">
-            {failed.map(participantLabel).join(", ")} failed
+            {t("app.route.failed", {
+              names: failed.map(participantLabel).join(", "),
+            })}
           </span>
         ) : null}
         {skipped.length > 0 ? (
           <span className="route-chip">
-            {skipped.map(participantLabel).join(", ")} skipped
+            {t("app.route.skipped", {
+              names: skipped.map(participantLabel).join(", "),
+            })}
           </span>
         ) : null}
         {turn ? (
           <details className="route-details">
-            <summary>Routing</summary>
+            <summary>{t("app.route.routing")}</summary>
             <div className="route-details-body">
               <p>
-                <span>Source</span>
-                {source ?? "unknown"}
+                <span>{t("app.route.source")}</span>
+                {source ? routeSourceLabel(source) : t("app.route.unknown")}
               </p>
               {turn.selected_agents.length > 0 ? (
                 <p>
-                  <span>Selected</span>
+                  <span>{t("app.route.selected")}</span>
                   {turn.selected_agents.map(participantLabel).join(", ")}
                 </p>
               ) : null}
               {turn.unknown_mentions.length > 0 ? (
                 <p>
-                  <span>Not matched</span>
+                  <span>{t("app.route.notMatched")}</span>
                   {turn.unknown_mentions.map((name) => `@${name}`).join(", ")}
                 </p>
               ) : null}
               {turn.reason ? (
                 <p>
-                  <span>Reason</span>
+                  <span>{t("app.route.reason")}</span>
                   {turn.reason}
                 </p>
               ) : null}
               {outcome ? (
                 <p>
-                  <span>Outcome</span>
-                  {replied.length} replied · {failed.length} failed ·{" "}
-                  {skipped.length} skipped
+                  <span>{t("app.route.outcome")}</span>
+                  {t("app.route.outcomeCounts", {
+                    replied: replied.length,
+                    failed: failed.length,
+                    skipped: skipped.length,
+                  })}
                 </p>
               ) : null}
             </div>
@@ -2429,26 +2859,25 @@ export default function App() {
     if (!menu) return [];
 
     const channel = menu.channel;
-    if (!channel) return [];
     const menuAgent = menu.agent;
     return menu.kind === "agent"
       ? [
           ...(menuAgent
             ? [
                 {
-                  label: "Edit agent…",
+                  label: t("app.menu.editAgent"),
                   onSelect: () => openEditAgentDialog(menuAgent),
                 },
               ]
             : []),
           {
-            label: channel.pinned ? "Unpin" : "Pin to top",
+            label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
             onSelect: () => void togglePin(channel),
           },
           ...(menuAgent
             ? [
                 {
-                  label: "Clear history…",
+                  label: t("app.menu.clearHistory"),
                   danger: true,
                   onSelect: () => openClearDialog(channel, menuAgent),
                 },
@@ -2458,38 +2887,38 @@ export default function App() {
       : menu.kind === "conversation"
         ? [
             {
-              label: "Rename conversation…",
+              label: t("app.menu.renameConversation"),
               onSelect: () => openRenameDialog(channel),
             },
             {
-              label: channel.pinned ? "Unpin" : "Pin to top",
+              label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
               onSelect: () => void togglePin(channel),
             },
             {
-              label: "Compact context",
+              label: t("app.menu.compactContext"),
               onSelect: () => void compactChannel(channel),
             },
             {
-              label: "Clear context…",
+              label: t("app.menu.clearContext"),
               onSelect: () => void clearContextForChannel(channel),
             },
             {
-              label: "Delete conversation…",
+              label: t("app.menu.deleteConversation"),
               danger: true,
               onSelect: () => openDeleteDialog(channel),
             },
           ]
         : [
             {
-              label: "Rename channel…",
+              label: t("app.menu.renameChannel"),
               onSelect: () => openRenameDialog(channel),
             },
             {
-              label: channel.pinned ? "Unpin" : "Pin to top",
+              label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
               onSelect: () => void togglePin(channel),
             },
             {
-              label: "Delete channel…",
+              label: t("app.menu.deleteChannel"),
               danger: true,
               onSelect: () => openDeleteDialog(channel),
             },
@@ -2498,22 +2927,62 @@ export default function App() {
 
   const activeModelProvider =
     modelSettings?.providers.find((provider) => provider.active) ?? null;
-  const activeModelLabel = activeModelProvider?.model ?? "Mock model";
+  /// A conversation runs on its own recorded model; channels and direct chats
+  /// run on the default (ADR-0049).
+  const conversationScope =
+    selectedChannel?.kind === "conversation" ? conversationContext : null;
+  const composerProvider = conversationScope
+    ? (modelSettings?.providers.find(
+        (provider) => provider.id === conversationScope.provider_id,
+      ) ?? null)
+    : activeModelProvider;
+  const composerModel = conversationScope
+    ? conversationScope.model
+    : (activeModelProvider?.model ?? null);
+  /// The offline runtime reports its placeholder model name; present it as
+  /// "Offline model" when no connection supplies the conversation.
+  const composerModelLabel = conversationScope
+    ? conversationScope.provider_id
+      ? conversationScope.model
+      : t("app.model.offline")
+    : (activeModelProvider?.model ?? t("app.model.offline"));
+  const composerModelTitle = conversationScope
+    ? t("app.model.conversationTitle", {
+        model: composerModelLabel,
+        scope: conversationScope.model_follows_default
+          ? t("app.model.followsDefault")
+          : t("app.model.pinned"),
+      })
+    : activeModelProvider
+      ? t("app.model.providerTitle", {
+          provider: activeModelProvider.name,
+          model: activeModelProvider.model,
+        })
+      : t("app.model.offline");
   const modelMenuItems: ContextMenuItem[] = modelMenu
     ? [
-        ...(activeModelProvider
-          ? activeModelProvider.models.map((model) => ({
-              label: `${model === activeModelProvider.model ? "✓ " : ""}${model}`,
-              onSelect: () => void handleComposerModel(model),
+        ...(composerProvider
+          ? composerProvider.models.map((model) => ({
+              label: `${model === composerModel ? "✓ " : ""}${model}`,
+              onSelect: () =>
+                void handleComposerModel(composerProvider.id, model),
             }))
           : [
               {
-                label: "Mock model (offline)",
+                label: t("app.model.offline"),
                 onSelect: () => undefined,
               },
             ]),
+        ...(conversationScope && !conversationScope.model_follows_default
+          ? [
+              {
+                label: t("app.model.followDefault"),
+                onSelect: () => void handleFollowDefaultModel(),
+              },
+            ]
+          : []),
         {
-          label: "Manage models…",
+          label: t("app.model.manage"),
           onSelect: () => {
             setModelMenu(null);
             setSettingsSection("model");
@@ -2557,64 +3026,67 @@ export default function App() {
     <ContextInspector target={contextTarget} version={contextVersion} />
   );
 
+  const titlebarActions = (
+    <>
+      <button
+        type="button"
+        className={`inspector-trigger${inspectorTab === "approvals" ? " is-active" : ""}`}
+        title={t("app.inspector.approvals")}
+        aria-label={t("app.inspector.approvalsPending", {
+          count: approvals.length,
+        })}
+        aria-pressed={inspectorTab === "approvals"}
+        onClick={() => toggleInspector("approvals")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          aria-hidden="true"
+        >
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        {approvals.length > 0 ? (
+          <span className="inspector-trigger-count">{approvals.length}</span>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        className={`inspector-trigger${inspectorTab === "background" ? " is-active" : ""}`}
+        title={t("app.inspector.background")}
+        aria-label={t("app.inspector.backgroundActive", {
+          count: activeOverviewCount,
+        })}
+        aria-pressed={inspectorTab === "background"}
+        onClick={() => toggleInspector("background")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          aria-hidden="true"
+        >
+          <path d="M3 12h4l3-8 4 16 3-8h4" />
+        </svg>
+        {activeOverviewCount > 0 ? (
+          <span className="inspector-trigger-count">{activeOverviewCount}</span>
+        ) : null}
+      </button>
+    </>
+  );
+
   return (
-    <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
+    <div className={`app-shell${inspectorTab ? " with-inspector" : ""}`}>
+      <TitleBar
+        title={selectedChannel ? selectedChannelLabel : undefined}
+        actions={titlebarActions}
+        leading={<img className="wordmark" src={wordmark} alt="CowBot" />}
+      />
+      <div className={`app${inspectorTab ? " with-inspector" : ""}`}>
       <aside className="sidebar" inert={onboardingOpen}>
-        <div className="sidebar-head">
-          <img className="wordmark" src={wordmark} alt="CowBot" />
-          <div className="sidebar-head-actions">
-            <button
-              type="button"
-              className={`icon-button${view === "chat" ? " is-active" : ""}`}
-              title="Chat"
-              aria-label="Chat"
-              aria-current={view === "chat" ? "page" : undefined}
-              onClick={() => setView("chat")}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                aria-hidden="true"
-              >
-                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`icon-button${inspectorTab === "task" ? " is-active" : ""}`}
-              title="Tasks"
-              aria-label="Tasks"
-              aria-pressed={inspectorTab === "task"}
-              onClick={() =>
-                setInspectorTab((current) => (current === "task" ? null : "task"))
-              }
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                aria-hidden="true"
-              >
-                <path d="M9 6h11M9 12h11M9 18h11" />
-                <path d="M4 6l1.5 1.5L8 5" />
-                <path d="M4 12l1.5 1.5L8 11" />
-                <path d="M4 18l1.5 1.5L8 17" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="New channel"
-              aria-label="New channel"
-              onClick={openNewChannel}
-            >
-              +
-            </button>
-          </div>
-        </div>
 
         {view !== "settings" ? (
           <label className="search-field">
@@ -2632,8 +3104,8 @@ export default function App() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search chats and conversations"
-              aria-label="Search chats and conversations"
+              placeholder={t("app.sidebar.searchPlaceholder")}
+              aria-label={t("app.sidebar.searchPlaceholder")}
             />
           </label>
         ) : null}
@@ -2641,19 +3113,19 @@ export default function App() {
         <div className="sidebar-scroll">
           {view !== "settings" ? (
             <>
-              <section className="sidebar-section" aria-label="Chats">
+              <section className="sidebar-section" aria-label={t("app.sidebar.chats")}>
                 <div className="nav-heading">
-                  <span>Chats</span>
+                  <span>{t("app.sidebar.chats")}</span>
                   <button type="button" className="text-button" onClick={openNewChannel}>
-                    New
+                    {t("app.sidebar.new")}
                   </button>
                 </div>
                 {chatRows.length === 0 ? (
                   <p className="nav-note">
-                    Add a team from a template in Settings to start a conversation.
+                    {t("app.sidebar.noChats")}
                   </p>
                 ) : visibleChats.length === 0 ? (
-                  <p className="nav-note">No chats match.</p>
+                  <p className="nav-note">{t("app.sidebar.noChatMatches")}</p>
                 ) : (
                   <ul className="contact-list">
                     {visibleChats.map((row) => {
@@ -2694,15 +3166,15 @@ export default function App() {
                                   ? previewSnippet(preview, row.channel)
                                   : isAgent
                                     ? row.agent.role
-                                    : row.channel.topic || "No messages yet"}
+                                    : row.channel.topic || t("app.sidebar.noMessages")}
                               </span>
                             </span>
                           </button>
                           <button
                             type="button"
                             className="contact-more"
-                            title={isAgent ? "Conversation actions" : "Channel actions"}
-                            aria-label={`Actions for ${name}`}
+                            title={isAgent ? t("app.sidebar.conversationActions") : t("app.sidebar.channelActions")}
+                            aria-label={t("app.sidebar.actionsFor", { name })}
                             onClick={(event) =>
                               isAgent
                                 ? openMenuFromButton(event, "agent", row.channel, row.agent)
@@ -2735,21 +3207,21 @@ export default function App() {
                 {creatingChannel ? (
                   <form className="new-channel" onSubmit={handleCreateChannel}>
                     <label className="field">
-                      <span>Name</span>
+                      <span>{t("app.sidebar.name")}</span>
                       <input
                         ref={channelNameRef}
                         value={channelName}
                         onChange={(event) => setChannelName(event.target.value)}
-                        placeholder="engineering"
+                        placeholder={t("app.sidebar.namePlaceholder")}
                         autoComplete="off"
                       />
                     </label>
                     <label className="field">
-                      <span>Topic</span>
+                      <span>{t("app.sidebar.topic")}</span>
                       <input
                         value={channelTopic}
                         onChange={(event) => setChannelTopic(event.target.value)}
-                        placeholder="What is this channel for?"
+                        placeholder={t("app.sidebar.topicPlaceholder")}
                         autoComplete="off"
                       />
                     </label>
@@ -2759,14 +3231,14 @@ export default function App() {
                         className="primary-button"
                         disabled={!channelName.trim()}
                       >
-                        Create channel
+                        {t("app.sidebar.createChannel")}
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => setCreatingChannel(false)}
                       >
-                        Cancel
+                        {t("app.dialog.cancel")}
                       </button>
                     </div>
                   </form>
@@ -2776,12 +3248,12 @@ export default function App() {
                     className="new-channel-button"
                     onClick={openNewChannel}
                   >
-                    <span aria-hidden="true">+</span> New channel
+                    <span aria-hidden="true">+</span> {t("app.sidebar.newChannel")}
                   </button>
                 )}
               </section>
 
-              <section className="sidebar-section" aria-label="Conversations">
+              <section className="sidebar-section" aria-label={t("app.sidebar.conversations")}>
                 <div className="nav-heading">
                   <button
                     type="button"
@@ -2796,7 +3268,7 @@ export default function App() {
                     >
                       ▸
                     </span>
-                    <span>Conversations</span>
+                    <span>{t("app.sidebar.conversations")}</span>
                     {conversationRows.length > 0 ? (
                       <span className="nav-count-soft">{conversationRows.length}</span>
                     ) : null}
@@ -2807,7 +3279,7 @@ export default function App() {
                     onClick={openNewConversation}
                     disabled={agents.length === 0}
                   >
-                    New
+                    {t("app.sidebar.new")}
                   </button>
                 </div>
                 <div id="sidebar-conversations" hidden={!showConversations}>
@@ -2847,15 +3319,17 @@ export default function App() {
                               <span className="contact-snippet">
                                 {preview
                                   ? previewSnippet(preview, channel)
-                                  : channel.topic || "New conversation"}
+                                  : channel.topic || t("app.sidebar.newConversation")}
                               </span>
                             </span>
                           </button>
                           <button
                             type="button"
                             className="contact-more"
-                            title="Conversation actions"
-                            aria-label={`Actions for ${channel.name}`}
+                            title={t("app.sidebar.conversationActions")}
+                            aria-label={t("app.sidebar.actionsFor", {
+                              name: channel.name,
+                            })}
                             onClick={(event) =>
                               openMenuFromButton(event, "conversation", channel)
                             }
@@ -2867,23 +3341,23 @@ export default function App() {
                     })}
                   </ul>
                 ) : normalizedQuery && conversationRows.length > 0 ? (
-                  <p className="nav-note">No conversations match.</p>
+                  <p className="nav-note">{t("app.sidebar.noConversationMatches")}</p>
                 ) : null}
 
                 {creatingConversation ? (
                   <form className="new-channel" onSubmit={handleCreateConversation}>
                     <label className="field">
-                      <span>Title</span>
+                      <span>{t("app.sidebar.title")}</span>
                       <input
                         value={conversationTitle}
                         onChange={(event) => setConversationTitle(event.target.value)}
-                        placeholder="Design review"
+                        placeholder={t("app.sidebar.titlePlaceholder")}
                         autoComplete="off"
                       />
                     </label>
                     <fieldset className="participant-picker">
                       <legend>
-                        Participants <span>{conversationIds.length}/8</span>
+                        {t("app.sidebar.participants")} <span>{conversationIds.length}/8</span>
                       </legend>
                       <ul>
                         {agents.map((agent) => {
@@ -2922,7 +3396,9 @@ export default function App() {
                                 <span className="participant-move">
                                   <button
                                     type="button"
-                                    aria-label={`Move ${agent.name} earlier`}
+                                    aria-label={t("app.sidebar.moveEarlier", {
+                                      name: agent.name,
+                                    })}
                                     disabled={order === 0}
                                     onClick={() =>
                                       moveConversationParticipant(agent.id, -1)
@@ -2932,7 +3408,9 @@ export default function App() {
                                   </button>
                                   <button
                                     type="button"
-                                    aria-label={`Move ${agent.name} later`}
+                                    aria-label={t("app.sidebar.moveLater", {
+                                      name: agent.name,
+                                    })}
                                     disabled={
                                       order === conversationIds.length - 1
                                     }
@@ -2952,7 +3430,7 @@ export default function App() {
                     {conversationIds.length > 1 ? (
                       <>
                         <label className="field">
-                          <span>Default responder</span>
+                          <span>{t("app.sidebar.defaultResponder")}</span>
                           <select
                             value={conversationDefaultResponder}
                             onChange={(event) =>
@@ -2979,7 +3457,7 @@ export default function App() {
                               setConversationRouter(event.target.checked)
                             }
                           />
-                          <span>Route unaddressed messages with the model</span>
+                          <span>{t("app.sidebar.routeUnaddressed")}</span>
                         </label>
                       </>
                     ) : null}
@@ -2992,14 +3470,16 @@ export default function App() {
                           conversationIds.length === 0
                         }
                       >
-                        {busy === "create-conversation" ? "Creating…" : "Create"}
+                        {busy === "create-conversation"
+                          ? t("app.sidebar.creating")
+                          : t("app.sidebar.create")}
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => setCreatingConversation(false)}
                       >
-                        Cancel
+                        {t("app.dialog.cancel")}
                       </button>
                     </div>
                   </form>
@@ -3010,7 +3490,7 @@ export default function App() {
                     onClick={openNewConversation}
                     disabled={agents.length === 0}
                   >
-                    <span aria-hidden="true">+</span> New conversation
+                    <span aria-hidden="true">+</span> {t("app.sidebar.newConversation")}
                   </button>
                 )}
                 </div>
@@ -3020,9 +3500,24 @@ export default function App() {
 
             </>
           ) : (
-            <section className="sidebar-section" aria-label="Settings sections">
+            <section className="sidebar-section" aria-label={t("app.sidebar.settingsSections")}>
               <div className="nav-heading">
-                <span>Settings</span>
+                <button
+                  type="button"
+                  className="nav-back"
+                  onClick={() => setView("chat")}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    aria-hidden="true"
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                  {t("app.sidebar.backToChat")}
+                </button>
               </div>
               <ul className="contact-list">
                 {settingsSections.map((item) => (
@@ -3037,7 +3532,7 @@ export default function App() {
                     >
                       <span className="contact-text">
                         <span className="contact-top">
-                          <span className="contact-name">{item.label}</span>
+                          <span className="contact-name">{t(item.labelKey)}</span>
                         </span>
                       </span>
                     </button>
@@ -3050,20 +3545,44 @@ export default function App() {
 
         <div className="sidebar-footer">
           <div className="profile">
-            <Avatar name={session?.user.name ?? "You"} kind="user" />
-            <span className="profile-text">
-              <span className="profile-name">{session?.user.name ?? "You"}</span>
-              <span className="profile-workspace">
-                {session?.workspace.name ?? "Local workspace"}
+            <button
+              type="button"
+              className="profile-trigger"
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen}
+              aria-label={t("profile.openMenu")}
+              onClick={() => setProfileMenuOpen((open) => !open)}
+            >
+              <Avatar
+                name={session?.user.name ?? t("app.sender.you")}
+                kind="user"
+                size="small"
+              />
+              <span className="profile-trigger-text">
+                {t("profile.userAndWorkspace", {
+                  name: session?.user.name ?? t("app.sender.you"),
+                  workspace:
+                    session?.workspace.name ?? t("app.sidebar.localWorkspace"),
+                })}
               </span>
-            </span>
+              <svg
+                className="profile-trigger-chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
             <button
               type="button"
               className={`icon-button profile-settings${
                 view === "settings" ? " is-active" : ""
               }`}
-              title="Settings"
-              aria-label="Settings"
+              title={t("app.sidebar.settings")}
+              aria-label={t("app.sidebar.settings")}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
             >
@@ -3078,6 +3597,31 @@ export default function App() {
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
+            {profileMenuOpen ? (
+              <ProfileMenu
+                userName={session?.user.name ?? t("app.sender.you")}
+                workspaceName={
+                  session?.workspace.name ?? t("app.sidebar.localWorkspace")
+                }
+                onClose={() => setProfileMenuOpen(false)}
+                onSettings={() => setView("settings")}
+                onLanguage={() => setLanguageOpen(true)}
+                onModels={() => {
+                  setSettingsSection("model");
+                  setView("settings");
+                }}
+                onWorkspace={() => {
+                  setSettingsSection("workspace");
+                  setView("settings");
+                }}
+                onChangelog={() =>
+                  openExternal("https://github.com/BerryUIKI/CowBot/releases")
+                }
+                onLearnMore={() =>
+                  openExternal("https://github.com/BerryUIKI/CowBot")
+                }
+              />
+            ) : null}
           </div>
         </div>
       </aside>
@@ -3089,7 +3633,7 @@ export default function App() {
           <div className="error-banner" role="alert">
             <span>{error}</span>
             <button type="button" className="text-button" onClick={() => setError(null)}>
-              Dismiss
+              {t("app.shell.dismiss")}
             </button>
           </div>
         ) : null}
@@ -3098,14 +3642,14 @@ export default function App() {
           <div className="notice-banner" role="status">
             <span>{notice}</span>
             <button type="button" className="text-button" onClick={() => setNotice(null)}>
-              Dismiss
+              {t("app.shell.dismiss")}
             </button>
           </div>
         ) : null}
 
         {loading ? (
           <div className="loading-state">
-            <p>Opening your workspace…</p>
+            <p>{t("app.shell.opening")}</p>
           </div>
         ) : view === "chat" ? (
           selectedChannel ? (
@@ -3140,23 +3684,31 @@ export default function App() {
                     <p className="chat-subtitle">
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `${conversationParticipants.length} participants${
-                              defaultResponderName
-                                ? ` · ${defaultResponderName} answers unaddressed messages`
-                                : " · unaddressed messages stay silent"
-                            }`
+                          ? t(
+                              conversationParticipants.length === 1
+                                ? "app.chat.participantSummaryOne"
+                                : "app.chat.participantSummaryOther",
+                              {
+                                count: conversationParticipants.length,
+                                answering: defaultResponderName
+                                  ? t("app.chat.answersUnaddressed", {
+                                      name: defaultResponderName,
+                                    })
+                                  : t("app.chat.staysSilent"),
+                              },
+                            )
                           : selectedAgent
                             ? `${selectedAgent.name} · ${selectedAgent.role}`
-                            : "Private conversation"
+                            : t("app.chat.privateConversation")
                         : selectedAgent
                           ? selectedAgent.role
-                          : selectedChannel.topic.trim() || "No topic yet."}
+                          : selectedChannel.topic.trim() || t("app.chat.noTopic")}
                     </p>
                     {selectedChannel.kind === "conversation" &&
                     conversationParticipants.length > 1 ? (
                       <div
                         className="chat-participants"
-                        aria-label="Conversation participants"
+                        aria-label={t("app.chat.participantsAria")}
                       >
                         {conversationParticipants.map((participant) => (
                           <span
@@ -3171,7 +3723,9 @@ export default function App() {
                             {participant.agent_name}
                             {participant.agent_id ===
                             conversationContext?.default_responder ? (
-                              <span className="chip-default">default</span>
+                              <span className="chip-default">
+                                {t("app.chat.defaultChip")}
+                              </span>
                             ) : null}
                           </span>
                         ))}
@@ -3179,121 +3733,34 @@ export default function App() {
                     ) : null}
                     {selectedChannel.kind === "channel" && channelMentionNames.length > 0 ? (
                       <p className="chat-members">
-                        Mention{" "}
-                        {channelMentionNames.map((agent) => `@${agent.name}`).join(" · ")}
+                        {t("app.chat.mention", {
+                          names: channelMentionNames
+                            .map((agent) => `@${agent.name}`)
+                            .join(" · "),
+                        })}
                       </p>
                     ) : null}
                   </div>
                 </div>
                 <div className="chat-actions">
-                  <div className="inspector-triggers">
-                    <button
-                      type="button"
-                      className={`inspector-trigger${
-                        inspectorTab === "approvals" ? " is-active" : ""
-                      }`}
-                      title="Approvals"
-                      aria-label={`Approvals (${approvals.length} pending)`}
-                      aria-pressed={inspectorTab === "approvals"}
-                      onClick={() => toggleInspector("approvals")}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        aria-hidden="true"
-                      >
-                        <path d="M9 11l3 3L22 4" />
-                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                      </svg>
-                      {approvals.length > 0 ? (
-                        <span className="inspector-trigger-count">
-                          {approvals.length}
-                        </span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      className={`inspector-trigger${
-                        inspectorTab === "background" ? " is-active" : ""
-                      }`}
-                      title="Background tasks"
-                      aria-label={`Background tasks (${activeOverviewCount} active)`}
-                      aria-pressed={inspectorTab === "background"}
-                      onClick={() => toggleInspector("background")}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 12h4l3-8 4 16 3-8h4" />
-                      </svg>
-                      {activeOverviewCount > 0 ? (
-                        <span className="inspector-trigger-count">
-                          {activeOverviewCount}
-                        </span>
-                      ) : null}
-                    </button>
-                  </div>
-                  {selectedChannel.kind === "conversation" ? (
-                    <>
-                      {conversationContext ? (
-                        <ContextMeter
-                          context={conversationContext}
-                          busy={contextBusy}
-                          openSignal={contextOpenSignal}
-                          onCompact={(agentId) =>
-                            void compactChannel(selectedChannel, agentId)
-                          }
-                          onClear={(agentId) =>
-                            void clearContextForChannel(selectedChannel, agentId)
-                          }
-                          onAutoCompactChange={(enabled) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              enabled,
-                              conversationContext.compact_threshold,
-                            )
-                          }
-                          onThresholdChange={(threshold) =>
-                            void updateConversationOptions(
-                              selectedChannel,
-                              conversationContext.auto_compact,
-                              threshold,
-                            )
-                          }
-                          onRouterChange={(enabled) =>
-                            void updateConversationRouting(selectedChannel, enabled)
-                          }
-                          onDefaultResponderChange={(agentId) =>
-                            void updateDefaultResponder(selectedChannel, agentId)
-                          }
-                          onMemoryChanged={() =>
-                            setContextVersion((version) => version + 1)
-                          }
-                          onNewConversation={openNewConversation}
-                          onInspect={inspectConversationContext}
-                        />
-                      ) : null}
-                      <span className="chat-kind">
-                        {conversationParticipants.length > 1
-                          ? "Group"
-                          : "Conversation"}
-                      </span>
-                    </>
-                  ) : selectedAgent ? (
-                    <span className="chat-kind">Direct</span>
-                  ) : null}
+                  <span className="chat-kind">
+                    {selectedChannel.kind === "conversation"
+                      ? conversationParticipants.length > 1
+                        ? t("app.chat.group")
+                        : t("app.chat.conversation")
+                      : selectedAgent
+                        ? t("app.chat.direct")
+                        : ""}
+                  </span>
                 </div>
               </header>
 
               <section
                 className="chat-thread"
-                aria-label={`Messages in ${selectedChannel.name}`}
+                ref={threadRef}
+                aria-label={t("app.chat.messagesAria", {
+                  name: selectedChannel.name,
+                })}
                 key={selectedChannel.id}
               >
                 {messages.length === 0 ? (
@@ -3311,26 +3778,32 @@ export default function App() {
                     <p className="empty-title">
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `Start the conversation with ${conversationParticipantNames.join(", ")}.`
+                          ? t("app.chat.startGroup", {
+                              names: conversationParticipantNames.join(", "),
+                            })
                           : selectedAgent
-                            ? `Start a conversation with ${selectedAgent.name}.`
-                            : "Start a conversation."
+                            ? t("app.chat.startConversation", {
+                                name: selectedAgent.name,
+                              })
+                            : t("app.chat.startAny")
                         : selectedAgent
-                          ? `Say hello to ${selectedAgent.name}.`
-                          : "No messages yet."}
+                          ? t("app.chat.sayHello", { name: selectedAgent.name })
+                          : t("app.chat.noMessagesYet")}
                     </p>
                     <p>
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `Mention a participant, use @team, or send an unaddressed message${
-                              defaultResponderName
-                                ? ` for ${defaultResponderName} to answer`
-                                : " (it stays silent while no default responder is set)"
-                            }. Each participant keeps its own context branch.`
-                          : "Each conversation keeps its own context branch; the header meter shows how full it is."
+                          ? defaultResponderName
+                            ? t("app.chat.groupHintWithDefault", {
+                                name: defaultResponderName,
+                              })
+                            : t("app.chat.groupHintSilent")
+                          : t("app.chat.singleHint")
                         : selectedAgent
-                          ? "Every message here goes straight to this agent."
-                          : `Write the first message to #${selectedChannel.name}.`}
+                          ? t("app.chat.agentHint")
+                          : t("app.chat.channelHint", {
+                              name: selectedChannel.name,
+                            })}
                     </p>
                   </div>
                 ) : (
@@ -3378,7 +3851,7 @@ export default function App() {
                                 <time dateTime={message.created_at}>
                                   {formatTime(message.created_at)}
                                 </time>
-                                {message.thread_id ? " · In a thread" : null}
+                                {message.thread_id ? t("app.chat.inThread") : null}
                                 {message.sender.type === "User" &&
                                 selectedChannel.kind === "conversation" ? (
                                   <>
@@ -3388,7 +3861,7 @@ export default function App() {
                                       className="text-button chat-remember"
                                       onClick={() => setRememberMessage(message)}
                                     >
-                                      Remember this message
+                                      {t("app.chat.remember")}
                                     </button>
                                   </>
                                 ) : null}
@@ -3425,7 +3898,7 @@ export default function App() {
                           ) : null}
                           <div className="chat-approval-body">
                             <span className="chat-sender">
-                              {agent?.name ?? "Approval"}
+                              {agent?.name ?? t("app.chat.approval")}
                             </span>
                             <ApprovalCard
                               approval={approval}
@@ -3444,8 +3917,11 @@ export default function App() {
                       <li className="chat-row chat-row-agent" key="approval-waiting">
                         <div className="chat-bubble-wrap">
                           <div className="chat-bubble chat-bubble-agent chat-bubble-waiting">
-                            Waiting for approval
-                            {inlineApprovalTool ? `: ${inlineApprovalTool}` : ""}…
+                            {inlineApprovalTool
+                              ? t("app.chat.waitingApprovalTool", {
+                                  tool: inlineApprovalTool,
+                                })
+                              : t("app.chat.waitingApproval")}
                           </div>
                         </div>
                       </li>
@@ -3456,7 +3932,7 @@ export default function App() {
                           <div className="chat-bubble-wrap">
                             <span className="chat-sender">{agent.name}</span>
                             <div className="chat-bubble chat-bubble-agent">
-                              <span className="typing-dots" aria-label="Working">
+                              <span className="typing-dots" aria-label={t("app.chat.working")}>
                                 <span />
                                 <span />
                                 <span />
@@ -3466,6 +3942,52 @@ export default function App() {
                         </li>
                       ))
                     ) : null}
+                    {channelStreams.map((turn) => {
+                      // Each turn names its own agent, so two participants who
+                      // answer at once are labelled correctly.
+                      const name = turn.name;
+                      return (
+                        <li className="chat-row chat-row-agent" key={`stream-${turn.id}`}>
+                          <Avatar name={name} kind="agent" size="small" />
+                          <div className="chat-bubble-wrap">
+                            <span className="chat-sender">{name}</span>
+                            <div className="chat-bubble chat-bubble-agent chat-bubble-streaming">
+                              {turn.reasoning ? (
+                                <details className="stream-reasoning">
+                                  <summary>{t("app.chat.thinking")}</summary>
+                                  <RichText content={turn.reasoning} />
+                                </details>
+                              ) : null}
+                              {turn.tools.length > 0 ? (
+                                <div className="stream-tools">
+                                  {turn.tools.map((tool, index) => (
+                                    <span
+                                      className={
+                                        tool.running
+                                          ? "stream-tool stream-tool-running"
+                                          : "stream-tool"
+                                      }
+                                      key={`${tool.name}-${index}`}
+                                    >
+                                      {tool.running ? "⟳" : "✓"} {tool.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {turn.text ? (
+                                <RichText content={turn.text} />
+                              ) : (
+                                <span className="typing-dots" aria-label={t("app.chat.working")}>
+                                  <span />
+                                  <span />
+                                  <span />
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
                 <div ref={endRef} />
@@ -3474,8 +3996,7 @@ export default function App() {
               {conversationFull && selectedChannel.kind === "conversation" ? (
                 <div className="context-full-banner" role="alert">
                   <span>
-                    This conversation's context is full. Compact it, clear it, or start a
-                    new conversation before sending.
+                    {t("app.chat.contextFull")}
                   </span>
                   <div className="context-full-actions">
                     <button
@@ -3484,7 +4005,7 @@ export default function App() {
                       disabled={contextBusy}
                       onClick={() => void compactChannel(selectedChannel)}
                     >
-                      Compact
+                      {t("app.chat.compact")}
                     </button>
                     <button
                       type="button"
@@ -3492,14 +4013,14 @@ export default function App() {
                       disabled={contextBusy}
                       onClick={() => void clearContextForChannel(selectedChannel)}
                     >
-                      Clear context
+                      {t("app.chat.clearContext")}
                     </button>
                     <button
                       type="button"
                       className="ghost-button"
                       onClick={openNewConversation}
                     >
-                      New conversation
+                      {t("app.chat.newConversation")}
                     </button>
                   </div>
                 </div>
@@ -3521,7 +4042,11 @@ export default function App() {
                 className="composer-bar"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+                  if (
+                    commandCatalogue.length > 0 &&
+                    isCommandDraft(draft) &&
+                    !commandAsMessage
+                  ) {
                     void sendCommandDraft();
                     return;
                   }
@@ -3538,12 +4063,20 @@ export default function App() {
                       hint={commandHint}
                     />
                   ) : null}
+                  {argumentCandidates.length > 0 ? (
+                    <CommandArgumentMenu
+                      suggestions={argumentCandidates}
+                      activeIndex={activeArgumentIndex}
+                      onAccept={acceptArgument}
+                      onHover={setArgumentIndex}
+                    />
+                  ) : null}
                   {mentionCandidates.length > 0 ? (
                     <div
                       className="mention-suggestions"
                       id="mention-suggestions"
                       role="listbox"
-                      aria-label="Mention suggestions"
+                      aria-label={t("app.composer.mentionSuggestions")}
                     >
                       {mentionCandidates.map((candidate, index) => (
                         <button
@@ -3562,7 +4095,9 @@ export default function App() {
                         >
                           <span>@{candidate.name}</span>
                           {candidate.broadcast ? (
-                            <span className="mention-broadcast">everyone</span>
+                            <span className="mention-broadcast">
+                              {t("app.composer.everyone")}
+                            </span>
                           ) : null}
                         </button>
                       ))}
@@ -3571,8 +4106,12 @@ export default function App() {
                   <button
                     type="button"
                     className="composer-add"
-                    title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
-                    aria-label="New task"
+                    title={
+                      selectedAgent
+                        ? t("app.composer.newTaskFor", { name: selectedAgent.name })
+                        : t("app.composer.newTask")
+                    }
+                    aria-label={t("app.composer.newTask")}
                     onClick={startTaskForCurrentChannel}
                   >
                     +
@@ -3585,8 +4124,11 @@ export default function App() {
                       setDraft(event.target.value);
                       // A new draft is a new question for the command menu.
                       setCommandDismissed(false);
+                      setCommandAsMessage(false);
                       setCommandIndex(0);
                       setCommandHint(null);
+                      setArgumentDismissed(false);
+                      setArgumentIndex(0);
                       if (slashQuery(event.target.value) === null) {
                         setCommandExpanded(false);
                       }
@@ -3594,85 +4136,188 @@ export default function App() {
                     onKeyDown={handleComposerKeyDown}
                     placeholder={
                       conversationFull
-                        ? "Context full — compact or start a new conversation"
+                        ? t("app.composer.contextFull")
                         : sideQuestionBusy
-                          ? "Asking a side question…"
-                          : `Message ${composerTarget}`
+                          ? t("app.composer.sideQuestion")
+                          : t("app.composer.messagePlaceholder", {
+                              target: composerTarget,
+                            })
                     }
-                    aria-label={`Message ${composerTarget}`}
+                    aria-label={t("app.composer.messagePlaceholder", {
+                      target: composerTarget,
+                    })}
                     aria-autocomplete="list"
                     aria-expanded={
-                      commandCandidates.length > 0 || mentionCandidates.length > 0
+                      argumentCandidates.length > 0 ||
+                      commandCandidates.length > 0 ||
+                      mentionCandidates.length > 0
                     }
                     aria-controls={
-                      commandCandidates.length > 0
-                        ? "command-suggestions"
-                        : mentionCandidates.length > 0
-                          ? "mention-suggestions"
-                          : undefined
+                      argumentCandidates.length > 0
+                        ? "command-argument-suggestions"
+                        : commandCandidates.length > 0
+                          ? "command-suggestions"
+                          : mentionCandidates.length > 0
+                            ? "mention-suggestions"
+                            : undefined
                     }
                     aria-activedescendant={
-                      commandCandidates.length > 0
-                        ? `command-option-${activeCommandIndex}`
-                        : mentionCandidates.length > 0
-                          ? `mention-option-${activeMentionIndex}`
-                          : undefined
+                      argumentCandidates.length > 0
+                        ? `command-argument-option-${activeArgumentIndex}`
+                        : commandCandidates.length > 0
+                          ? `command-option-${activeCommandIndex}`
+                          : mentionCandidates.length > 0
+                            ? `mention-option-${activeMentionIndex}`
+                            : undefined
                     }
                     disabled={conversationFull}
                     rows={1}
                   />
-                  <button
-                    type="submit"
-                    className="composer-send"
-                    disabled={!draft.trim() || sending || conversationFull}
-                    aria-label="Send message"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      aria-hidden="true"
+                  {channelIsStreaming ? (
+                    <button
+                      type="button"
+                      className="composer-stop"
+                      title={t("app.composer.stopReply")}
+                      aria-label={t("app.composer.stopReply")}
+                      onClick={() => void stopCurrentTurn()}
                     >
-                      <path d="M12 19V5" />
-                      <path d="m6 11 6-6 6 6" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="composer-footer">
-                  <span className="composer-footer-spacer" />
-                  {agents.length > 0 ? (
-                    <ApprovalModeMenu
-                      value={channelApproval}
-                      onChange={setChannelApproval}
-                    />
-                  ) : null}
-                  <button
-                    type="button"
-                    className="composer-model"
-                    aria-haspopup="menu"
-                    aria-expanded={modelMenu !== null}
-                    title={
-                      activeModelProvider
-                        ? `${activeModelProvider.name} · ${activeModelProvider.model}`
-                        : "Offline mock model"
-                    }
-                    onClick={openModelMenu}
-                  >
-                    {activeModelLabel}
-                  </button>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <rect x="7" y="7" width="10" height="10" rx="2" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      className="composer-send"
+                      disabled={!draft.trim() || sending || conversationFull}
+                      aria-label={t("app.composer.send")}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 19V5" />
+                        <path d="m6 11 6-6 6 6" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </form>
+              <div className="composer-footer">
+                {taskStream ? (
+                  <button
+                    type="button"
+                    className="composer-task-run"
+                    title={t("app.composer.stopTaskRun", {
+                      name: taskStream.name,
+                    })}
+                    onClick={() => void stopTurn(taskStream.id)}
+                  >
+                    <span className="composer-task-run-dot" aria-hidden="true" />
+                    {t("app.composer.taskRun", { name: taskStream.name })}
+                    {taskStream.tools.some((tool) => tool.running)
+                      ? t("app.composer.taskRunTool")
+                      : ""}
+                  </button>
+                ) : null}
+                <span className="composer-footer-spacer" />
+                <button
+                  type="button"
+                  className="composer-model"
+                  aria-haspopup="menu"
+                  aria-expanded={modelMenu !== null}
+                  title={composerModelTitle}
+                  onClick={openModelMenu}
+                >
+                  {composerModelLabel}
+                  {conversationScope
+                    ? conversationScope.model_follows_default
+                      ? t("app.model.defaultSuffix")
+                      : t("app.model.pinnedSuffix")
+                    : ""}
+                </button>
+                {agents.length > 0 ? (
+                  <ApprovalModeMenu
+                    value={channelApproval}
+                    onChange={setChannelApproval}
+                  />
+                ) : null}
+                {selectedChannel.kind === "conversation" && conversationContext ? (
+                  <ContextMeter
+                    context={conversationContext}
+                    busy={contextBusy}
+                    openSignal={contextOpenSignal}
+                    placement="composer"
+                    onCompact={(agentId) =>
+                      void compactChannel(selectedChannel, agentId)
+                    }
+                    onClear={(agentId) =>
+                      void clearContextForChannel(selectedChannel, agentId)
+                    }
+                    onAutoCompactChange={(enabled) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        enabled,
+                        conversationContext.compact_threshold,
+                      )
+                    }
+                    onThresholdChange={(threshold) =>
+                      void updateConversationOptions(
+                        selectedChannel,
+                        conversationContext.auto_compact,
+                        threshold,
+                      )
+                    }
+                    onRouterChange={(enabled) =>
+                      void updateConversationRouting(selectedChannel, enabled)
+                    }
+                    onRoutingModeChange={(mode) =>
+                      void updateConversationSetting(selectedChannel, {
+                        routingMode: mode,
+                      })
+                    }
+                    onMutedChange={(agentIds) =>
+                      void updateConversationSetting(selectedChannel, {
+                        mutedParticipants: agentIds,
+                      })
+                    }
+                    onReplyCleanupChange={(enabled) =>
+                      void updateConversationSetting(selectedChannel, {
+                        replyCleanup: enabled,
+                      })
+                    }
+                    onDefaultResponderChange={(agentId) =>
+                      void updateDefaultResponder(selectedChannel, agentId)
+                    }
+                    onMemoryChanged={() =>
+                      setContextVersion((version) => version + 1)
+                    }
+                    onNewConversation={openNewConversation}
+                    onOpenModelSettings={() => {
+                      setSettingsSection("model");
+                      setView("settings");
+                    }}
+                    onInspect={inspectConversationContext}
+                  />
+                ) : null}
+              </div>
             </>
           ) : (
             <div className="empty-workspace">
               <span className="empty-icon-tile">
                 <img className="empty-icon" src={icon} alt="" />
               </span>
-              <p className="empty-title">A quiet room, for now.</p>
-              <p>Create a channel to start working with your agents.</p>
+              <p className="empty-title">{t("app.chat.emptyTitle")}</p>
+              <p>{t("app.chat.emptyBody")}</p>
               <button type="button" className="primary-button" onClick={openNewChannel}>
-                Create a channel
+                {t("app.chat.createChannel")}
               </button>
             </div>
           )
@@ -3680,21 +4325,21 @@ export default function App() {
           creatingTask ? (
             <div className="task-form-view">
               <header className="view-header">
-                <h2 className="view-title">New task</h2>
+                <h2 className="view-title">{t("app.taskForm.title")}</h2>
                 <p className="view-subtitle">
-                  Give an agent a clear outcome and an approval policy.
+                  {t("app.taskForm.subtitle")}
                 </p>
               </header>
 
               {agents.length === 0 ? (
                 <div className="agent-bootstrap">
-                  <p className="empty-title">No agents yet.</p>
-                  <p>Add a team from a built-in template to assign this task.</p>
+                  <p className="empty-title">{t("app.taskForm.noAgents")}</p>
+                  <p>{t("app.taskForm.addTeam")}</p>
                   <div className="inline-form">
                     <select
                       value={templateId}
                       onChange={(event) => setTemplateId(event.target.value)}
-                      aria-label="Template"
+                      aria-label={t("app.taskForm.template")}
                     >
                       {templates.map((template) => (
                         <option key={template.id} value={template.id}>
@@ -3708,34 +4353,36 @@ export default function App() {
                       onClick={handleAddAgents}
                       disabled={busy === "add-agents" || !templateId}
                     >
-                      {busy === "add-agents" ? "Adding…" : "Add agents"}
+                      {busy === "add-agents"
+                        ? t("app.taskForm.adding")
+                        : t("app.taskForm.addAgents")}
                     </button>
                   </div>
                 </div>
               ) : (
                 <form className="task-form" onSubmit={handleCreateTask}>
                   <label className="field">
-                    <span>Description</span>
+                    <span>{t("app.taskForm.description")}</span>
                     <textarea
                       ref={taskDescriptionRef}
                       value={taskDescription}
                       onChange={(event) => setTaskDescription(event.target.value)}
-                      placeholder="Implement the login flow and verify it in the sandbox."
+                      placeholder={t("app.taskForm.descriptionPlaceholder")}
                       rows={3}
                     />
                   </label>
                   <label className="field">
-                    <span>Expected output</span>
+                    <span>{t("app.taskForm.expectedOutput")}</span>
                     <textarea
                       value={taskOutput}
                       onChange={(event) => setTaskOutput(event.target.value)}
-                      placeholder="Working code, tests, and a short summary of changes."
+                      placeholder={t("app.taskForm.expectedOutputPlaceholder")}
                       rows={2}
                     />
                   </label>
                   <div className="form-row">
                     <label className="field">
-                      <span>Assignee</span>
+                      <span>{t("app.taskForm.assignee")}</span>
                       <select
                         value={taskAssignee}
                         onChange={(event) => setTaskAssignee(event.target.value)}
@@ -3748,12 +4395,12 @@ export default function App() {
                       </select>
                     </label>
                     <label className="field">
-                      <span>Channel</span>
+                      <span>{t("app.taskForm.channel")}</span>
                       <select
                         value={taskChannel}
                         onChange={(event) => setTaskChannel(event.target.value)}
                       >
-                        <option value="">No channel</option>
+                        <option value="">{t("app.taskForm.noChannel")}</option>
                         {channels.map((channel) => (
                           <option key={channel.id} value={channel.id}>
                             {channel.agent_id ? channel.name : `#${channel.name}`}
@@ -3762,7 +4409,7 @@ export default function App() {
                       </select>
                     </label>
                     <div className="field">
-                      <span>Approval</span>
+                      <span>{t("app.taskForm.approval")}</span>
                       <ApprovalModeMenu
                         value={taskApproval}
                         onChange={setTaskApproval}
@@ -3772,7 +4419,7 @@ export default function App() {
                   {availableProjects.length > 0 ? (
                     <section
                       className="task-worktree"
-                      aria-label="Run in a git worktree"
+                      aria-label={t("app.taskForm.worktreeAria")}
                     >
                       <label className="worktree-toggle">
                         <input
@@ -3783,17 +4430,16 @@ export default function App() {
                           }
                         />
                         <span>
-                          <strong>Run in a git worktree</strong>
+                          <strong>{t("app.taskForm.worktreeTitle")}</strong>
                           <small>
-                            Work in an isolated checkout on its own branch. The
-                            branch is not merged automatically.
+                            {t("app.taskForm.worktreeBody")}
                           </small>
                         </span>
                       </label>
                       {worktreeEnabled ? (
                         <div className="form-row">
                           <label className="field">
-                            <span>Project</span>
+                            <span>{t("app.taskForm.project")}</span>
                             <select
                               value={taskProject}
                               onChange={(event) =>
@@ -3808,7 +4454,7 @@ export default function App() {
                             </select>
                           </label>
                           <label className="field">
-                            <span>Base branch</span>
+                            <span>{t("app.taskForm.baseBranch")}</span>
                             <select
                               value={taskBaseBranch}
                               onChange={(event) =>
@@ -3825,14 +4471,14 @@ export default function App() {
                               ) : (
                                 <option value="">
                                   {projectBranchesBusy
-                                    ? "Loading branches…"
-                                    : "No local branches"}
+                                    ? t("app.taskForm.loadingBranches")
+                                    : t("app.taskForm.noBranches")}
                                 </option>
                               )}
                             </select>
                           </label>
                           <div className="field">
-                            <span>Worktree branch</span>
+                            <span>{t("app.taskForm.worktreeBranch")}</span>
                             <code className="worktree-preview">
                               {worktreeBranchPreview(taskDescription)}
                             </code>
@@ -3856,7 +4502,9 @@ export default function App() {
                             projectBranchesBusy))
                       }
                     >
-                      {busy === "create-task" ? "Creating…" : "Create task"}
+                      {busy === "create-task"
+                        ? t("app.sidebar.creating")
+                        : t("app.taskForm.create")}
                     </button>
                     <button
                       type="button"
@@ -3866,7 +4514,7 @@ export default function App() {
                         setView("chat");
                       }}
                     >
-                      Cancel
+                      {t("app.taskForm.cancel")}
                     </button>
                   </div>
                 </form>
@@ -3874,10 +4522,10 @@ export default function App() {
             </div>
           ) : (
             <div className="empty-workspace">
-              <p className="empty-title">No task selected.</p>
-              <p>Pick a task in the inspector, or create a new one.</p>
+              <p className="empty-title">{t("app.taskForm.noTaskTitle")}</p>
+              <p>{t("app.taskForm.noTaskBody")}</p>
               <button type="button" className="primary-button" onClick={startCreatingTask}>
-                New task
+                {t("app.taskForm.newTask")}
               </button>
             </div>
           )
@@ -3894,10 +4542,11 @@ export default function App() {
             projects={projects}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
-            onEditAgent={handleEditAgent}
+            onEditAgent={openEditAgentDialog}
             onSessionChange={setSession}
             onAddProject={handleAddProject}
             onRemoveProject={handleRemoveProject}
+            onOpenLanguage={() => setLanguageOpen(true)}
           />
         )}
       </main>
@@ -3932,6 +4581,10 @@ export default function App() {
         />
       ) : null}
 
+      {languageOpen ? (
+        <LanguageDialog onClose={() => setLanguageOpen(false)} />
+      ) : null}
+
       {menu ? (
         <ContextMenu
           x={menu.x}
@@ -3954,8 +4607,8 @@ export default function App() {
         <Modal
           title={
             dialog.channel.kind === "conversation"
-              ? "Rename conversation"
-              : "Rename channel"
+              ? t("app.dialog.renameConversation")
+              : t("app.dialog.renameChannel")
           }
           onClose={closeDialog}
           footer={
@@ -3966,7 +4619,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="submit"
@@ -3974,14 +4627,14 @@ export default function App() {
                 className="primary-button"
                 disabled={dialogBusy || !dialogName.trim()}
               >
-                {dialogBusy ? "Saving…" : "Save"}
+                {dialogBusy ? t("app.dialog.saving") : t("app.dialog.save")}
               </button>
             </>
           }
         >
           <form id="rename-channel-form" className="dialog-form" onSubmit={submitRename}>
             <label className="field">
-              <span>Name</span>
+              <span>{t("app.dialog.name")}</span>
               <input
                 value={dialogName}
                 onChange={(event) => setDialogName(event.target.value)}
@@ -3989,7 +4642,7 @@ export default function App() {
               />
             </label>
             <label className="field">
-              <span>Topic</span>
+              <span>{t("app.dialog.topic")}</span>
               <input
                 value={dialogTopic}
                 onChange={(event) => setDialogTopic(event.target.value)}
@@ -4007,8 +4660,8 @@ export default function App() {
         <Modal
           title={
             dialog.channel.kind === "conversation"
-              ? "Delete conversation"
-              : "Delete channel"
+              ? t("app.dialog.deleteConversation")
+              : t("app.dialog.deleteChannel")
           }
           onClose={closeDialog}
           footer={
@@ -4019,7 +4672,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="button"
@@ -4028,24 +4681,25 @@ export default function App() {
                 disabled={dialogBusy}
               >
                 {dialogBusy
-                  ? "Deleting…"
+                  ? t("app.dialog.deleting")
                   : dialog.channel.kind === "conversation"
-                    ? "Delete conversation"
-                    : "Delete channel"}
+                    ? t("app.dialog.deleteConversation")
+                    : t("app.dialog.deleteChannel")}
               </button>
             </>
           }
         >
           {dialog.channel.kind === "conversation" ? (
             <p className="dialog-copy">
-              Delete <strong>{dialog.channel.name}</strong>? Its messages and context
-              will be deleted. This cannot be undone.
+              {t("app.dialog.deleteConversationBody", {
+                name: dialog.channel.name,
+              })}
             </p>
           ) : (
             <p className="dialog-copy">
-              Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
-              deleted. Tasks keep their history but are no longer linked to the
-              channel.
+              {t("app.dialog.deleteChannelBody", {
+                name: dialog.channel.name,
+              })}
             </p>
           )}
           {dialogError ? (
@@ -4056,7 +4710,7 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "clear-history" ? (
         <Modal
-          title="Clear conversation"
+          title={t("app.dialog.clearConversation")}
           onClose={closeDialog}
           footer={
             <>
@@ -4066,7 +4720,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="button"
@@ -4074,14 +4728,17 @@ export default function App() {
                 onClick={() => void submitClear()}
                 disabled={dialogBusy}
               >
-                {dialogBusy ? "Clearing…" : "Clear history"}
+                {dialogBusy
+                  ? t("app.dialog.clearing")
+                  : t("app.dialog.clearHistory")}
               </button>
             </>
           }
         >
           <p className="dialog-copy">
-            Clear the conversation with <strong>{dialog.agent.name}</strong>? All
-            messages in this conversation will be deleted; the agent stays.
+            {t("app.dialog.clearHistoryBody", {
+              name: dialog.agent.name,
+            })}
           </p>
           {dialogError ? (
             <p className="dialog-error" role="alert">
@@ -4091,7 +4748,7 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "edit-agent" ? (
         <Modal
-          title="Edit agent"
+          title={t("app.dialog.editAgent")}
           onClose={closeDialog}
           footer={
             <>
@@ -4101,7 +4758,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="submit"
@@ -4109,14 +4766,14 @@ export default function App() {
                 className="primary-button"
                 disabled={dialogBusy || !dialogName.trim()}
               >
-                {dialogBusy ? "Saving…" : "Save"}
+                {dialogBusy ? t("app.dialog.saving") : t("app.dialog.save")}
               </button>
             </>
           }
         >
           <form id="edit-agent-form" className="dialog-form" onSubmit={submitEditAgent}>
             <label className="field">
-              <span>Name</span>
+              <span>{t("app.dialog.name")}</span>
               <input
                 value={dialogName}
                 onChange={(event) => setDialogName(event.target.value)}
@@ -4124,7 +4781,7 @@ export default function App() {
               />
             </label>
             <label className="field">
-              <span>Role</span>
+              <span>{t("app.dialog.role")}</span>
               <input
                 value={dialogRole}
                 onChange={(event) => setDialogRole(event.target.value)}
@@ -4132,9 +4789,9 @@ export default function App() {
               />
             </label>
             <fieldset className="tool-picker">
-              <legend>Tools</legend>
+              <legend>{t("app.dialog.tools")}</legend>
               {availableTools.length === 0 ? (
-                <p className="dialog-copy">Loading tools…</p>
+                <p className="dialog-copy">{t("app.dialog.loadingTools")}</p>
               ) : (
                 availableTools.map((tool) => (
                   <label key={tool.name} className="tool-option">
@@ -4166,11 +4823,12 @@ export default function App() {
           initialContent={rememberMessage.content}
           onClose={() => setRememberMessage(null)}
           onSaved={() => {
-            setNotice("Saved to memory.");
+            setNotice(t("app.notice.savedToMemory"));
             setContextVersion((version) => version + 1);
           }}
         />
       ) : null}
+      </div>
     </div>
   );
 }

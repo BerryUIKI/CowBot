@@ -52,6 +52,20 @@ impl AgentService {
                 update.id.0
             )));
         };
+        // An id that names an agent of another workspace must be refused before
+        // anything else: `get_agent` is not workspace-scoped, and the store will
+        // not move a row between workspaces, so without this the write below
+        // would be a silent no-op reported as a successful rename.
+        if !self
+            .store
+            .agent_in_workspace(&update.id, workspace_id)
+            .await?
+        {
+            return Err(CowError::Config(format!(
+                "agent '{}' was not found",
+                update.id.0
+            )));
+        }
 
         let name = update.name.trim();
         if name.is_empty() {
@@ -85,7 +99,12 @@ impl AgentService {
         agent.name = name.to_string();
         agent.role = update.role.trim().to_string();
         agent.tools = tools;
-        self.store.upsert_agent(workspace_id, &agent).await?;
+        if !self.store.upsert_agent(workspace_id, &agent).await? {
+            return Err(CowError::Config(format!(
+                "agent '{}' was not found",
+                update.id.0
+            )));
+        }
         self.channels
             .ensure_agent_channel(workspace_id, &agent)
             .await?;

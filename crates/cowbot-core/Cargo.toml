@@ -17,3 +17,6 @@ ts-rs = { workspace = true, optional = true, features = ["chrono-impl", "uuid-im
 
 [features]
 bindings = ["dep:ts-rs"]
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -125,9 +125,10 @@ impl PromptTool {
         let tools = definitions
             .iter()
             .map(|definition| {
-                let tokens = serde_json::to_string(definition)
-                    .map(|json| counter.count(&json))
-                    .unwrap_or(0);
+                let tokens = counter.count(
+                    &serde_json::to_string(definition)
+                        .expect("a tool definition always serializes"),
+                );
                 PromptTool {
                     name: definition.name.clone(),
                     description: definition.description.clone(),
@@ -136,9 +137,8 @@ impl PromptTool {
                 }
             })
             .collect();
-        let total = serde_json::to_string(definitions)
-            .map(|json| counter.count(&json))
-            .unwrap_or(0);
+        let total = counter
+            .count(&serde_json::to_string(definitions).expect("tool definitions always serialize"));
         (tools, total)
     }
 }

@@ -302,23 +302,69 @@ async fn agents_and_templates_roundtrip() {
         json!({ "role": "reviewer", "tools": ["read_file"] }),
     );
     template.description = "Code review agent".to_string();
-    store.upsert_template(&template).await.unwrap();
+    store
+        .upsert_template(&workspace.id, &template)
+        .await
+        .unwrap();
 
-    let loaded_template = store.get_template(&template.id).await.unwrap().unwrap();
+    let loaded_template = store
+        .get_template(&workspace.id, &template.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(loaded_template.kind, TemplateKind::Agent);
     assert_eq!(loaded_template.payload["role"], "reviewer");
 
     let templates = store
-        .list_templates(Some(TemplateKind::Agent))
+        .list_templates(&workspace.id, Some(TemplateKind::Agent))
         .await
         .unwrap();
     assert_eq!(templates.len(), 1);
 
-    store.delete_template(&template.id).await.unwrap();
-    assert!(store.get_template(&template.id).await.unwrap().is_none());
+    store
+        .delete_template(&workspace.id, &template.id)
+        .await
+        .unwrap();
+    assert!(store
+        .get_template(&workspace.id, &template.id)
+        .await
+        .unwrap()
+        .is_none());
 
     store.delete_agent(&agent.id).await.unwrap();
     assert!(store.get_agent(&agent.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn an_agent_id_cannot_move_a_row_between_workspaces() {
+    let store = test_store().await;
+    let (_user, mine) = seed_workspace(&store).await;
+    let other = Workspace::new("Someone Else");
+    store.create_workspace(&other).await.unwrap();
+
+    let mut agent = AgentProfile::new("Planner", "Architect", "Plan", "Careful");
+    store.upsert_agent(&mine.id, &agent).await.unwrap();
+
+    // The same id, offered as if it belonged to the other workspace with a
+    // different profile, must not write anything anywhere.
+    agent.name = "Captured".to_string();
+    let written = store.upsert_agent(&other.id, &agent).await.unwrap();
+    assert!(!written, "a foreign agent id must not be written");
+
+    let stored = store.get_agent(&agent.id).await.unwrap().unwrap();
+    assert_eq!(stored.name, "Planner");
+    assert!(store.agent_in_workspace(&agent.id, &mine.id).await.unwrap());
+    assert!(!store
+        .agent_in_workspace(&agent.id, &other.id)
+        .await
+        .unwrap());
+
+    // Updating inside its own workspace still works and reports the write.
+    let mut renamed = stored;
+    renamed.name = "Chief".to_string();
+    assert!(store.upsert_agent(&mine.id, &renamed).await.unwrap());
+    let stored = store.get_agent(&agent.id).await.unwrap().unwrap();
+    assert_eq!(stored.name, "Chief");
 }
 
 #[tokio::test]

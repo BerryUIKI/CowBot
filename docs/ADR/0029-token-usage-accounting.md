@@ -140,6 +140,28 @@ endpoints can alias names, and a wrong window is worse than an unknown one.
 Missing metadata is a supported state: later UI shows absolute token counts
 and omits percentages until the user supplies a window.
 
+### 5a. Discovery may fill the metadata the endpoint reports
+
+Manual entry was the only source, which left every newly added model without a
+meter even when the endpoint already advertised the window. `GET /models` on an
+OpenAI-compatible relay reports it per model, under names that differ between
+implementations:
+
+| Source | Field |
+| --- | --- |
+| Context window | `context_length`, then `max_input_tokens`, then `context_window`, then the largest of `context_windows` |
+| Maximum output | `max_output_tokens`, then `max_completion_tokens` |
+
+Model discovery now carries these through as `DiscoveredModel` and the desktop
+seeds them into `model_metadata` when models are fetched or added. This does not
+overturn the reasoning above: the values are what the endpoint itself claims,
+not a guess. A field the endpoint omits stays empty, and a value the user typed
+is never overwritten — the user's own entry wins over discovery, per field.
+
+Anthropic's own `/v1/models` reports no window, so its models still rely on
+manual entry. The panel states the window is unknown and links to
+Settings → Models in that case.
+
 ### 6. Estimation is a fallback, not a source of truth
 
 `estimate_tokens` uses a fixed character heuristic (ASCII characters divided
@@ -182,4 +204,7 @@ a call completes.
 - Cached tokens and cache writes are recorded separately. A high cached share
   is not automatically cheaper unless cache-write pricing is also considered.
 - Model metadata is user-configured until a trustworthy catalogue exists.
-  Context percentages may be unavailable for a new model.
+  Context percentages may be unavailable for a new model. An endpoint that
+  reports its own windows is a trustworthy-enough source, so discovery fills
+  them, but an endpoint that reports nothing still leaves the meter without a
+  denominator.

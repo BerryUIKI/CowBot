@@ -64,7 +64,7 @@ pub enum LlmCallKind {
     /// Memory extraction from a completed conversation.
     MemoryExtract,
     /// A side question asked with `/btw`: one turn whose answer is shown to the
-    /// user but never posted or appended to a context branch (ADR-0039).
+    /// user but never posted or appended to a context branch (ADR-0041).
     SideQuestion,
 }
 
@@ -308,8 +308,7 @@ pub fn estimate_tokens(text: &str) -> u32 {
         };
     }
 
-    let tokens = weight.ceil().max(1.0);
-    tokens.min(u32::MAX as f64) as u32
+    weight.ceil() as u32
 }
 
 fn is_cjk(character: char) -> bool {
@@ -327,9 +326,7 @@ fn is_cjk(character: char) -> bool {
 
 /// Estimate the tokens in a JSON value by serializing it deterministically.
 pub fn estimate_json_tokens(value: &serde_json::Value) -> u32 {
-    serde_json::to_string(value)
-        .map(|text| estimate_tokens(&text))
-        .unwrap_or(0)
+    estimate_tokens(&serde_json::to_string(value).expect("a JSON value always serializes"))
 }
 
 #[cfg(test)]

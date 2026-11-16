@@ -260,6 +260,11 @@ async fn export_package(output: PathBuf, settings: &Settings) -> anyhow::Result<
 async fn import_package(input: PathBuf, settings: &Settings) -> anyhow::Result<()> {
     let bytes = std::fs::read(&input)?;
 
+    // Verify before touching the database (`Store::connect` creates the file)
+    // and keep the manifest for the printed summary; `import_workspace`
+    // re-verifies the same in-memory bytes as its own precondition, which costs
+    // a second hash pass but keeps the "nothing written before verification"
+    // guarantee in one place rather than splitting it across two callers.
     let manifest = cowbot_package::inspect(&bytes)?;
     let store = Store::connect(&settings.db).await?;
     store.migrate().await?;
