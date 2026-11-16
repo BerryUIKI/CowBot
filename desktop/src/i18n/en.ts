@@ -1189,6 +1189,34 @@ export const en = {
     finish: "Finish setup",
     addedNoticeOne: "Added {count} agent from {name}.",
     addedNoticeOther: "Added {count} agents from {name}.",
+    language: "Language",
+    databaseTitle: "Database folder",
+    databaseHint:
+      "Workspace databases and backups live in this folder. Changing it restarts CowBot and opens a new workspace there.",
+    databaseCurrent: "Current folder",
+    databaseChange: "Change…",
+    databaseChanging: "Restarting…",
+  },
+  startup: {
+    loading: "Starting CowBot…",
+    kicker: "Workspace database",
+    upgradeTitle: "Database upgrade",
+    upgradeCopy:
+      "This workspace uses schema version {current}. CowBot upgrades it to schema version {target}.",
+    upgradeOneWay:
+      "The upgrade is one-way: an older CowBot cannot open the upgraded database.",
+    backupHint: "Back up and upgrade writes a copy here:",
+    upgradeAction: "Upgrade",
+    upgradeBackupAction: "Back up and upgrade",
+    newerTitle: "This workspace was created by a newer CowBot",
+    newerCopy:
+      "The database uses schema version {current}, but this CowBot provides schema version {target}. Opening it with this version could damage it.",
+    backupsTitle: "Compatible backups",
+    restoreAction: "Restore backup",
+    freshAction: "Start with an empty workspace",
+    freshHint: "The current database is kept as:",
+    failedTitle: "CowBot could not open the workspace database",
+    quit: "Quit CowBot",
   },
   taskList: {
     aria: "Tasks",

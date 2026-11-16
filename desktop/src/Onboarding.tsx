@@ -1,17 +1,21 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import ModelProviderSettings from "./ModelProviderSettings";
 import icon from "./assets/cowbot-icon.svg";
-import wordmark from "./assets/cowbot-wordmark-dark.svg";
+import { setDatabaseDirectory } from "./api";
 import { errorMessage } from "./errors";
-import { useT } from "./i18n";
+import { useI18n, useT } from "./i18n";
+import { localeDefinitions } from "./i18n/catalog";
 import type { AgentProfile, TemplateDocument } from "./types";
 
 interface OnboardingProps {
   templates: TemplateDocument[];
   agents: AgentProfile[];
+  databaseDir: string;
   onAddAgents: (templateId: string) => Promise<AgentProfile[]>;
   onComplete: () => Promise<void>;
+  onOpenLanguage: () => void;
 }
 
 const steps = ["Welcome", "Model", "Team"] as const;
@@ -19,20 +23,43 @@ const steps = ["Welcome", "Model", "Team"] as const;
 export default function Onboarding({
   templates,
   agents,
+  databaseDir,
   onAddAgents,
   onComplete,
+  onOpenLanguage,
 }: OnboardingProps) {
   const t = useT();
+  const { locale } = useI18n();
   const [step, setStep] = useState(0);
   const [addingTemplate, setAddingTemplate] = useState<string | null>(null);
   const [addedTemplateIds, setAddedTemplateIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [finishing, setFinishing] = useState(false);
+  const [changingFolder, setChangingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const busy = addingTemplate !== null || finishing;
+  const busy = addingTemplate !== null || finishing || changingFolder;
+
+  async function chooseDatabaseFolder() {
+    setError(null);
+    setNotice(null);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t("onboarding.databaseTitle"),
+      });
+      if (typeof selected !== "string") return;
+      setChangingFolder(true);
+      // The backend writes the setting and restarts into the new folder.
+      await setDatabaseDirectory(selected);
+    } catch (err) {
+      setChangingFolder(false);
+      setError(errorMessage(err));
+    }
+  }
 
   function goToStep(next: number) {
     setStep(next);
@@ -82,15 +109,34 @@ export default function Onboarding({
       aria-label={t("onboarding.setupAria")}
     >
       <header className="onboarding-header">
-        <img className="wordmark" src={wordmark} alt="CowBot" />
-        <button
-          type="button"
-          className="text-button"
-          onClick={finish}
-          disabled={busy}
-        >
-          {finishing ? t("onboarding.finishing") : t("onboarding.skip")}
-        </button>
+        <div className="onboarding-header-actions">
+          <button
+            type="button"
+            className="ghost-button onboarding-language"
+            onClick={onOpenLanguage}
+          >
+            <svg
+              className="onboarding-globe"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+            </svg>
+            {localeDefinitions[locale].shortName}
+          </button>
+          <button
+            type="button"
+            className="text-button"
+            onClick={finish}
+            disabled={busy}
+          >
+            {finishing ? t("onboarding.finishing") : t("onboarding.skip")}
+          </button>
+        </div>
       </header>
 
       <main className="onboarding-main">
@@ -112,6 +158,25 @@ export default function Onboarding({
                 <li>{t("onboarding.pointApprovals")}</li>
                 <li>{t("onboarding.pointModels")}</li>
               </ul>
+              <div className="onboarding-database">
+                <div className="onboarding-database-head">
+                  <span className="onboarding-database-title">
+                    {t("onboarding.databaseTitle")}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void chooseDatabaseFolder()}
+                    disabled={busy}
+                  >
+                    {changingFolder
+                      ? t("onboarding.databaseChanging")
+                      : t("onboarding.databaseChange")}
+                  </button>
+                </div>
+                <p className="settings-hint">{t("onboarding.databaseHint")}</p>
+                <code className="startup-path">{databaseDir}</code>
+              </div>
               <div className="onboarding-actions">
                 <button
                   type="button"

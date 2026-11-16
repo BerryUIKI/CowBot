@@ -38,6 +38,8 @@ import type {
   PermissionRule,
   Project,
   ProjectBranches,
+  StartupAction,
+  StartupStatus,
   PromptSnapshotDetail,
   PromptSnapshotSettings,
   PromptSnapshotSummary,
@@ -616,6 +618,22 @@ export function fetchProviderModels(input: {
 
 export function getOnboardingState(): Promise<OnboardingState> {
   return invoke<OnboardingState>("get_onboarding_state");
+}
+
+export function getStartupStatus(): Promise<StartupStatus> {
+  return invoke<StartupStatus>("get_startup_status");
+}
+
+export function resolveStartup(action: StartupAction): Promise<StartupStatus> {
+  return invoke<StartupStatus>("resolve_startup", { action });
+}
+
+export function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
+}
+
+export function setDatabaseDirectory(path: string): Promise<void> {
+  return invoke<void>("set_database_directory", { path });
 }
 
 export function completeOnboarding(): Promise<OnboardingState> {

@@ -1157,6 +1157,33 @@ export const zhCN: Catalog = {
     finish: "完成设置",
     addedNoticeOne: "已从 {name} 添加 {count} 个智能体。",
     addedNoticeOther: "已从 {name} 添加 {count} 个智能体。",
+    language: "语言",
+    databaseTitle: "数据库文件夹",
+    databaseHint:
+      "工作区数据库和备份都存放在这个文件夹。更改后会重启 CowBot 并在新位置打开工作区。",
+    databaseCurrent: "当前文件夹",
+    databaseChange: "更改…",
+    databaseChanging: "正在重启…",
+  },
+  startup: {
+    loading: "正在启动 CowBot…",
+    kicker: "工作区数据库",
+    upgradeTitle: "数据库升级",
+    upgradeCopy:
+      "这个工作区使用结构版本 {current}，CowBot 会升级到结构版本 {target}。",
+    upgradeOneWay: "升级是单向的：旧版 CowBot 无法打开升级后的数据库。",
+    backupHint: "“备份并升级”会在这里写入一份副本：",
+    upgradeAction: "升级",
+    upgradeBackupAction: "备份并升级",
+    newerTitle: "这个工作区由更新版本的 CowBot 创建",
+    newerCopy:
+      "数据库的结构版本是 {current}，当前 CowBot 只提供到 {target}。用这个版本打开可能损坏数据。",
+    backupsTitle: "兼容的备份",
+    restoreAction: "恢复备份",
+    freshAction: "使用空白工作区",
+    freshHint: "当前数据库会保留为：",
+    failedTitle: "CowBot 无法打开工作区数据库",
+    quit: "退出 CowBot",
   },
   taskList: {
     aria: "任务",

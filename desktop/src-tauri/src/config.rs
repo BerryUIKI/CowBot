@@ -149,6 +149,13 @@ pub struct AppConfig {
     /// those files follow the operating system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<String>,
+    /// Absolute folder that holds the workspace databases.
+    ///
+    /// Missing means the app data directory. The first-run guide offers a
+    /// picker so a workspace can live on another drive; only absolute paths are
+    /// accepted, and a value that is not absolute is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_dir: Option<String>,
     /// Database file (relative to the app data directory) the desktop opens.
     #[serde(default)]
     pub active_workspace_database: Option<String>,
@@ -176,6 +183,7 @@ impl Default for AppConfig {
             onboarding_completed: false,
             auto_check_updates: true,
             ui_locale: None,
+            database_dir: None,
             active_workspace_database: None,
             workspaces: Vec::new(),
             projects: Vec::new(),
@@ -246,6 +254,21 @@ pub fn resolve_database_path(data_dir: &Path, database: &str) -> Result<PathBuf,
         );
     }
     Ok(data_dir.join(relative))
+}
+
+/// Folder that holds the workspace databases.
+///
+/// A configured folder must be absolute; any other value falls back to the app
+/// data directory, so a hand-edited configuration cannot move databases to a
+/// relative path.
+pub fn resolve_database_dir(data_dir: &Path, config: &AppConfig) -> PathBuf {
+    config
+        .database_dir
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| data_dir.to_path_buf())
 }
 
 /// Resolve the directory that holds `config.json` and the workspace databases.
@@ -787,6 +810,7 @@ mod tests {
             onboarding_completed: true,
             auto_check_updates: true,
             ui_locale: None,
+            database_dir: None,
             active_workspace_database: Some("workspaces/one.db".to_string()),
             workspaces: vec![WorkspaceEntry {
                 database: "workspaces/one.db".to_string(),
@@ -878,6 +902,21 @@ mod tests {
             resolve_data_dir_with(root, true, Some(OsString::new())),
             root.join(DEV_DATA_DIR)
         );
+    }
+
+    #[test]
+    fn a_configured_database_folder_must_be_absolute() {
+        let root = Path::new("app-data");
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+
+        assert_eq!(resolve_database_dir(root, &config), root);
+
+        config.database_dir = Some("relative/databases".to_string());
+        assert_eq!(resolve_database_dir(root, &config), root);
+
+        config.database_dir = Some(folder.path().to_string_lossy().into_owned());
+        assert_eq!(resolve_database_dir(root, &config), folder.path());
     }
 
     #[test]

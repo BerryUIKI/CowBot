@@ -380,7 +380,46 @@ export interface ModelSettings {
 
 export interface OnboardingState {
   completed: boolean;
+  /** Absolute path of the workspace database the app opened. */
+  database: string;
+  /** Folder that holds workspace databases. */
+  databaseDir: string;
 }
+
+/** What the desktop needs before it can open the workspace database. */
+export type StartupStatus =
+  | { state: "ready" }
+  | {
+      state: "upgrade";
+      current: number;
+      target: number;
+      database: string;
+      /** File that receives a backup before the upgrade runs. */
+      backup: string;
+    }
+  | {
+      state: "newer";
+      current: number;
+      target: number;
+      database: string;
+      /** Copies this build can open, newest first. */
+      backups: string[];
+      /** Where the refused database moves if the user starts fresh. */
+      replaced: string;
+    }
+  | {
+      state: "failed";
+      message: string;
+      database: string;
+      backups: string[];
+      replaced: string | null;
+    };
+
+export type StartupAction =
+  | { kind: "upgrade" }
+  | { kind: "upgradeWithBackup" }
+  | { kind: "restore"; backup: string }
+  | { kind: "fresh" };
 
 export interface WorkspaceSummary {
   database: string;
