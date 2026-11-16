@@ -136,6 +136,12 @@ pub struct AppConfig {
     /// Whether the desktop checks GitHub Releases for a newer version at startup.
     #[serde(default = "auto_check_default")]
     pub auto_check_updates: bool,
+    /// Interface locale preference: `system`, or a supported locale tag.
+    ///
+    /// Missing in files written before interface language support existed;
+    /// those files follow the operating system language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
     /// Database file (relative to the app data directory) the desktop opens.
     #[serde(default)]
     pub active_workspace_database: Option<String>,
@@ -162,6 +168,7 @@ impl Default for AppConfig {
             providers: Vec::new(),
             onboarding_completed: false,
             auto_check_updates: true,
+            ui_locale: None,
             active_workspace_database: None,
             workspaces: Vec::new(),
             projects: Vec::new(),
@@ -714,6 +721,22 @@ mod tests {
     }
 
     #[test]
+    fn ui_locale_is_optional_and_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(&path, r#"{"version":1,"providers":[]}"#).unwrap();
+        assert!(load(&path).unwrap().ui_locale.is_none());
+
+        let config = AppConfig {
+            ui_locale: Some("zh-TW".to_string()),
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert_eq!(load(&path).unwrap().ui_locale.as_deref(), Some("zh-TW"));
+    }
+
+    #[test]
     fn save_and_load_roundtrip() {
         let root = tempfile::tempdir().unwrap();
         let path = config_path(root.path());
@@ -722,6 +745,7 @@ mod tests {
             providers: vec![sample_provider("one", "Example")],
             onboarding_completed: true,
             auto_check_updates: true,
+            ui_locale: None,
             active_workspace_database: Some("workspaces/one.db".to_string()),
             workspaces: vec![WorkspaceEntry {
                 database: "workspaces/one.db".to_string(),

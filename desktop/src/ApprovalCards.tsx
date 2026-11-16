@@ -1,4 +1,5 @@
 import ApprovalCard from "./ApprovalCard";
+import { useT } from "./i18n";
 import type { Approval, ApprovalRisk, Task, ToolCallDetail } from "./types";
 
 interface ApprovalCardsProps {
@@ -24,21 +25,22 @@ export default function ApprovalCards({
   embedded = false,
   onDecide,
 }: ApprovalCardsProps) {
+  const t = useT();
   return (
     <div
       className={`approvals-view${embedded ? " approvals-view-embedded" : ""}`}
     >
       {embedded ? null : (
         <header className="view-header">
-          <h2 className="view-title">Approvals</h2>
-          <p className="view-subtitle">Tool calls waiting for your decision.</p>
+          <h2 className="view-title">{t("approvals.viewTitle")}</h2>
+          <p className="view-subtitle">{t("approvals.viewSubtitle")}</p>
         </header>
       )}
 
       {approvals.length === 0 ? (
         <div className="empty-timeline">
-          <p className="empty-title">Nothing waiting.</p>
-          <p>Approvals appear here when a running agent asks to use a tool.</p>
+          <p className="empty-title">{t("approvals.nothingTitle")}</p>
+          <p>{t("approvals.nothingBody")}</p>
         </div>
       ) : (
         <ul className="approval-list">

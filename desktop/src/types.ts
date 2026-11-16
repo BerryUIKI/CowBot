@@ -31,6 +31,8 @@ import type {
   RoutingMode,
 } from "./generated/index";
 
+import { t, type TranslationKey } from "./i18n/catalog";
+
 
 
 
@@ -157,29 +159,28 @@ export interface ClientSession {
 export const approvalModes: ApprovalMode[] = [
   {
     value: "safe_auto",
-    label: "Auto",
-    description: "Low-risk tools run automatically; medium and high risk ask.",
+    labelKey: "approval.auto",
+    descriptionKey: "approval.autoDescription",
   },
   {
     value: "ask",
-    label: "Manual",
-    description: "Read-only tools run; anything that changes state waits for approval.",
+    labelKey: "approval.manual",
+    descriptionKey: "approval.manualDescription",
   },
   {
     value: "accept_edits",
-    label: "Accept edits",
-    description: "Workspace file edits run; other tools follow Manual.",
+    labelKey: "approval.acceptEdits",
+    descriptionKey: "approval.acceptEditsDescription",
   },
   {
     value: "plan_only",
-    label: "Plan",
-    description: "Only read-only tools run; everything else is denied.",
+    labelKey: "approval.plan",
+    descriptionKey: "approval.planDescription",
   },
   {
     value: "trusted",
-    label: "Bypass permissions",
-    description:
-      "Every tool call runs; critical-risk calls follow the Bypass setting in Settings → Approvals.",
+    labelKey: "approval.bypass",
+    descriptionKey: "approval.bypassDescription",
   },
 ];
 
@@ -325,8 +326,8 @@ export interface CowEvent {
 
 export interface ApprovalMode {
   value: ApprovalLevel;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
 }
 
 export interface ToolCallDetail {
@@ -482,13 +483,16 @@ export interface SideAnswer {
   call_id: string;
 }
 
-const taskStatusLabels = {
-  pending: "Pending",
-  in_progress: "In progress",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
-} as const;
+const taskStatusLabels: Record<
+  "pending" | "in_progress" | "completed" | "failed" | "cancelled",
+  TranslationKey
+> = {
+  pending: "taskStatus.pending",
+  in_progress: "taskStatus.inProgress",
+  completed: "taskStatus.completed",
+  failed: "taskStatus.failed",
+  cancelled: "taskStatus.cancelled",
+};
 
 export function taskStatusKind(
   status: TaskStatus,
@@ -498,21 +502,21 @@ export function taskStatusKind(
 }
 
 export function taskStatusLabel(status: TaskStatus): string {
-  return taskStatusLabels[taskStatusKind(status)];
+  return t(taskStatusLabels[taskStatusKind(status)]);
 }
 
 export function approvalLevelLabel(level: ApprovalLevel): string {
   switch (level) {
     case "ask":
-      return "Manual";
+      return t("approval.manual");
     case "accept_edits":
-      return "Accept edits";
+      return t("approval.acceptEdits");
     case "safe_auto":
-      return "Auto";
+      return t("approval.auto");
     case "plan_only":
-      return "Plan";
+      return t("approval.plan");
     case "trusted":
-      return "Bypass permissions";
+      return t("approval.bypass");
   }
 }
 

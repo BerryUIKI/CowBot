@@ -5901,3 +5901,197 @@ button {
 .stream-tool-running {
   color: var(--paper);
 }
+
+/* Bottom-left account row and menu (modeled on Claude's account menu). */
+.sidebar-footer {
+  position: relative;
+}
+
+.profile-trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--paper);
+  text-align: left;
+}
+
+.profile-trigger:hover {
+  background: var(--ink-hover);
+  border-color: var(--rule);
+}
+
+.profile-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-trigger-chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--paper-faint);
+}
+
+.profile-settings {
+  margin-left: 0;
+}
+
+.profile-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 14px;
+  background: var(--ink-raised);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.profile-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 10px;
+}
+
+.profile-menu-name {
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.profile-menu-workspace {
+  color: var(--paper-faint);
+  font-size: 11.5px;
+}
+
+.profile-menu-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--rule);
+}
+
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--paper-dim);
+  font-size: 13px;
+  text-align: left;
+}
+
+.profile-menu-item:hover {
+  background: var(--ink-hover);
+  color: var(--paper);
+}
+
+.profile-menu-icon {
+  display: flex;
+  flex: none;
+  width: 17px;
+  height: 17px;
+}
+
+.profile-menu-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.profile-menu-label {
+  flex: 1;
+}
+
+/* Language picker (Claude-style grid). */
+.language-modal {
+  width: min(720px, 100%);
+}
+
+.language-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.language-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--ink-raised);
+  color: var(--paper);
+  text-align: left;
+}
+
+.language-option:hover {
+  background: var(--ink-hover);
+}
+
+.language-option.is-selected {
+  border-color: rgba(201, 166, 107, 0.55);
+  background: var(--brass-soft);
+}
+
+.language-option-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.language-option-native {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.language-option-english {
+  color: var(--paper-faint);
+  font-size: 11.5px;
+}
+
+.language-option-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--brass);
+}
+
+.settings-language {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-language .settings-hint {
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .language-grid {
+    grid-template-columns: 1fr;
+  }
+}

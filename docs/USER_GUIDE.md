@@ -147,7 +147,23 @@ direct chats and group channels together, sorted by pin and then recent
 activity — and a **Conversations** section for user-created sessions, which
 collapses and expands from its header. The header row switches back to Chat,
 opens the task list, and starts a new channel; the local user row at the bottom
-holds Settings.
+shows `Your name · Workspace name` and opens the account menu, with Settings
+available both there and from the gear beside it.
+
+### Language and the account menu
+
+The account menu contains **Settings**, **Language**, **Model configuration**,
+**Workspace settings**, **View changelog**, and **Learn more**. The last two open
+the project's GitHub releases page and repository.
+
+**Language** opens a picker with English, 简体中文, and 繁體中文. Each option is
+shown in its own script with its English name underneath, and the active one is
+checked. The choice applies immediately, controls date and time formatting, and
+is stored per device in `config.json`. On first launch the interface follows the
+operating system language. Interface copy is translated; diagnostic messages
+from the local service, agent profiles, templates, and stored audit reasons
+remain in English. Agent replies follow the language you write in. See
+[ADR-0050](ADR/0050-desktop-interface-localisation.md).
 
 Tasks live in the right inspector. The **Tasks** button in the sidebar header
 opens the **Task** tab: select a task there to read its detail, and use
@@ -542,7 +558,7 @@ Feedback appears in the notice area above the chat.
 | `/model [name]` | Switches the active model, or opens the model menu when no name is given. |
 | `/approval [mode]` | Sets the composer approval mode. Modes: `safe_auto`, `ask`, `accept_edits`, `plan_only`, `trusted`, with `auto`, `manual`, `accept-edits`, `plan`, and `bypass` as aliases. |
 | `/stop` | Cancels the running tasks in this chat after a confirmation. |
-| `/settings [section]` | Opens Settings at `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
+| `/settings [section]` | Opens Settings at `general`, `model`, `team`, `memory`, `approvals`, `audit`, `projects`, `workspace`, or `about`. |
 
 `compact`, `clear`, and `note` only work in a user-created conversation, because
 that is where a context branch exists; in an agent chat or a group channel they
@@ -732,6 +748,9 @@ short version for the version you are running.
   local runtimes. Memory budgets and the next turn's memory block remain
   estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Interface languages are English, Simplified Chinese, and Traditional Chinese.
+  Service diagnostics, agent profiles, template content, and stored audit
+  reasons are not translated, and right-to-left layouts are not implemented.
 - Slash commands are executed by the desktop only. The `cowbot` CLI uses the
   same catalogue and parser but does not yet run commands, command history is
   not kept, and `/model` cannot switch to a model on an inactive provider.

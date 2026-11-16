@@ -299,6 +299,8 @@ pub fn run() {
             commands::complete_onboarding,
             commands::get_app_info,
             commands::set_auto_check_updates,
+            commands::get_ui_locale,
+            commands::set_ui_locale,
             commands::restart_app,
             commands::list_workspaces,
             commands::switch_workspace,

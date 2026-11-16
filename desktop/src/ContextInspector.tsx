@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getConversationContextPreview, getTaskRunContextPreview } from "./api";
 import { errorMessage } from "./errors";
 import { formatTokens } from "./format";
+import { t, type TranslationKey } from "./i18n/catalog";
 import type {
   ContextPreview,
   PromptMessage,
@@ -34,35 +35,43 @@ interface ContextInspectorProps {
 
 type ContextTab = "prompt" | "recall" | "budget";
 
-const tabLabels: { id: ContextTab; label: string }[] = [
-  { id: "prompt", label: "Prompt" },
-  { id: "recall", label: "Recall" },
-  { id: "budget", label: "Budget" },
+const tabLabels: { id: ContextTab; labelKey: TranslationKey }[] = [
+  { id: "prompt", labelKey: "context.inspector.tabPrompt" },
+  { id: "recall", labelKey: "context.inspector.tabRecall" },
+  { id: "budget", labelKey: "context.inspector.tabBudget" },
 ];
 
-export const slotLabels: Record<PromptSlotName, string> = {
-  agent: "Agent profile",
-  platform: "Platform context",
-  roster: "Participant roster",
-  default_responder: "Default responder",
-  peer_convention: "Peer convention",
-  conversation_convention: "Conversation convention",
-  mode_instruction: "Plan mode instruction",
-  instruction: "Fixed instruction",
+export const slotLabels: Record<PromptSlotName, TranslationKey> = {
+  agent: "context.inspector.slotAgent",
+  platform: "context.inspector.slotPlatform",
+  roster: "context.inspector.slotRoster",
+  default_responder: "context.inspector.slotDefaultResponder",
+  peer_convention: "context.inspector.slotPeerConvention",
+  conversation_convention: "context.inspector.slotConversationConvention",
+  mode_instruction: "context.inspector.slotModeInstruction",
+  instruction: "context.inspector.slotInstruction",
 };
 
-const roleLabels: Record<PromptMessage["role"], string> = {
-  system: "System",
-  user: "User",
-  assistant: "Assistant",
-  tool: "Tool",
+const roleLabels: Record<PromptMessage["role"], TranslationKey> = {
+  system: "context.inspector.roleSystem",
+  user: "context.inspector.roleUser",
+  assistant: "context.inspector.roleAssistant",
+  tool: "context.inspector.roleTool",
 };
 
-const scopeLabels: Record<RecallCandidate["scope"], string> = {
-  workspace: "Workspace",
-  agent: "Agent",
-  conversation: "Conversation",
-  agent_in_conversation: "Agent in conversation",
+const scopeLabels: Record<RecallCandidate["scope"], TranslationKey> = {
+  workspace: "memory.scope.workspaceLabel",
+  agent: "memory.scope.agent",
+  conversation: "memory.scope.conversation",
+  agent_in_conversation: "memory.scope.agentInConversation",
+};
+
+const kindLabels: Record<string, TranslationKey> = {
+  fact: "memory.kind.fact",
+  preference: "memory.kind.preference",
+  decision: "memory.kind.decision",
+  summary: "memory.kind.summary",
+  note: "memory.kind.note",
 };
 
 const segmentClasses: Record<string, string> = {
@@ -73,15 +82,32 @@ const segmentClasses: Record<string, string> = {
 };
 
 function sourceLabel(source: TokenSource, counter: string | null | undefined): string {
-  if (source === "estimate") return "Estimated from characters";
-  return `Exact · ${counter ?? source}`;
+  if (source === "estimate") return t("context.inspector.sourceEstimated");
+  return t("context.inspector.sourceExact", { counter: counter ?? source });
+}
+
+function stateLabel(state: string): string {
+  switch (state) {
+    case "neutral":
+      return t("context.state.neutral");
+    case "warning":
+      return t("context.state.warning");
+    case "danger":
+      return t("context.state.danger");
+    case "full":
+      return t("context.state.full");
+    default:
+      return t("context.state.unknown");
+  }
 }
 
 function skipReasonLabel(reason: RecallSkipReason): string {
   if (reason.kind === "inactive") {
-    return "Not active: pending and archived entries never enter a prompt.";
+    return t("context.inspector.skipInactive");
   }
-  return `Did not fit: only ${formatTokens(reason.remaining_tokens)} recall tokens remained.`;
+  return t("context.inspector.skipBudget", {
+    tokens: formatTokens(reason.remaining_tokens),
+  });
 }
 
 function messageLabel(message: PromptMessage): string {
@@ -155,8 +181,7 @@ export default function ContextInspector({
   if (!target) {
     return (
       <p className="inspector-hint">
-        Open a conversation's context meter and choose <strong>Inspect</strong>,
-        or open a task run and inspect its context.
+        {t("context.inspector.emptyHint")}
       </p>
     );
   }
@@ -164,7 +189,9 @@ export default function ContextInspector({
   const title =
     preview?.title ||
     target.title ||
-    (target.kind === "run" ? "Task run" : "Conversation");
+    (target.kind === "run"
+      ? t("context.inspector.taskRun")
+      : t("context.inspector.conversation"));
   const meta = preview
     ? `${preview.agent_name} · ${preview.plan.model} · ${sourceLabel(
         preview.plan.projection.token_source,
@@ -185,7 +212,9 @@ export default function ContextInspector({
           disabled={loading}
           onClick={() => setReload((count) => count + 1)}
         >
-          {loading ? "Loading…" : "Refresh"}
+          {loading
+            ? t("context.inspector.loading")
+            : t("context.inspector.refresh")}
         </button>
       </header>
 
@@ -207,17 +236,14 @@ export default function ContextInspector({
                 className={`context-inspector-tab${tab === item.id ? " is-active" : ""}`}
                 onClick={() => setTab(item.id)}
               >
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
           </div>
 
           {target.kind === "run" ? (
             <p className="context-inspector-note">
-              Rebuilt from the agent profile recorded with the run and the
-              task's current plan and memory settings. Historical iterations
-              are not persisted yet, so the request can differ from what was
-              actually sent.
+              {t("context.inspector.runNote")}
             </p>
           ) : null}
 
@@ -226,7 +252,7 @@ export default function ContextInspector({
           {tab === "budget" ? <BudgetTab preview={preview} /> : null}
         </>
       ) : loading ? (
-        <p className="muted">Building the preview…</p>
+        <p className="muted">{t("context.inspector.building")}</p>
       ) : null}
     </div>
   );
@@ -238,7 +264,7 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
     <div className="context-inspector-body">
       <section className="context-inspector-section">
         <h4>
-          System prompt{" "}
+          {t("context.inspector.systemPrompt")}{" "}
           <span>{formatTokens(plan.projection.system_tokens)}</span>
         </h4>
         <ul className="prompt-slots">
@@ -246,7 +272,7 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
             <li key={slot.name}>
               <details>
                 <summary>
-                  <span>{slotLabels[slot.name]}</span>
+                  <span>{t(slotLabels[slot.name])}</span>
                   <span className="muted">{formatTokens(slot.tokens)}</span>
                 </summary>
                 <pre className="context-inspector-content">{slot.content}</pre>
@@ -258,7 +284,7 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
 
       <section className="context-inspector-section">
         <h4>
-          Messages{" "}
+          {t("context.inspector.messages")}{" "}
           <span>
             {formatTokens(
               plan.projection.history_tokens + plan.projection.latest_tokens,
@@ -271,10 +297,12 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
               <details>
                 <summary>
                   <span className={`prompt-role prompt-role-${message.role}`}>
-                    {roleLabels[message.role]}
+                    {t(roleLabels[message.role])}
                   </span>
                   {message.latest ? (
-                    <span className="prompt-latest">latest</span>
+                    <span className="prompt-latest">
+                      {t("context.inspector.latest")}
+                    </span>
                   ) : null}
                   <span className="prompt-message-label">
                     {messageLabel(message)}
@@ -282,15 +310,21 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
                   <span className="muted">{formatTokens(message.tokens)}</span>
                 </summary>
                 <pre className="context-inspector-content">
-                  {message.content || "(no text)"}
+                  {message.content || t("context.inspector.noText")}
                 </pre>
                 {message.tool_calls.length > 0 ? (
                   <p className="muted">
-                    Tool calls: {message.tool_calls.join(", ")}
+                    {t("context.inspector.toolCalls", {
+                      names: message.tool_calls.join(", "),
+                    })}
                   </p>
                 ) : null}
                 {message.tool_call_id ? (
-                  <p className="muted">Answers call {message.tool_call_id}</p>
+                  <p className="muted">
+                    {t("context.inspector.answersCall", {
+                      id: message.tool_call_id,
+                    })}
+                  </p>
                 ) : null}
               </details>
             </li>
@@ -300,10 +334,11 @@ function PromptTab({ preview }: { preview: ContextPreview }) {
 
       <section className="context-inspector-section">
         <h4>
-          Tools <span>{formatTokens(plan.projection.tool_tokens)}</span>
+          {t("context.inspector.tools")}{" "}
+          <span>{formatTokens(plan.projection.tool_tokens)}</span>
         </h4>
         {plan.tools.length === 0 ? (
-          <p className="muted">This request sends no tool schemas.</p>
+          <p className="muted">{t("context.inspector.noTools")}</p>
         ) : (
           <ul className="prompt-slots">
             {plan.tools.map((tool) => (
@@ -333,8 +368,7 @@ function RecallTab({ preview }: { preview: ContextPreview }) {
     return (
       <div className="context-inspector-body">
         <p className="muted">
-          Memory recall is disabled for this workspace. Enable it in Settings →
-          Memory to inject notes and recalled entries.
+          {t("context.inspector.recallDisabled")}
         </p>
       </div>
     );
@@ -344,37 +378,47 @@ function RecallTab({ preview }: { preview: ContextPreview }) {
     <div className="context-inspector-body">
       <dl className="context-breakdown">
         <div>
-          <dt>Search query</dt>
+          <dt>{t("context.inspector.searchQuery")}</dt>
           <dd>
             {recall.query
               ? `"${recall.query}"`
-              : "None (notes and pinned entries only)"}
+              : t("context.inspector.noQuery")}
           </dd>
         </div>
         <div>
-          <dt>Selected</dt>
+          <dt>{t("context.inspector.selected")}</dt>
           <dd>
-            {selected.length} of {recall.candidates.length} candidates
+            {t("context.inspector.candidatesCount", {
+              selected: selected.length,
+              total: recall.candidates.length,
+            })}
           </dd>
         </div>
         <div>
-          <dt>Selected entries</dt>
+          <dt>{t("context.inspector.selectedEntries")}</dt>
           <dd>
-            {formatTokens(
-              selected.reduce((total, candidate) => total + candidate.tokens, 0),
-            )}{" "}
-            of {formatTokens(recall.budget_tokens)} recall budget
+            {t("context.inspector.selectedEntriesValue", {
+              tokens: formatTokens(
+                selected.reduce(
+                  (total, candidate) => total + candidate.tokens,
+                  0,
+                ),
+              ),
+              budget: formatTokens(recall.budget_tokens),
+            })}
           </dd>
         </div>
         <div>
-          <dt>Notes</dt>
+          <dt>{t("context.inspector.notes")}</dt>
           <dd>
-            {formatTokens(recall.notes_tokens)} of{" "}
-            {formatTokens(recall.notes_budget_tokens)}
+            {t("context.inspector.notesValue", {
+              tokens: formatTokens(recall.notes_tokens),
+              budget: formatTokens(recall.notes_budget_tokens),
+            })}
           </dd>
         </div>
         <div>
-          <dt>Block as a message</dt>
+          <dt>{t("context.inspector.blockAsMessage")}</dt>
           <dd>
             {formatTokens(preview.plan.memory?.tokens ?? 0)}
           </dd>
@@ -383,20 +427,20 @@ function RecallTab({ preview }: { preview: ContextPreview }) {
 
       {recall.block ? (
         <section className="context-inspector-section">
-          <h4>Injected block</h4>
+          <h4>{t("context.inspector.injectedBlock")}</h4>
           <pre className="context-inspector-content">{recall.block}</pre>
         </section>
       ) : (
         <p className="muted">
-          Nothing would be injected: there are no notes and no selected entries.
+          {t("context.inspector.nothingInjected")}
         </p>
       )}
 
       <section className="context-inspector-section">
-        <h4>Candidates</h4>
+        <h4>{t("context.inspector.candidates")}</h4>
         {recall.candidates.length === 0 ? (
           <p className="muted">
-            No pinned entries or search matches were considered.
+            {t("context.inspector.noCandidates")}
           </p>
         ) : (
           <ul className="recall-candidates">
@@ -411,18 +455,29 @@ function RecallTab({ preview }: { preview: ContextPreview }) {
                       candidate.selected ? "is-selected" : "is-skipped"
                     }`}
                   >
-                    {candidate.selected ? "Selected" : "Skipped"}
+                    {candidate.selected
+                      ? t("context.inspector.selectedChip")
+                      : t("context.inspector.skippedChip")}
                   </span>
                   <span className="muted">
-                    {candidate.kind} · {scopeLabels[candidate.scope]} ·{" "}
-                    {formatTokens(candidate.tokens)}
+                    {t("context.inspector.candidateMeta", {
+                      kind: kindLabels[candidate.kind]
+                        ? t(kindLabels[candidate.kind])
+                        : candidate.kind,
+                      scope: t(scopeLabels[candidate.scope]),
+                      tokens: formatTokens(candidate.tokens),
+                    })}
                   </span>
                   {candidate.pinned ? (
-                    <span className="muted">pinned</span>
+                    <span className="muted">
+                      {t("context.inspector.pinned")}
+                    </span>
                   ) : null}
                   {candidate.score != null ? (
                     <span className="muted">
-                      score {candidate.score.toFixed(2)}
+                      {t("context.inspector.score", {
+                        score: candidate.score.toFixed(2),
+                      })}
                     </span>
                   ) : null}
                 </div>
@@ -448,12 +503,16 @@ function BudgetTab({ preview }: { preview: ContextPreview }) {
   const segments = [
     {
       id: "messages",
-      label: "Messages",
+      label: t("context.inspector.messages"),
       tokens: projection.history_tokens + projection.latest_tokens,
     },
-    { id: "memory", label: "Memory", tokens: memoryTokens },
-    { id: "system", label: "System prompt", tokens: projection.system_tokens },
-    { id: "tools", label: "Tools", tokens: projection.tool_tokens },
+    { id: "memory", label: t("context.inspector.memory"), tokens: memoryTokens },
+    {
+      id: "system",
+      label: t("context.inspector.systemPrompt"),
+      tokens: projection.system_tokens,
+    },
+    { id: "tools", label: t("context.inspector.tools"), tokens: projection.tool_tokens },
   ];
   const usable = preview.usable_tokens;
   const compactAt =
@@ -468,10 +527,11 @@ function BudgetTab({ preview }: { preview: ContextPreview }) {
     <div className="context-inspector-body">
       {preview.over_budget ? (
         <div className="context-full-warning" role="alert">
-          <strong>Over budget.</strong> This request is{" "}
-          {formatTokens(preview.request_tokens)} tokens against a usable window
-          of {formatTokens(usable ?? 0)}. Sending would exceed the model's
-          context; compact or clear the branch first.
+          <strong>{t("context.inspector.overBudgetTitle")}</strong>{" "}
+          {t("context.inspector.overBudgetBody", {
+            tokens: formatTokens(preview.request_tokens),
+            usable: formatTokens(usable ?? 0),
+          })}
         </div>
       ) : null}
 
@@ -480,9 +540,10 @@ function BudgetTab({ preview }: { preview: ContextPreview }) {
           <div
             className="context-bar"
             role="img"
-            aria-label={`Request uses ${formatTokens(
-              preview.request_tokens,
-            )} of ${formatTokens(usable)} tokens`}
+            aria-label={t("context.inspector.requestUses", {
+              tokens: formatTokens(preview.request_tokens),
+              usable: formatTokens(usable),
+            })}
           >
             {segments
               .filter((segment) => segment.tokens > 0)
@@ -519,7 +580,9 @@ function BudgetTab({ preview }: { preview: ContextPreview }) {
                 className="context-swatch context-bar-free"
                 aria-hidden="true"
               />
-              <span className="context-legend-label">Free space</span>
+              <span className="context-legend-label">
+                {t("context.inspector.freeSpace")}
+              </span>
               <span className="context-legend-value">
                 {formatTokens(remaining ?? 0)}
               </span>
@@ -530,57 +593,66 @@ function BudgetTab({ preview }: { preview: ContextPreview }) {
 
       <dl className="context-breakdown">
         <div>
-          <dt>System prompt</dt>
+          <dt>{t("context.inspector.systemPrompt")}</dt>
           <dd>{formatTokens(projection.system_tokens)}</dd>
         </div>
         <div>
-          <dt>Tools</dt>
+          <dt>{t("context.inspector.tools")}</dt>
           <dd>{formatTokens(projection.tool_tokens)}</dd>
         </div>
         <div>
-          <dt>History</dt>
+          <dt>{t("context.inspector.history")}</dt>
           <dd>{formatTokens(projection.history_tokens)}</dd>
         </div>
         <div>
-          <dt>Latest message</dt>
+          <dt>{t("context.inspector.latestMessage")}</dt>
           <dd>{formatTokens(projection.latest_tokens)}</dd>
         </div>
         <div>
-          <dt>Memory</dt>
+          <dt>{t("context.inspector.memory")}</dt>
           <dd>{formatTokens(memoryTokens)}</dd>
         </div>
         <div>
-          <dt>Request total</dt>
+          <dt>{t("context.inspector.requestTotal")}</dt>
           <dd>{formatTokens(preview.request_tokens)}</dd>
         </div>
         <div>
-          <dt>Usable window</dt>
+          <dt>{t("context.inspector.usableWindow")}</dt>
           <dd>
-            {usable === null ? "Unknown" : formatTokens(usable)}
+            {usable === null
+              ? t("context.inspector.unknown")
+              : formatTokens(usable)}
           </dd>
         </div>
         <div>
-          <dt>Used</dt>
+          <dt>{t("context.inspector.used")}</dt>
           <dd>
             {preview.percent_used === null
-              ? "Unknown"
-              : `${Math.round(preview.percent_used)}% (${preview.state})`}
+              ? t("context.inspector.unknown")
+              : t("context.inspector.usedValue", {
+                  percent: Math.round(preview.percent_used),
+                  state: stateLabel(preview.state),
+                })}
           </dd>
         </div>
         <div>
-          <dt>Automatic compaction</dt>
+          <dt>{t("context.inspector.autoCompaction")}</dt>
           <dd>
             {plan.auto_compact
-              ? `at ${plan.compact_threshold}%${
-                  untilCompact === null
-                    ? ""
-                    : ` · ${formatTokens(untilCompact)} left`
-                }`
-              : "Off"}
+              ? t("context.inspector.autoCompactionValue", {
+                  threshold: plan.compact_threshold,
+                  left:
+                    untilCompact === null
+                      ? ""
+                      : t("context.inspector.autoCompactionLeft", {
+                          tokens: formatTokens(untilCompact),
+                        }),
+                })
+              : t("context.inspector.off")}
           </dd>
         </div>
         <div>
-          <dt>Counting</dt>
+          <dt>{t("context.inspector.counting")}</dt>
           <dd>
             {sourceLabel(projection.token_source, projection.token_counter)}
           </dd>

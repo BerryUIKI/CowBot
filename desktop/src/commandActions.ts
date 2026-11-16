@@ -2,6 +2,7 @@ import { approvalLevelLabel, approvalModes } from "./types";
 import type { ApprovalLevel } from "./types";
 import { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
+import { t } from "./i18n/catalog";
 
 /// The state a command handler reads: the chat it applies to, the roster it
 /// resolves `@participant` against, and the model catalogue it completes.
@@ -159,7 +160,7 @@ export function argumentSuggestions(
         .map((mode) => ({
           value: mode.value,
           label: mode.value,
-          hint: mode.label,
+          hint: t(mode.labelKey),
         }));
 
     case "settings":
@@ -168,7 +169,7 @@ export function argumentSuggestions(
         .map((section) => ({
           value: section.id,
           label: section.id,
-          hint: section.label,
+          hint: t(section.labelKey),
         }));
 
     case "compact":
@@ -192,13 +193,13 @@ function needsConversation(targets: CommandTargets, name: string): CommandAction
   if (targets.channel?.kind === "conversation") return null;
   return {
     kind: "notice",
-    message: `/${name} only works in a conversation; this chat has no context branch.`,
+    message: t("commands.conversationOnly", { name }),
   };
 }
 
 function needsChannel(targets: CommandTargets): CommandAction | null {
   if (targets.channel) return null;
-  return { kind: "notice", message: "Select a chat first." };
+  return { kind: "notice", message: t("commands.selectChat") };
 }
 
 /// Map one parsed invocation to the action the desktop should take.
@@ -234,7 +235,10 @@ export function planCommand(
       if (unknown.length > 0) {
         return {
           kind: "notice",
-          message: `Unknown ${unknown.join(", ")}. Participants: ${rosterList(targets.participants) || "none"}.`,
+          message: t("commands.unknownParticipants", {
+            names: unknown.join(", "),
+            roster: rosterList(targets.participants) || t("commands.none"),
+          }),
         };
       }
       return { kind: "open-new-conversation", participants: resolved };
@@ -278,7 +282,10 @@ export function planCommand(
       if (participant === undefined) {
         return {
           kind: "notice",
-          message: `Unknown ${first}. Participants: ${rosterList(targets.participants) || "none"}.`,
+          message: t("commands.unknownParticipants", {
+            names: String(first),
+            roster: rosterList(targets.participants) || t("commands.none"),
+          }),
         };
       }
       const agentId = participant?.agentId ?? null;
@@ -297,7 +304,7 @@ export function planCommand(
 
     case "remember": {
       const content = invocation.raw_args.trim();
-      if (!content) return { kind: "error", message: "Usage: /remember <text>" };
+      if (!content) return { kind: "error", message: t("commands.usageRemember") };
       const missing = needsChannel(targets);
       if (missing) return missing;
       // A conversation scopes to its branch, an agent chat to the agent, and a
@@ -313,7 +320,7 @@ export function planCommand(
 
     case "btw": {
       const question = invocation.raw_args.trim();
-      if (!question) return { kind: "error", message: "Usage: /btw <question>" };
+      if (!question) return { kind: "error", message: t("commands.usageBtw") };
       const missing = needsChannel(targets);
       if (missing) return missing;
       // The question may name its responder; the service strips that mention
@@ -322,7 +329,10 @@ export function planCommand(
       if (mentioned === undefined && first?.startsWith("@")) {
         return {
           kind: "notice",
-          message: `Unknown ${first}. Participants: ${rosterList(targets.participants) || "none"}.`,
+          message: t("commands.unknownParticipants", {
+            names: String(first),
+            roster: rosterList(targets.participants) || t("commands.none"),
+          }),
         };
       }
       return {
@@ -340,19 +350,30 @@ export function planCommand(
       if (!name) return { kind: "open-model-menu" };
       const resolved = resolveModel(targets.providers, name);
       if (resolved.kind === "active") {
-        return { kind: "notice", message: `The active model is already ${resolved.model}.` };
+        return {
+          kind: "notice",
+          message: t("commands.modelAlreadyActive", { model: resolved.model }),
+        };
       }
       if (resolved.kind === "other") {
         return {
           kind: "notice",
-          message: `${resolved.model} belongs to ${resolved.provider}; activate that provider in Settings → Model first.`,
+          message: t("commands.modelNeedsActivation", {
+            model: resolved.model,
+            provider: resolved.provider,
+          }),
         };
       }
       const hint =
         resolved.matches.length > 0
-          ? `Did you mean ${resolved.matches.slice(0, 5).join(", ")}?`
-          : "No known model contains that name.";
-      return { kind: "notice", message: `Unknown model ${name}. ${hint}` };
+          ? t("commands.didYouMean", {
+              names: resolved.matches.slice(0, 5).join(", "),
+            })
+          : t("commands.noModelMatch");
+      return {
+        kind: "notice",
+        message: t("commands.unknownModel", { name, hint }),
+      };
     }
 
     case "approval": {
@@ -361,7 +382,10 @@ export function planCommand(
         const valid = approvalModes.map((mode) => mode.value).join(", ");
         return {
           kind: "notice",
-          message: `Approval mode is ${approvalLevelLabel(targets.approval)}. Use one of: ${valid}.`,
+          message: t("commands.approvalCurrent", {
+            mode: approvalLevelLabel(targets.approval),
+            valid,
+          }),
         };
       }
       const mode = APPROVAL_ALIASES[raw.toLowerCase()];
@@ -369,7 +393,7 @@ export function planCommand(
         const valid = [...new Set(Object.keys(APPROVAL_ALIASES))].join(", ");
         return {
           kind: "notice",
-          message: `Unknown approval mode ${raw}. Use one of: ${valid}.`,
+          message: t("commands.unknownApproval", { raw, valid }),
         };
       }
       return { kind: "set-approval", mode };
@@ -377,7 +401,7 @@ export function planCommand(
 
     case "stop":
       if (runningTaskIds.length === 0) {
-        return { kind: "notice", message: "No running tasks in this chat." };
+        return { kind: "notice", message: t("commands.noRunningTasks") };
       }
       return { kind: "stop", taskIds: runningTaskIds };
 
@@ -387,13 +411,19 @@ export function planCommand(
       if (!SETTINGS_IDS.includes(raw as SettingsSection)) {
         return {
           kind: "notice",
-          message: `Unknown section ${raw}. Use one of: ${SETTINGS_IDS.join(", ")}.`,
+          message: t("commands.unknownSection", {
+            raw,
+            sections: SETTINGS_IDS.join(", "),
+          }),
         };
       }
       return { kind: "open-settings", section: raw as SettingsSection };
     }
 
     default:
-      return { kind: "error", message: `/${invocation.name} is not implemented.` };
+      return {
+        kind: "error",
+        message: t("commands.notImplemented", { name: invocation.name }),
+      };
   }
 }

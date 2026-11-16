@@ -1,4 +1,5 @@
 import UpdateProgress from "./UpdateProgress";
+import { useT } from "./i18n";
 import type { Updater } from "./updater";
 
 interface UpdateBannerProps {
@@ -11,6 +12,7 @@ interface UpdateBannerProps {
  * installation attempt; manual check results live in Settings.
  */
 export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProps) {
+  const t = useT();
   const { state } = updater;
   const visible =
     !state.dismissed &&
@@ -26,15 +28,15 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
       <div className="update-banner-body">
         <span className="update-banner-title">
           {state.phase === "ready"
-            ? `CowBot ${state.version} is installed`
-            : `CowBot ${state.version} is available`}
+            ? t("update.installed", { version: state.version ?? "" })
+            : t("update.available", { version: state.version ?? "" })}
         </span>
 
         {state.phase === "available" ? (
           <span className="update-banner-hint">
             {tasksRunning
-              ? "Finish running tasks before updating."
-              : "Download and install the new version now."}
+              ? t("update.finishTasks")
+              : t("update.downloadNow")}
           </span>
         ) : null}
 
@@ -43,7 +45,7 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
         ) : null}
 
         {state.phase === "ready" ? (
-          <span className="update-banner-hint">Restart CowBot to finish updating.</span>
+          <span className="update-banner-hint">{t("update.restartHint")}</span>
         ) : null}
 
         {state.phase === "error" && state.error ? (
@@ -59,7 +61,7 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
             onClick={() => void updater.install()}
             disabled={tasksRunning}
           >
-            Download and install
+            {t("update.downloadInstall")}
           </button>
         ) : null}
 
@@ -69,7 +71,7 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
             className="primary-button"
             onClick={() => void updater.restart()}
           >
-            Restart now
+            {t("update.restartNow")}
           </button>
         ) : null}
 
@@ -79,13 +81,13 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
             className="primary-button"
             onClick={() => void updater.install()}
           >
-            Try again
+            {t("update.tryAgain")}
           </button>
         ) : null}
 
         {state.phase !== "downloading" ? (
           <button type="button" className="ghost-button" onClick={updater.dismiss}>
-            Later
+            {t("update.later")}
           </button>
         ) : null}
       </div>

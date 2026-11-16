@@ -1,14 +1,42 @@
 import Avatar from "./Avatar";
 import { formatElapsed } from "./format";
+import { useT } from "./i18n";
+import { t as translate, type TranslationKey } from "./i18n/catalog";
 import type { AgentProfile, TaskOverviewEntry } from "./types";
 import { isActiveOverviewStatus } from "./types";
 
+const overviewStatusKeys: Record<string, TranslationKey> = {
+  pending: "taskStatus.pending",
+  in_progress: "taskStatus.inProgress",
+  completed: "taskStatus.completed",
+  failed: "taskStatus.failed",
+  cancelled: "taskStatus.cancelled",
+};
+
+const assignmentStatusKeys: Record<string, TranslationKey> = {
+  queued: "tasks.status.assignment.queued",
+  running: "tasks.status.assignment.running",
+  waiting: "tasks.status.assignment.waiting",
+  resume: "tasks.status.assignment.resume",
+  needs_input: "tasks.status.assignment.needsInput",
+  completed: "tasks.status.assignment.completed",
+  failed: "tasks.status.assignment.failed",
+  cancelled: "tasks.status.assignment.cancelled",
+};
+
 function agentName(agents: AgentProfile[], id: string): string {
-  return agents.find((agent) => agent.id === id)?.name ?? `Agent ${id.slice(0, 8)}`;
+  return (
+    agents.find((agent) => agent.id === id)?.name ??
+    translate("background.agentFallback", { id: id.slice(0, 8) })
+  );
 }
 
-function statusLabel(status: string): string {
-  return status.replaceAll("_", " ");
+function statusLabel(
+  keys: Record<string, TranslationKey>,
+  status: string,
+): string {
+  const key = keys[status];
+  return key ? translate(key) : status.replaceAll("_", " ");
 }
 
 function outcomeSnippet(entry: TaskOverviewEntry): string | null {
@@ -24,6 +52,7 @@ interface ActiveRunProps {
 }
 
 function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
+  const t = useT();
   const percent =
     entry.progress.total > 0
       ? Math.round((entry.progress.completed / entry.progress.total) * 100)
@@ -40,7 +69,8 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
         <span className="background-run-heading">
           <span className="background-run-title">{entry.title}</span>
           <span className="background-run-meta">
-            {statusLabel(entry.status)} · {formatElapsed(entry.started_at, now)}
+            {statusLabel(overviewStatusKeys, entry.status)} ·{" "}
+            {formatElapsed(entry.started_at, now)}
           </span>
         </span>
         <span className="background-run-count">
@@ -54,7 +84,10 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
           aria-valuemin={0}
           aria-valuemax={entry.progress.total}
           aria-valuenow={entry.progress.completed}
-          aria-label={`${entry.progress.completed} of ${entry.progress.total} assignments complete`}
+          aria-label={t("background.progressAria", {
+            completed: entry.progress.completed,
+            total: entry.progress.total,
+          })}
         >
           <div
             className="background-progress-fill"
@@ -67,7 +100,7 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
             className="text-button"
             onClick={() => onOpenTask(entry.run_id)}
           >
-            Open task
+            {t("background.openTask")}
           </button>
           {entry.worktree?.branch ? (
             <span
@@ -79,7 +112,7 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
           ) : null}
         </div>
         {entry.assignments.length === 0 ? (
-          <p className="muted">No assignments yet.</p>
+          <p className="muted">{t("background.noAssignments")}</p>
         ) : (
           <ul className="background-assignment-list">
             {entry.assignments.map((assignment) => (
@@ -92,7 +125,7 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
                 <span className="background-assignment-text">
                   <span className="background-assignment-name">
                     {agentName(agents, assignment.assignee)} ·{" "}
-                    {statusLabel(assignment.status)}
+                    {statusLabel(assignmentStatusKeys, assignment.status)}
                   </span>
                   {assignment.detail ? (
                     <span className="background-assignment-detail">
@@ -106,7 +139,11 @@ function ActiveRun({ entry, agents, now, onOpenTask }: ActiveRunProps) {
         )}
         {upNext.length > 0 ? (
           <p className="background-upnext">
-            Up next: {upNext.map((assignment) => agentName(agents, assignment.assignee)).join(", ")}
+            {t("background.upNext", {
+              names: upNext
+                .map((assignment) => agentName(agents, assignment.assignee))
+                .join(", "),
+            })}
           </p>
         ) : null}
       </div>
@@ -127,6 +164,7 @@ export default function BackgroundTasksContent({
   now,
   onOpenTask,
 }: BackgroundTasksContentProps) {
+  const t = useT();
   const active = overview.filter((entry) =>
     isActiveOverviewStatus(entry.status),
   );
@@ -136,11 +174,13 @@ export default function BackgroundTasksContent({
 
   return (
     <div className="background-panel-scroll">
-      <section aria-label="Running tasks">
-        <h3 className="background-panel-heading">Running {active.length}</h3>
+      <section aria-label={t("background.runningAria")}>
+        <h3 className="background-panel-heading">
+          {t("background.runningHeading", { count: active.length })}
+        </h3>
         {active.length === 0 ? (
           <p className="background-panel-empty">
-            Nothing running. Start a task and it will appear here.
+            {t("background.nothingRunning")}
           </p>
         ) : (
           active.map((entry) => (
@@ -155,14 +195,16 @@ export default function BackgroundTasksContent({
         )}
       </section>
 
-      <section aria-label="Finished tasks">
+      <section aria-label={t("background.finishedAria")}>
         <details className="background-finished">
           <summary>
-            <span>Finished {finished.length}</span>
-            <span className="muted">Last 20</span>
+            <span>
+              {t("background.finishedHeading", { count: finished.length })}
+            </span>
+            <span className="muted">{t("background.last20")}</span>
           </summary>
           {finished.length === 0 ? (
-            <p className="background-panel-empty">No finished runs yet.</p>
+            <p className="background-panel-empty">{t("background.noFinished")}</p>
           ) : (
             <ul className="background-finished-list">
               {finished.map((entry) => {

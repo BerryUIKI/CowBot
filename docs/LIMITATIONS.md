@@ -106,6 +106,11 @@ tracked.
 - **A side question cannot use conversation history**, by design.
 - **The CLI cannot create group conversations**, and it does not render the
   desktop's panels.
+- **Interface localisation covers the desktop chrome.** English, Simplified
+  Chinese, and Traditional Chinese are shipped. Service diagnostics, agent
+  profiles, template content, stored audit reasons, and the CLI remain in
+  English; right-to-left layouts and plural categories beyond one/other are not
+  implemented.
 
 ## Deliberate surprises
 

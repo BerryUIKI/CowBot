@@ -4,6 +4,8 @@ import type { FormEvent } from "react";
 import Modal from "./Modal";
 import { addMemoryEntry } from "./api";
 import { errorMessage } from "./errors";
+import { useT } from "./i18n";
+import type { TranslationKey } from "./i18n/catalog";
 import type { MemoryKind } from "./types";
 
 interface RememberMessageModalProps {
@@ -21,6 +23,14 @@ const kinds: MemoryKind[] = [
   "note",
 ];
 
+const kindKeys: Record<MemoryKind, TranslationKey> = {
+  fact: "memory.kind.fact",
+  preference: "memory.kind.preference",
+  decision: "memory.kind.decision",
+  summary: "memory.kind.summary",
+  note: "memory.kind.note",
+};
+
 /**
  * Prefilled editor for remembering a user message.
  *
@@ -33,6 +43,7 @@ export default function RememberMessageModal({
   onClose,
   onSaved,
 }: RememberMessageModalProps) {
+  const t = useT();
   const [content, setContent] = useState(initialContent);
   const [kind, setKind] = useState<MemoryKind>("fact");
   const [pinned, setPinned] = useState(false);
@@ -56,7 +67,7 @@ export default function RememberMessageModal({
 
   return (
     <Modal
-      title="Remember this message"
+      title={t("remember.title")}
       onClose={onClose}
       footer={
         <>
@@ -66,7 +77,7 @@ export default function RememberMessageModal({
             onClick={onClose}
             disabled={busy}
           >
-            Cancel
+            {t("remember.cancel")}
           </button>
           <button
             type="submit"
@@ -74,7 +85,7 @@ export default function RememberMessageModal({
             className="primary-button"
             disabled={busy || !content.trim()}
           >
-            {busy ? "Saving…" : "Save to memory"}
+            {busy ? t("remember.saving") : t("remember.save")}
           </button>
         </>
       }
@@ -85,12 +96,10 @@ export default function RememberMessageModal({
         onSubmit={(event) => void handleSubmit(event)}
       >
         <p className="dialog-copy">
-          One durable fact, preference, or decision. The entry is shared with
-          every participant of this conversation and is recalled in later
-          turns.
+          {t("remember.copy")}
         </p>
         <label className="field">
-          <span>Memory</span>
+          <span>{t("remember.memoryLabel")}</span>
           <textarea
             value={content}
             rows={4}
@@ -99,7 +108,7 @@ export default function RememberMessageModal({
           />
         </label>
         <label className="field">
-          <span>Kind</span>
+          <span>{t("remember.kind")}</span>
           <select
             value={kind}
             disabled={busy}
@@ -107,7 +116,7 @@ export default function RememberMessageModal({
           >
             {kinds.map((option) => (
               <option key={option} value={option}>
-                {option}
+                {t(kindKeys[option])}
               </option>
             ))}
           </select>
@@ -119,7 +128,7 @@ export default function RememberMessageModal({
             disabled={busy}
             onChange={(event) => setPinned(event.target.checked)}
           />
-          <span>Pin so it is recalled before scored entries</span>
+          <span>{t("remember.pin")}</span>
         </label>
         {error ? (
           <p className="dialog-error" role="alert">

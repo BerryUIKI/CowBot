@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 
 import Avatar from "./Avatar";
+import { useT } from "./i18n";
+import { t as translate } from "./i18n/catalog";
 import type { AgentProfile, Task } from "./types";
 import { taskStatusKind, taskStatusLabel } from "./types";
 
@@ -14,8 +16,11 @@ interface TaskListProps {
 }
 
 function agentName(agents: AgentProfile[], id: string | null): string {
-  if (!id) return "Unassigned";
-  return agents.find((agent) => agent.id === id)?.name ?? "Unknown agent";
+  if (!id) return translate("taskList.unassigned");
+  return (
+    agents.find((agent) => agent.id === id)?.name ??
+    translate("taskList.unknownAgent")
+  );
 }
 
 /**
@@ -28,6 +33,7 @@ export default function TaskList({
   onOpenTask,
   onNewTask,
 }: TaskListProps) {
+  const t = useT();
   const [filter, setFilter] = useState<TaskFilter>("active");
   const [showTurns, setShowTurns] = useState(false);
 
@@ -46,9 +52,9 @@ export default function TaskList({
   );
 
   return (
-    <section className="task-panel" aria-label="Tasks">
+    <section className="task-panel" aria-label={t("taskList.aria")}>
       <header className="task-panel-head">
-        <div className="task-filter" role="group" aria-label="Task filter">
+        <div className="task-filter" role="group" aria-label={t("taskList.filterAria")}>
           {(["active", "archived", "all"] as const).map((item) => (
             <button
               key={item}
@@ -58,21 +64,23 @@ export default function TaskList({
               onClick={() => setFilter(item)}
             >
               {item === "active"
-                ? "Active"
+                ? t("taskList.active")
                 : item === "archived"
-                  ? "Archived"
-                  : "All"}
+                  ? t("taskList.archived")
+                  : t("taskList.all")}
             </button>
           ))}
         </div>
         <button type="button" className="text-button" onClick={onNewTask}>
-          New task
+          {t("taskList.newTask")}
         </button>
       </header>
 
       {rows.length === 0 ? (
         <p className="task-panel-empty">
-          {tasks.length === 0 ? "No tasks yet." : "No tasks match."}
+          {tasks.length === 0
+            ? t("taskList.noTasks")
+            : t("taskList.noMatch")}
         </p>
       ) : (
         <ul className="contact-list">
@@ -96,8 +104,8 @@ export default function TaskList({
                     <span className="contact-snippet">
                       <span className={`status-dot status-${kind}`} />{" "}
                       {taskStatusLabel(task.status)} · {assignee}
-                      {task.archived ? " · Archived" : ""}
-                      {task.source !== "user" ? " · Turn" : ""}
+                      {task.archived ? t("taskList.archivedSuffix") : ""}
+                      {task.source !== "user" ? t("taskList.turnSuffix") : ""}
                     </span>
                   </span>
                 </button>
@@ -113,7 +121,7 @@ export default function TaskList({
           checked={showTurns}
           onChange={(event) => setShowTurns(event.target.checked)}
         />
-        <span>Show conversation turns</span>
+        <span>{t("taskList.showTurns")}</span>
       </label>
     </section>
   );

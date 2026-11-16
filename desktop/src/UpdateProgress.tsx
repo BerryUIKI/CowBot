@@ -1,3 +1,5 @@
+import { useT } from "./i18n";
+
 interface UpdateProgressProps {
   downloaded: number;
   total: number | null;
@@ -9,13 +11,14 @@ export default function UpdateProgress({
   total,
   className,
 }: UpdateProgressProps) {
+  const t = useT();
   const percent =
     total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
 
   return (
     <div
       className={`update-progress${className ? ` ${className}` : ""}`}
-      aria-label="Download progress"
+      aria-label={t("update.progressAria")}
     >
       {percent !== null ? (
         <div className="update-progress-track">
@@ -23,7 +26,9 @@ export default function UpdateProgress({
         </div>
       ) : null}
       <span className="update-progress-label">
-        {percent === null ? "Downloading…" : `Downloading… ${percent}%`}
+        {percent === null
+          ? t("update.downloading")
+          : t("update.downloadingPercent", { percent })}
       </span>
     </div>
   );

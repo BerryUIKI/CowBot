@@ -4,6 +4,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import ApprovalCard from "./ApprovalCard";
 import ApprovalModeMenu from "./ApprovalModeMenu";
@@ -42,6 +43,8 @@ import {
 import TaskDetail from "./TaskDetail";
 import TaskList from "./TaskList";import type { AssignmentWithEvents, RunWithCalls } from "./TaskDetail";
 import UpdateBanner from "./UpdateBanner";
+import LanguageDialog from "./LanguageDialog";
+import ProfileMenu from "./ProfileMenu";
 import {
   addMemoryEntry,
   addProject,
@@ -105,6 +108,8 @@ import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
 import { dayKey, formatDayLabel, formatListTime, formatTime } from "./format";
+import { useT } from "./i18n";
+import { t as translate } from "./i18n/catalog";
 import type {
   AgentProfile,
   Approval,
@@ -162,11 +167,13 @@ const broadcastNames = ["team", "all", "everyone", "here"];
 
 function senderName(message: ChannelMessage, session: ClientSession | null): string {
   const sender = message.sender;
-  if (sender.type === "System") return "System";
+  if (sender.type === "System") return translate("app.sender.system");
   if (sender.type === "User") {
-    return session && sender.id === session.user.id ? "You" : "Teammate";
+    return session && sender.id === session.user.id
+      ? translate("app.sender.you")
+      : translate("app.sender.teammate");
   }
-  return `Agent ${sender.id.slice(0, 8)}`;
+  return translate("app.sender.agent", { id: sender.id.slice(0, 8) });
 }
 
 function senderLabel(
@@ -182,14 +189,37 @@ function senderLabel(
 }
 
 function agentName(agents: AgentProfile[], id: string | null): string {
-  if (!id) return "Unassigned";
-  return agents.find((agent) => agent.id === id)?.name ?? `Agent ${id.slice(0, 8)}`;
+  if (!id) return translate("app.agent.unassigned");
+  return (
+    agents.find((agent) => agent.id === id)?.name ??
+    translate("app.agent.fallback", { id: id.slice(0, 8) })
+  );
+}
+
+/** Localized label for the persisted source of a routing decision. */
+function routeSourceLabel(source: RouteSource): string {
+  switch (source) {
+    case "mention":
+      return translate("app.route.sourceMention");
+    case "router":
+      return translate("app.route.sourceRouting");
+    case "rotation":
+      return translate("app.route.sourceRotation");
+    case "default":
+      return translate("app.route.sourceDefault");
+    case "silent":
+      return translate("app.route.sourceSilent");
+    case "unmatched":
+      return translate("app.route.sourceUnmatched");
+    default:
+      return source;
+  }
 }
 
 /** Compact plain text for sidebar previews; strips Markdown and HTML. */
 function plainTextPreview(content: string): string {
   return content
-    .replace(/```[\s\S]*?```/g, " [code] ")
+    .replace(/```[\s\S]*?```/g, translate("app.previewCode"))
     .replace(/`([^`]*)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -290,7 +320,10 @@ function PinMark() {
 }
 
 export default function App() {
+  const t = useT();
   const [view, setView] = useState<View>("chat");
+  const [languageOpen, setLanguageOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [session, setSession] = useState<ClientSession | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -777,7 +810,7 @@ export default function App() {
       .catch((err: unknown) => {
         if (cancelled) return;
         setNotice(
-          `Slash commands are unavailable; drafts starting with / are sent as messages. ${errorMessage(err)}`,
+          t("app.notice.slashUnavailable", { detail: errorMessage(err) }),
         );
       });
     return () => {
@@ -1332,7 +1365,7 @@ export default function App() {
       id,
       ...turn,
       name:
-        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? "Agent",
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? t("app.sender.agentFallback"),
     }));
   const channelIsStreaming = channelStreams.length > 0;
   /// A task run's turn streams to no chat, so the composer names it instead of
@@ -1352,7 +1385,7 @@ export default function App() {
       id,
       ...turn,
       name:
-        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? "Agent",
+        agents.find((candidate) => candidate.id === turn.agentId)?.name ?? t("app.sender.agentFallback"),
     }))[0];
   const conversationParticipantNames = conversationParticipants.map(
     (participant) => participant.agent_name,
@@ -1480,11 +1513,20 @@ export default function App() {
       const outcome = await compactConversation(channel.id, agentId);
       setNotice(
         outcome.compacted
-          ? `Compacted ${outcome.summarized_entries} entries: ${outcome.tokens_before} → ${outcome.tokens_after} tokens.`
+          ? t(
+              outcome.summarized_entries === 1
+                ? "app.notice.compactedOne"
+                : "app.notice.compactedOther",
+              {
+                count: outcome.summarized_entries,
+                before: outcome.tokens_before,
+                after: outcome.tokens_after,
+              },
+            )
           : outcome.reason ??
               (outcome.in_progress
-                ? "A compaction is already running for this branch."
-                : "Nothing to compact yet."),
+                ? t("app.notice.compactionRunning")
+                : t("app.notice.nothingToCompact")),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);
@@ -1497,13 +1539,9 @@ export default function App() {
 
   async function clearContextForChannel(channel: Channel, agentId?: string) {
     const target = agentId
-      ? "this participant's context branch"
-      : "this conversation's context";
-    if (
-      !window.confirm(
-        `Clear ${target}? Messages stay visible, but the model will no longer see them.`,
-      )
-    ) {
+      ? t("app.contextTarget.participant")
+      : t("app.contextTarget.conversation");
+    if (!window.confirm(t("app.confirm.clearContext", { target }))) {
       return;
     }
 
@@ -1513,8 +1551,13 @@ export default function App() {
       const cleared = await clearConversationContext(channel.id, agentId);
       setNotice(
         cleared > 0
-          ? `Cleared ${cleared} context entries.`
-          : "The context was already empty.",
+          ? t(
+              cleared === 1
+                ? "app.notice.clearedOne"
+                : "app.notice.clearedOther",
+              { count: cleared },
+            )
+          : t("app.notice.contextAlreadyEmpty"),
       );
       setContextVersion((version) => version + 1);
       await refreshMessages(channel.id);
@@ -1885,12 +1928,12 @@ export default function App() {
           return;
         }
         setCommandHint(
-          "Unknown command. Press Esc to send as a message, or type /help.",
+          t("app.commandHint.unknown"),
         );
         setCommandDismissed(true);
         return;
       case "missing_argument":
-        setCommandHint(`Usage: ${parsed.usage}`);
+        setCommandHint(t("app.commandHint.usage", { usage: parsed.usage }));
         return;
       case "invocation": {
         const action = planCommand(parsed, commandTargets, runningTaskIds);
@@ -1961,14 +2004,16 @@ export default function App() {
       case "set-approval": {
         if (
           action.mode === "trusted" &&
-          !window.confirm(
-            "Bypass permissions runs every tool call. Critical-risk calls follow the workspace policy in Settings → Approvals. Continue?",
-          )
+          !window.confirm(t("app.confirm.bypass"))
         ) {
           return;
         }
         setChannelApproval(action.mode);
-        setNotice(`Approval mode set to ${approvalLevelLabel(action.mode)}.`);
+        setNotice(
+          t("app.notice.approvalModeSet", {
+            mode: approvalLevelLabel(action.mode),
+          }),
+        );
         return;
       }
 
@@ -1989,7 +2034,7 @@ export default function App() {
         try {
           await renameChannel(action.channelId, action.name, action.topic);
           await refreshChannels(action.channelId);
-          setNotice(`Renamed to ${action.name}.`);
+          setNotice(t("app.notice.renamed", { name: action.name }));
         } catch (err) {
           setError(errorMessage(err));
         }
@@ -2001,7 +2046,9 @@ export default function App() {
         try {
           await setChannelPinned(action.channelId, action.pinned);
           await refreshChannels(action.channelId);
-          setNotice(action.pinned ? "Chat pinned." : "Chat unpinned.");
+          setNotice(
+            action.pinned ? t("app.notice.pinned") : t("app.notice.unpinned"),
+          );
         } catch (err) {
           setError(errorMessage(err));
         }
@@ -2011,7 +2058,12 @@ export default function App() {
       case "stop": {
         if (
           !window.confirm(
-            `Cancel ${action.taskIds.length} running ${action.taskIds.length === 1 ? "task" : "tasks"} in this chat?`,
+            t(
+              action.taskIds.length === 1
+                ? "app.confirm.cancelTasksOne"
+                : "app.confirm.cancelTasksOther",
+              { count: action.taskIds.length },
+            ),
           )
         ) {
           return;
@@ -2029,8 +2081,13 @@ export default function App() {
         await refreshTasks(selectedChannel?.id ?? undefined);
         setNotice(
           cancelled > 0
-            ? `Cancelled ${cancelled} ${cancelled === 1 ? "task" : "tasks"}.`
-            : "No tasks were cancelled.",
+            ? t(
+                cancelled === 1
+                  ? "app.notice.cancelledOne"
+                  : "app.notice.cancelledOther",
+                { count: cancelled },
+              )
+            : t("app.notice.noTasksCancelled"),
         );
         return;
       }
@@ -2043,15 +2100,15 @@ export default function App() {
             channelId: action.channelId ?? undefined,
           });
           const scope = action.channelId
-            ? "this conversation"
+            ? t("app.scope.thisConversation")
             : action.agentId
-              ? "this agent"
-              : "the workspace";
+              ? t("app.scope.thisAgent")
+              : t("app.scope.workspace");
           setContextVersion((version) => version + 1);
           setNotice(
             saved.redacted
-              ? `Saved to ${scope} with credentials redacted.`
-              : `Saved to ${scope}.`,
+              ? t("app.notice.savedWithRedaction", { scope })
+              : t("app.notice.saved", { scope }),
           );
         } catch (err) {
           setError(errorMessage(err));
@@ -2085,8 +2142,8 @@ export default function App() {
           setContextVersion((version) => version + 1);
           setNotice(
             saved.redacted
-              ? "Conversation note saved with credentials redacted."
-              : "Conversation note saved.",
+              ? t("app.notice.noteSavedWithRedaction")
+              : t("app.notice.noteSaved"),
           );
         } catch (err) {
           setError(errorMessage(err));
@@ -2392,6 +2449,10 @@ export default function App() {
     }
   }
 
+  function openExternal(url: string) {
+    openUrl(url).catch((err) => setError(errorMessage(err)));
+  }
+
   function openNewChannel() {
     setView("chat");
     setCreatingChannel(true);
@@ -2545,7 +2606,7 @@ export default function App() {
 
   async function handleCancelTask() {
     if (!selectedTaskId) return;
-    if (!window.confirm("Cancel this task and its active assignment?")) return;
+    if (!window.confirm(t("app.confirm.cancelTaskDetail"))) return;
 
     setBusy("cancel-task");
     setError(null);
@@ -2567,7 +2628,7 @@ export default function App() {
     setError(null);
     try {
       await discardTaskWorktree(selectedTaskId);
-      setNotice("Worktree discarded.");
+      setNotice(t("app.notice.worktreeDiscarded"));
       await refreshTasks();
       await refreshTaskDetail(selectedTaskId);
     } catch (err) {
@@ -2636,7 +2697,7 @@ export default function App() {
     ? selectedAgent.name
     : selectedChannel
       ? `#${selectedChannel.name}`
-      : "your team";
+      : t("app.composer.targetTeam");
 
   function previewSnippet(message: ChannelMessage, channel: Channel): string {
     const text = plainTextPreview(message.content);
@@ -2680,20 +2741,20 @@ export default function App() {
     const answered = replied.length > 0 ? replied : selected;
     const routeLabel =
       source === "mention"
-        ? "by mention"
+        ? t("app.route.byMention")
         : source === "router"
-          ? "by routing"
+          ? t("app.route.byRouting")
           : source === "rotation"
-            ? "by rotation"
+            ? t("app.route.byRotation")
             : source === "default"
-              ? "by the default responder"
+              ? t("app.route.byDefault")
               : "";
 
     if (source === "silent") {
       return (
         <li className="chat-route-row">
           <span className="route-note">
-            No one answered. Mention a participant or set a default responder.
+            {t("app.route.nobody")}
           </span>
         </li>
       );
@@ -2703,11 +2764,12 @@ export default function App() {
       return (
         <li className="chat-route-row">
           <span className="route-note route-note-warning">
-            No participant matched{" "}
-            {unknown.length > 0
-              ? unknown.map((name) => `@${name}`).join(", ")
-              : "the mention"}
-            .
+            {t("app.route.unmatched", {
+              names:
+                unknown.length > 0
+                  ? unknown.map((name) => `@${name}`).join(", ")
+                  : t("app.route.theMention"),
+            })}
           </span>
         </li>
       );
@@ -2719,56 +2781,61 @@ export default function App() {
     return (
       <li className="chat-route-row">
         <span className="route-answered">
-          {answered.length > 0 ? (
-            <>
-              Answered {routeLabel} by{" "}
-              <strong>{answered.map(participantLabel).join(", ")}</strong>
-            </>
-          ) : (
-            "No reply was posted."
-          )}
+          {answered.length > 0
+            ? t("app.route.answered", {
+                route: routeLabel,
+                names: answered.map(participantLabel).join(", "),
+              })
+            : t("app.route.noReply")}
         </span>
         {failed.length > 0 ? (
           <span className="route-chip route-chip-failed">
-            {failed.map(participantLabel).join(", ")} failed
+            {t("app.route.failed", {
+              names: failed.map(participantLabel).join(", "),
+            })}
           </span>
         ) : null}
         {skipped.length > 0 ? (
           <span className="route-chip">
-            {skipped.map(participantLabel).join(", ")} skipped
+            {t("app.route.skipped", {
+              names: skipped.map(participantLabel).join(", "),
+            })}
           </span>
         ) : null}
         {turn ? (
           <details className="route-details">
-            <summary>Routing</summary>
+            <summary>{t("app.route.routing")}</summary>
             <div className="route-details-body">
               <p>
-                <span>Source</span>
-                {source ?? "unknown"}
+                <span>{t("app.route.source")}</span>
+                {source ? routeSourceLabel(source) : t("app.route.unknown")}
               </p>
               {turn.selected_agents.length > 0 ? (
                 <p>
-                  <span>Selected</span>
+                  <span>{t("app.route.selected")}</span>
                   {turn.selected_agents.map(participantLabel).join(", ")}
                 </p>
               ) : null}
               {turn.unknown_mentions.length > 0 ? (
                 <p>
-                  <span>Not matched</span>
+                  <span>{t("app.route.notMatched")}</span>
                   {turn.unknown_mentions.map((name) => `@${name}`).join(", ")}
                 </p>
               ) : null}
               {turn.reason ? (
                 <p>
-                  <span>Reason</span>
+                  <span>{t("app.route.reason")}</span>
                   {turn.reason}
                 </p>
               ) : null}
               {outcome ? (
                 <p>
-                  <span>Outcome</span>
-                  {replied.length} replied · {failed.length} failed ·{" "}
-                  {skipped.length} skipped
+                  <span>{t("app.route.outcome")}</span>
+                  {t("app.route.outcomeCounts", {
+                    replied: replied.length,
+                    failed: failed.length,
+                    skipped: skipped.length,
+                  })}
                 </p>
               ) : null}
             </div>
@@ -2798,19 +2865,19 @@ export default function App() {
           ...(menuAgent
             ? [
                 {
-                  label: "Edit agent…",
+                  label: t("app.menu.editAgent"),
                   onSelect: () => openEditAgentDialog(menuAgent),
                 },
               ]
             : []),
           {
-            label: channel.pinned ? "Unpin" : "Pin to top",
+            label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
             onSelect: () => void togglePin(channel),
           },
           ...(menuAgent
             ? [
                 {
-                  label: "Clear history…",
+                  label: t("app.menu.clearHistory"),
                   danger: true,
                   onSelect: () => openClearDialog(channel, menuAgent),
                 },
@@ -2820,38 +2887,38 @@ export default function App() {
       : menu.kind === "conversation"
         ? [
             {
-              label: "Rename conversation…",
+              label: t("app.menu.renameConversation"),
               onSelect: () => openRenameDialog(channel),
             },
             {
-              label: channel.pinned ? "Unpin" : "Pin to top",
+              label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
               onSelect: () => void togglePin(channel),
             },
             {
-              label: "Compact context",
+              label: t("app.menu.compactContext"),
               onSelect: () => void compactChannel(channel),
             },
             {
-              label: "Clear context…",
+              label: t("app.menu.clearContext"),
               onSelect: () => void clearContextForChannel(channel),
             },
             {
-              label: "Delete conversation…",
+              label: t("app.menu.deleteConversation"),
               danger: true,
               onSelect: () => openDeleteDialog(channel),
             },
           ]
         : [
             {
-              label: "Rename channel…",
+              label: t("app.menu.renameChannel"),
               onSelect: () => openRenameDialog(channel),
             },
             {
-              label: channel.pinned ? "Unpin" : "Pin to top",
+              label: channel.pinned ? t("app.menu.unpin") : t("app.menu.pin"),
               onSelect: () => void togglePin(channel),
             },
             {
-              label: "Delete channel…",
+              label: t("app.menu.deleteChannel"),
               danger: true,
               onSelect: () => openDeleteDialog(channel),
             },
@@ -2877,15 +2944,21 @@ export default function App() {
   const composerModelLabel = conversationScope
     ? conversationScope.provider_id
       ? conversationScope.model
-      : "Offline model"
-    : (activeModelProvider?.model ?? "Offline model");
+      : t("app.model.offline")
+    : (activeModelProvider?.model ?? t("app.model.offline"));
   const composerModelTitle = conversationScope
-    ? `Conversation model: ${composerModelLabel} (${
-        conversationScope.model_follows_default ? "follows the default" : "pinned"
-      })`
+    ? t("app.model.conversationTitle", {
+        model: composerModelLabel,
+        scope: conversationScope.model_follows_default
+          ? t("app.model.followsDefault")
+          : t("app.model.pinned"),
+      })
     : activeModelProvider
-      ? `${activeModelProvider.name} · ${activeModelProvider.model}`
-      : "Offline model";
+      ? t("app.model.providerTitle", {
+          provider: activeModelProvider.name,
+          model: activeModelProvider.model,
+        })
+      : t("app.model.offline");
   const modelMenuItems: ContextMenuItem[] = modelMenu
     ? [
         ...(composerProvider
@@ -2896,20 +2969,20 @@ export default function App() {
             }))
           : [
               {
-                label: "Offline model",
+                label: t("app.model.offline"),
                 onSelect: () => undefined,
               },
             ]),
         ...(conversationScope && !conversationScope.model_follows_default
           ? [
               {
-                label: "Follow the default model",
+                label: t("app.model.followDefault"),
                 onSelect: () => void handleFollowDefaultModel(),
               },
             ]
           : []),
         {
-          label: "Manage models…",
+          label: t("app.model.manage"),
           onSelect: () => {
             setModelMenu(null);
             setSettingsSection("model");
@@ -2958,8 +3031,10 @@ export default function App() {
       <button
         type="button"
         className={`inspector-trigger${inspectorTab === "approvals" ? " is-active" : ""}`}
-        title="Approvals"
-        aria-label={`Approvals (${approvals.length} pending)`}
+        title={t("app.inspector.approvals")}
+        aria-label={t("app.inspector.approvalsPending", {
+          count: approvals.length,
+        })}
         aria-pressed={inspectorTab === "approvals"}
         onClick={() => toggleInspector("approvals")}
       >
@@ -2980,8 +3055,10 @@ export default function App() {
       <button
         type="button"
         className={`inspector-trigger${inspectorTab === "background" ? " is-active" : ""}`}
-        title="Background tasks"
-        aria-label={`Background tasks (${activeOverviewCount} active)`}
+        title={t("app.inspector.background")}
+        aria-label={t("app.inspector.backgroundActive", {
+          count: activeOverviewCount,
+        })}
         aria-pressed={inspectorTab === "background"}
         onClick={() => toggleInspector("background")}
       >
@@ -3027,8 +3104,8 @@ export default function App() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search chats and conversations"
-              aria-label="Search chats and conversations"
+              placeholder={t("app.sidebar.searchPlaceholder")}
+              aria-label={t("app.sidebar.searchPlaceholder")}
             />
           </label>
         ) : null}
@@ -3036,19 +3113,19 @@ export default function App() {
         <div className="sidebar-scroll">
           {view !== "settings" ? (
             <>
-              <section className="sidebar-section" aria-label="Chats">
+              <section className="sidebar-section" aria-label={t("app.sidebar.chats")}>
                 <div className="nav-heading">
-                  <span>Chats</span>
+                  <span>{t("app.sidebar.chats")}</span>
                   <button type="button" className="text-button" onClick={openNewChannel}>
-                    New
+                    {t("app.sidebar.new")}
                   </button>
                 </div>
                 {chatRows.length === 0 ? (
                   <p className="nav-note">
-                    Add a team from a template in Settings to start a conversation.
+                    {t("app.sidebar.noChats")}
                   </p>
                 ) : visibleChats.length === 0 ? (
-                  <p className="nav-note">No chats match.</p>
+                  <p className="nav-note">{t("app.sidebar.noChatMatches")}</p>
                 ) : (
                   <ul className="contact-list">
                     {visibleChats.map((row) => {
@@ -3089,15 +3166,15 @@ export default function App() {
                                   ? previewSnippet(preview, row.channel)
                                   : isAgent
                                     ? row.agent.role
-                                    : row.channel.topic || "No messages yet"}
+                                    : row.channel.topic || t("app.sidebar.noMessages")}
                               </span>
                             </span>
                           </button>
                           <button
                             type="button"
                             className="contact-more"
-                            title={isAgent ? "Conversation actions" : "Channel actions"}
-                            aria-label={`Actions for ${name}`}
+                            title={isAgent ? t("app.sidebar.conversationActions") : t("app.sidebar.channelActions")}
+                            aria-label={t("app.sidebar.actionsFor", { name })}
                             onClick={(event) =>
                               isAgent
                                 ? openMenuFromButton(event, "agent", row.channel, row.agent)
@@ -3130,21 +3207,21 @@ export default function App() {
                 {creatingChannel ? (
                   <form className="new-channel" onSubmit={handleCreateChannel}>
                     <label className="field">
-                      <span>Name</span>
+                      <span>{t("app.sidebar.name")}</span>
                       <input
                         ref={channelNameRef}
                         value={channelName}
                         onChange={(event) => setChannelName(event.target.value)}
-                        placeholder="engineering"
+                        placeholder={t("app.sidebar.namePlaceholder")}
                         autoComplete="off"
                       />
                     </label>
                     <label className="field">
-                      <span>Topic</span>
+                      <span>{t("app.sidebar.topic")}</span>
                       <input
                         value={channelTopic}
                         onChange={(event) => setChannelTopic(event.target.value)}
-                        placeholder="What is this channel for?"
+                        placeholder={t("app.sidebar.topicPlaceholder")}
                         autoComplete="off"
                       />
                     </label>
@@ -3154,14 +3231,14 @@ export default function App() {
                         className="primary-button"
                         disabled={!channelName.trim()}
                       >
-                        Create channel
+                        {t("app.sidebar.createChannel")}
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => setCreatingChannel(false)}
                       >
-                        Cancel
+                        {t("app.dialog.cancel")}
                       </button>
                     </div>
                   </form>
@@ -3171,12 +3248,12 @@ export default function App() {
                     className="new-channel-button"
                     onClick={openNewChannel}
                   >
-                    <span aria-hidden="true">+</span> New channel
+                    <span aria-hidden="true">+</span> {t("app.sidebar.newChannel")}
                   </button>
                 )}
               </section>
 
-              <section className="sidebar-section" aria-label="Conversations">
+              <section className="sidebar-section" aria-label={t("app.sidebar.conversations")}>
                 <div className="nav-heading">
                   <button
                     type="button"
@@ -3191,7 +3268,7 @@ export default function App() {
                     >
                       ▸
                     </span>
-                    <span>Conversations</span>
+                    <span>{t("app.sidebar.conversations")}</span>
                     {conversationRows.length > 0 ? (
                       <span className="nav-count-soft">{conversationRows.length}</span>
                     ) : null}
@@ -3202,7 +3279,7 @@ export default function App() {
                     onClick={openNewConversation}
                     disabled={agents.length === 0}
                   >
-                    New
+                    {t("app.sidebar.new")}
                   </button>
                 </div>
                 <div id="sidebar-conversations" hidden={!showConversations}>
@@ -3242,15 +3319,17 @@ export default function App() {
                               <span className="contact-snippet">
                                 {preview
                                   ? previewSnippet(preview, channel)
-                                  : channel.topic || "New conversation"}
+                                  : channel.topic || t("app.sidebar.newConversation")}
                               </span>
                             </span>
                           </button>
                           <button
                             type="button"
                             className="contact-more"
-                            title="Conversation actions"
-                            aria-label={`Actions for ${channel.name}`}
+                            title={t("app.sidebar.conversationActions")}
+                            aria-label={t("app.sidebar.actionsFor", {
+                              name: channel.name,
+                            })}
                             onClick={(event) =>
                               openMenuFromButton(event, "conversation", channel)
                             }
@@ -3262,23 +3341,23 @@ export default function App() {
                     })}
                   </ul>
                 ) : normalizedQuery && conversationRows.length > 0 ? (
-                  <p className="nav-note">No conversations match.</p>
+                  <p className="nav-note">{t("app.sidebar.noConversationMatches")}</p>
                 ) : null}
 
                 {creatingConversation ? (
                   <form className="new-channel" onSubmit={handleCreateConversation}>
                     <label className="field">
-                      <span>Title</span>
+                      <span>{t("app.sidebar.title")}</span>
                       <input
                         value={conversationTitle}
                         onChange={(event) => setConversationTitle(event.target.value)}
-                        placeholder="Design review"
+                        placeholder={t("app.sidebar.titlePlaceholder")}
                         autoComplete="off"
                       />
                     </label>
                     <fieldset className="participant-picker">
                       <legend>
-                        Participants <span>{conversationIds.length}/8</span>
+                        {t("app.sidebar.participants")} <span>{conversationIds.length}/8</span>
                       </legend>
                       <ul>
                         {agents.map((agent) => {
@@ -3317,7 +3396,9 @@ export default function App() {
                                 <span className="participant-move">
                                   <button
                                     type="button"
-                                    aria-label={`Move ${agent.name} earlier`}
+                                    aria-label={t("app.sidebar.moveEarlier", {
+                                      name: agent.name,
+                                    })}
                                     disabled={order === 0}
                                     onClick={() =>
                                       moveConversationParticipant(agent.id, -1)
@@ -3327,7 +3408,9 @@ export default function App() {
                                   </button>
                                   <button
                                     type="button"
-                                    aria-label={`Move ${agent.name} later`}
+                                    aria-label={t("app.sidebar.moveLater", {
+                                      name: agent.name,
+                                    })}
                                     disabled={
                                       order === conversationIds.length - 1
                                     }
@@ -3347,7 +3430,7 @@ export default function App() {
                     {conversationIds.length > 1 ? (
                       <>
                         <label className="field">
-                          <span>Default responder</span>
+                          <span>{t("app.sidebar.defaultResponder")}</span>
                           <select
                             value={conversationDefaultResponder}
                             onChange={(event) =>
@@ -3374,7 +3457,7 @@ export default function App() {
                               setConversationRouter(event.target.checked)
                             }
                           />
-                          <span>Route unaddressed messages with the model</span>
+                          <span>{t("app.sidebar.routeUnaddressed")}</span>
                         </label>
                       </>
                     ) : null}
@@ -3387,14 +3470,16 @@ export default function App() {
                           conversationIds.length === 0
                         }
                       >
-                        {busy === "create-conversation" ? "Creating…" : "Create"}
+                        {busy === "create-conversation"
+                          ? t("app.sidebar.creating")
+                          : t("app.sidebar.create")}
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => setCreatingConversation(false)}
                       >
-                        Cancel
+                        {t("app.dialog.cancel")}
                       </button>
                     </div>
                   </form>
@@ -3405,7 +3490,7 @@ export default function App() {
                     onClick={openNewConversation}
                     disabled={agents.length === 0}
                   >
-                    <span aria-hidden="true">+</span> New conversation
+                    <span aria-hidden="true">+</span> {t("app.sidebar.newConversation")}
                   </button>
                 )}
                 </div>
@@ -3415,7 +3500,7 @@ export default function App() {
 
             </>
           ) : (
-            <section className="sidebar-section" aria-label="Settings sections">
+            <section className="sidebar-section" aria-label={t("app.sidebar.settingsSections")}>
               <div className="nav-heading">
                 <button
                   type="button"
@@ -3431,7 +3516,7 @@ export default function App() {
                   >
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
-                  Back to chat
+                  {t("app.sidebar.backToChat")}
                 </button>
               </div>
               <ul className="contact-list">
@@ -3447,7 +3532,7 @@ export default function App() {
                     >
                       <span className="contact-text">
                         <span className="contact-top">
-                          <span className="contact-name">{item.label}</span>
+                          <span className="contact-name">{t(item.labelKey)}</span>
                         </span>
                       </span>
                     </button>
@@ -3460,20 +3545,44 @@ export default function App() {
 
         <div className="sidebar-footer">
           <div className="profile">
-            <Avatar name={session?.user.name ?? "You"} kind="user" />
-            <span className="profile-text">
-              <span className="profile-name">{session?.user.name ?? "You"}</span>
-              <span className="profile-workspace">
-                {session?.workspace.name ?? "Local workspace"}
+            <button
+              type="button"
+              className="profile-trigger"
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen}
+              aria-label={t("profile.openMenu")}
+              onClick={() => setProfileMenuOpen((open) => !open)}
+            >
+              <Avatar
+                name={session?.user.name ?? t("app.sender.you")}
+                kind="user"
+                size="small"
+              />
+              <span className="profile-trigger-text">
+                {t("profile.userAndWorkspace", {
+                  name: session?.user.name ?? t("app.sender.you"),
+                  workspace:
+                    session?.workspace.name ?? t("app.sidebar.localWorkspace"),
+                })}
               </span>
-            </span>
+              <svg
+                className="profile-trigger-chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
             <button
               type="button"
               className={`icon-button profile-settings${
                 view === "settings" ? " is-active" : ""
               }`}
-              title="Settings"
-              aria-label="Settings"
+              title={t("app.sidebar.settings")}
+              aria-label={t("app.sidebar.settings")}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
             >
@@ -3488,6 +3597,31 @@ export default function App() {
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
+            {profileMenuOpen ? (
+              <ProfileMenu
+                userName={session?.user.name ?? t("app.sender.you")}
+                workspaceName={
+                  session?.workspace.name ?? t("app.sidebar.localWorkspace")
+                }
+                onClose={() => setProfileMenuOpen(false)}
+                onSettings={() => setView("settings")}
+                onLanguage={() => setLanguageOpen(true)}
+                onModels={() => {
+                  setSettingsSection("model");
+                  setView("settings");
+                }}
+                onWorkspace={() => {
+                  setSettingsSection("workspace");
+                  setView("settings");
+                }}
+                onChangelog={() =>
+                  openExternal("https://github.com/BerryUIKI/CowBot/releases")
+                }
+                onLearnMore={() =>
+                  openExternal("https://github.com/BerryUIKI/CowBot")
+                }
+              />
+            ) : null}
           </div>
         </div>
       </aside>
@@ -3499,7 +3633,7 @@ export default function App() {
           <div className="error-banner" role="alert">
             <span>{error}</span>
             <button type="button" className="text-button" onClick={() => setError(null)}>
-              Dismiss
+              {t("app.shell.dismiss")}
             </button>
           </div>
         ) : null}
@@ -3508,14 +3642,14 @@ export default function App() {
           <div className="notice-banner" role="status">
             <span>{notice}</span>
             <button type="button" className="text-button" onClick={() => setNotice(null)}>
-              Dismiss
+              {t("app.shell.dismiss")}
             </button>
           </div>
         ) : null}
 
         {loading ? (
           <div className="loading-state">
-            <p>Opening your workspace…</p>
+            <p>{t("app.shell.opening")}</p>
           </div>
         ) : view === "chat" ? (
           selectedChannel ? (
@@ -3550,23 +3684,31 @@ export default function App() {
                     <p className="chat-subtitle">
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `${conversationParticipants.length} participants${
-                              defaultResponderName
-                                ? ` · ${defaultResponderName} answers unaddressed messages`
-                                : " · unaddressed messages stay silent"
-                            }`
+                          ? t(
+                              conversationParticipants.length === 1
+                                ? "app.chat.participantSummaryOne"
+                                : "app.chat.participantSummaryOther",
+                              {
+                                count: conversationParticipants.length,
+                                answering: defaultResponderName
+                                  ? t("app.chat.answersUnaddressed", {
+                                      name: defaultResponderName,
+                                    })
+                                  : t("app.chat.staysSilent"),
+                              },
+                            )
                           : selectedAgent
                             ? `${selectedAgent.name} · ${selectedAgent.role}`
-                            : "Private conversation"
+                            : t("app.chat.privateConversation")
                         : selectedAgent
                           ? selectedAgent.role
-                          : selectedChannel.topic.trim() || "No topic yet."}
+                          : selectedChannel.topic.trim() || t("app.chat.noTopic")}
                     </p>
                     {selectedChannel.kind === "conversation" &&
                     conversationParticipants.length > 1 ? (
                       <div
                         className="chat-participants"
-                        aria-label="Conversation participants"
+                        aria-label={t("app.chat.participantsAria")}
                       >
                         {conversationParticipants.map((participant) => (
                           <span
@@ -3581,7 +3723,9 @@ export default function App() {
                             {participant.agent_name}
                             {participant.agent_id ===
                             conversationContext?.default_responder ? (
-                              <span className="chip-default">default</span>
+                              <span className="chip-default">
+                                {t("app.chat.defaultChip")}
+                              </span>
                             ) : null}
                           </span>
                         ))}
@@ -3589,8 +3733,11 @@ export default function App() {
                     ) : null}
                     {selectedChannel.kind === "channel" && channelMentionNames.length > 0 ? (
                       <p className="chat-members">
-                        Mention{" "}
-                        {channelMentionNames.map((agent) => `@${agent.name}`).join(" · ")}
+                        {t("app.chat.mention", {
+                          names: channelMentionNames
+                            .map((agent) => `@${agent.name}`)
+                            .join(" · "),
+                        })}
                       </p>
                     ) : null}
                   </div>
@@ -3599,10 +3746,10 @@ export default function App() {
                   <span className="chat-kind">
                     {selectedChannel.kind === "conversation"
                       ? conversationParticipants.length > 1
-                        ? "Group"
-                        : "Conversation"
+                        ? t("app.chat.group")
+                        : t("app.chat.conversation")
                       : selectedAgent
-                        ? "Direct"
+                        ? t("app.chat.direct")
                         : ""}
                   </span>
                 </div>
@@ -3611,7 +3758,9 @@ export default function App() {
               <section
                 className="chat-thread"
                 ref={threadRef}
-                aria-label={`Messages in ${selectedChannel.name}`}
+                aria-label={t("app.chat.messagesAria", {
+                  name: selectedChannel.name,
+                })}
                 key={selectedChannel.id}
               >
                 {messages.length === 0 ? (
@@ -3629,26 +3778,32 @@ export default function App() {
                     <p className="empty-title">
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `Start the conversation with ${conversationParticipantNames.join(", ")}.`
+                          ? t("app.chat.startGroup", {
+                              names: conversationParticipantNames.join(", "),
+                            })
                           : selectedAgent
-                            ? `Start a conversation with ${selectedAgent.name}.`
-                            : "Start a conversation."
+                            ? t("app.chat.startConversation", {
+                                name: selectedAgent.name,
+                              })
+                            : t("app.chat.startAny")
                         : selectedAgent
-                          ? `Say hello to ${selectedAgent.name}.`
-                          : "No messages yet."}
+                          ? t("app.chat.sayHello", { name: selectedAgent.name })
+                          : t("app.chat.noMessagesYet")}
                     </p>
                     <p>
                       {selectedChannel.kind === "conversation"
                         ? conversationParticipants.length > 1
-                          ? `Mention a participant, use @team, or send an unaddressed message${
-                              defaultResponderName
-                                ? ` for ${defaultResponderName} to answer`
-                                : " (it stays silent while no default responder is set)"
-                            }. Each participant keeps its own context branch.`
-                          : "Each conversation keeps its own context branch; the header meter shows how full it is."
+                          ? defaultResponderName
+                            ? t("app.chat.groupHintWithDefault", {
+                                name: defaultResponderName,
+                              })
+                            : t("app.chat.groupHintSilent")
+                          : t("app.chat.singleHint")
                         : selectedAgent
-                          ? "Every message here goes straight to this agent."
-                          : `Write the first message to #${selectedChannel.name}.`}
+                          ? t("app.chat.agentHint")
+                          : t("app.chat.channelHint", {
+                              name: selectedChannel.name,
+                            })}
                     </p>
                   </div>
                 ) : (
@@ -3696,7 +3851,7 @@ export default function App() {
                                 <time dateTime={message.created_at}>
                                   {formatTime(message.created_at)}
                                 </time>
-                                {message.thread_id ? " · In a thread" : null}
+                                {message.thread_id ? t("app.chat.inThread") : null}
                                 {message.sender.type === "User" &&
                                 selectedChannel.kind === "conversation" ? (
                                   <>
@@ -3706,7 +3861,7 @@ export default function App() {
                                       className="text-button chat-remember"
                                       onClick={() => setRememberMessage(message)}
                                     >
-                                      Remember this message
+                                      {t("app.chat.remember")}
                                     </button>
                                   </>
                                 ) : null}
@@ -3743,7 +3898,7 @@ export default function App() {
                           ) : null}
                           <div className="chat-approval-body">
                             <span className="chat-sender">
-                              {agent?.name ?? "Approval"}
+                              {agent?.name ?? t("app.chat.approval")}
                             </span>
                             <ApprovalCard
                               approval={approval}
@@ -3762,8 +3917,11 @@ export default function App() {
                       <li className="chat-row chat-row-agent" key="approval-waiting">
                         <div className="chat-bubble-wrap">
                           <div className="chat-bubble chat-bubble-agent chat-bubble-waiting">
-                            Waiting for approval
-                            {inlineApprovalTool ? `: ${inlineApprovalTool}` : ""}…
+                            {inlineApprovalTool
+                              ? t("app.chat.waitingApprovalTool", {
+                                  tool: inlineApprovalTool,
+                                })
+                              : t("app.chat.waitingApproval")}
                           </div>
                         </div>
                       </li>
@@ -3774,7 +3932,7 @@ export default function App() {
                           <div className="chat-bubble-wrap">
                             <span className="chat-sender">{agent.name}</span>
                             <div className="chat-bubble chat-bubble-agent">
-                              <span className="typing-dots" aria-label="Working">
+                              <span className="typing-dots" aria-label={t("app.chat.working")}>
                                 <span />
                                 <span />
                                 <span />
@@ -3796,7 +3954,7 @@ export default function App() {
                             <div className="chat-bubble chat-bubble-agent chat-bubble-streaming">
                               {turn.reasoning ? (
                                 <details className="stream-reasoning">
-                                  <summary>Thinking</summary>
+                                  <summary>{t("app.chat.thinking")}</summary>
                                   <RichText content={turn.reasoning} />
                                 </details>
                               ) : null}
@@ -3819,7 +3977,7 @@ export default function App() {
                               {turn.text ? (
                                 <RichText content={turn.text} />
                               ) : (
-                                <span className="typing-dots" aria-label="Working">
+                                <span className="typing-dots" aria-label={t("app.chat.working")}>
                                   <span />
                                   <span />
                                   <span />
@@ -3838,8 +3996,7 @@ export default function App() {
               {conversationFull && selectedChannel.kind === "conversation" ? (
                 <div className="context-full-banner" role="alert">
                   <span>
-                    This conversation's context is full. Compact it, clear it, or start a
-                    new conversation before sending.
+                    {t("app.chat.contextFull")}
                   </span>
                   <div className="context-full-actions">
                     <button
@@ -3848,7 +4005,7 @@ export default function App() {
                       disabled={contextBusy}
                       onClick={() => void compactChannel(selectedChannel)}
                     >
-                      Compact
+                      {t("app.chat.compact")}
                     </button>
                     <button
                       type="button"
@@ -3856,14 +4013,14 @@ export default function App() {
                       disabled={contextBusy}
                       onClick={() => void clearContextForChannel(selectedChannel)}
                     >
-                      Clear context
+                      {t("app.chat.clearContext")}
                     </button>
                     <button
                       type="button"
                       className="ghost-button"
                       onClick={openNewConversation}
                     >
-                      New conversation
+                      {t("app.chat.newConversation")}
                     </button>
                   </div>
                 </div>
@@ -3919,7 +4076,7 @@ export default function App() {
                       className="mention-suggestions"
                       id="mention-suggestions"
                       role="listbox"
-                      aria-label="Mention suggestions"
+                      aria-label={t("app.composer.mentionSuggestions")}
                     >
                       {mentionCandidates.map((candidate, index) => (
                         <button
@@ -3938,7 +4095,9 @@ export default function App() {
                         >
                           <span>@{candidate.name}</span>
                           {candidate.broadcast ? (
-                            <span className="mention-broadcast">everyone</span>
+                            <span className="mention-broadcast">
+                              {t("app.composer.everyone")}
+                            </span>
                           ) : null}
                         </button>
                       ))}
@@ -3947,8 +4106,12 @@ export default function App() {
                   <button
                     type="button"
                     className="composer-add"
-                    title={selectedAgent ? `New task for ${selectedAgent.name}` : "New task"}
-                    aria-label="New task"
+                    title={
+                      selectedAgent
+                        ? t("app.composer.newTaskFor", { name: selectedAgent.name })
+                        : t("app.composer.newTask")
+                    }
+                    aria-label={t("app.composer.newTask")}
                     onClick={startTaskForCurrentChannel}
                   >
                     +
@@ -3973,12 +4136,16 @@ export default function App() {
                     onKeyDown={handleComposerKeyDown}
                     placeholder={
                       conversationFull
-                        ? "Context full — compact or start a new conversation"
+                        ? t("app.composer.contextFull")
                         : sideQuestionBusy
-                          ? "Asking a side question…"
-                          : `Message ${composerTarget}`
+                          ? t("app.composer.sideQuestion")
+                          : t("app.composer.messagePlaceholder", {
+                              target: composerTarget,
+                            })
                     }
-                    aria-label={`Message ${composerTarget}`}
+                    aria-label={t("app.composer.messagePlaceholder", {
+                      target: composerTarget,
+                    })}
                     aria-autocomplete="list"
                     aria-expanded={
                       argumentCandidates.length > 0 ||
@@ -4010,8 +4177,8 @@ export default function App() {
                     <button
                       type="button"
                       className="composer-stop"
-                      title="Stop the running reply"
-                      aria-label="Stop the running reply"
+                      title={t("app.composer.stopReply")}
+                      aria-label={t("app.composer.stopReply")}
                       onClick={() => void stopCurrentTurn()}
                     >
                       <svg
@@ -4027,7 +4194,7 @@ export default function App() {
                       type="submit"
                       className="composer-send"
                       disabled={!draft.trim() || sending || conversationFull}
-                      aria-label="Send message"
+                      aria-label={t("app.composer.send")}
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -4048,13 +4215,15 @@ export default function App() {
                   <button
                     type="button"
                     className="composer-task-run"
-                    title={`Stop ${taskStream.name}'s task run`}
+                    title={t("app.composer.stopTaskRun", {
+                      name: taskStream.name,
+                    })}
                     onClick={() => void stopTurn(taskStream.id)}
                   >
                     <span className="composer-task-run-dot" aria-hidden="true" />
-                    {taskStream.name} is working on a task
+                    {t("app.composer.taskRun", { name: taskStream.name })}
                     {taskStream.tools.some((tool) => tool.running)
-                      ? " · tool running"
+                      ? t("app.composer.taskRunTool")
                       : ""}
                   </button>
                 ) : null}
@@ -4070,8 +4239,8 @@ export default function App() {
                   {composerModelLabel}
                   {conversationScope
                     ? conversationScope.model_follows_default
-                      ? " · default"
-                      : " · pinned"
+                      ? t("app.model.defaultSuffix")
+                      : t("app.model.pinnedSuffix")
                     : ""}
                 </button>
                 {agents.length > 0 ? (
@@ -4145,10 +4314,10 @@ export default function App() {
               <span className="empty-icon-tile">
                 <img className="empty-icon" src={icon} alt="" />
               </span>
-              <p className="empty-title">A quiet room, for now.</p>
-              <p>Create a channel to start working with your agents.</p>
+              <p className="empty-title">{t("app.chat.emptyTitle")}</p>
+              <p>{t("app.chat.emptyBody")}</p>
               <button type="button" className="primary-button" onClick={openNewChannel}>
-                Create a channel
+                {t("app.chat.createChannel")}
               </button>
             </div>
           )
@@ -4156,21 +4325,21 @@ export default function App() {
           creatingTask ? (
             <div className="task-form-view">
               <header className="view-header">
-                <h2 className="view-title">New task</h2>
+                <h2 className="view-title">{t("app.taskForm.title")}</h2>
                 <p className="view-subtitle">
-                  Give an agent a clear outcome and an approval policy.
+                  {t("app.taskForm.subtitle")}
                 </p>
               </header>
 
               {agents.length === 0 ? (
                 <div className="agent-bootstrap">
-                  <p className="empty-title">No agents yet.</p>
-                  <p>Add a team from a built-in template to assign this task.</p>
+                  <p className="empty-title">{t("app.taskForm.noAgents")}</p>
+                  <p>{t("app.taskForm.addTeam")}</p>
                   <div className="inline-form">
                     <select
                       value={templateId}
                       onChange={(event) => setTemplateId(event.target.value)}
-                      aria-label="Template"
+                      aria-label={t("app.taskForm.template")}
                     >
                       {templates.map((template) => (
                         <option key={template.id} value={template.id}>
@@ -4184,34 +4353,36 @@ export default function App() {
                       onClick={handleAddAgents}
                       disabled={busy === "add-agents" || !templateId}
                     >
-                      {busy === "add-agents" ? "Adding…" : "Add agents"}
+                      {busy === "add-agents"
+                        ? t("app.taskForm.adding")
+                        : t("app.taskForm.addAgents")}
                     </button>
                   </div>
                 </div>
               ) : (
                 <form className="task-form" onSubmit={handleCreateTask}>
                   <label className="field">
-                    <span>Description</span>
+                    <span>{t("app.taskForm.description")}</span>
                     <textarea
                       ref={taskDescriptionRef}
                       value={taskDescription}
                       onChange={(event) => setTaskDescription(event.target.value)}
-                      placeholder="Implement the login flow and verify it in the sandbox."
+                      placeholder={t("app.taskForm.descriptionPlaceholder")}
                       rows={3}
                     />
                   </label>
                   <label className="field">
-                    <span>Expected output</span>
+                    <span>{t("app.taskForm.expectedOutput")}</span>
                     <textarea
                       value={taskOutput}
                       onChange={(event) => setTaskOutput(event.target.value)}
-                      placeholder="Working code, tests, and a short summary of changes."
+                      placeholder={t("app.taskForm.expectedOutputPlaceholder")}
                       rows={2}
                     />
                   </label>
                   <div className="form-row">
                     <label className="field">
-                      <span>Assignee</span>
+                      <span>{t("app.taskForm.assignee")}</span>
                       <select
                         value={taskAssignee}
                         onChange={(event) => setTaskAssignee(event.target.value)}
@@ -4224,12 +4395,12 @@ export default function App() {
                       </select>
                     </label>
                     <label className="field">
-                      <span>Channel</span>
+                      <span>{t("app.taskForm.channel")}</span>
                       <select
                         value={taskChannel}
                         onChange={(event) => setTaskChannel(event.target.value)}
                       >
-                        <option value="">No channel</option>
+                        <option value="">{t("app.taskForm.noChannel")}</option>
                         {channels.map((channel) => (
                           <option key={channel.id} value={channel.id}>
                             {channel.agent_id ? channel.name : `#${channel.name}`}
@@ -4238,7 +4409,7 @@ export default function App() {
                       </select>
                     </label>
                     <div className="field">
-                      <span>Approval</span>
+                      <span>{t("app.taskForm.approval")}</span>
                       <ApprovalModeMenu
                         value={taskApproval}
                         onChange={setTaskApproval}
@@ -4248,7 +4419,7 @@ export default function App() {
                   {availableProjects.length > 0 ? (
                     <section
                       className="task-worktree"
-                      aria-label="Run in a git worktree"
+                      aria-label={t("app.taskForm.worktreeAria")}
                     >
                       <label className="worktree-toggle">
                         <input
@@ -4259,17 +4430,16 @@ export default function App() {
                           }
                         />
                         <span>
-                          <strong>Run in a git worktree</strong>
+                          <strong>{t("app.taskForm.worktreeTitle")}</strong>
                           <small>
-                            Work in an isolated checkout on its own branch. The
-                            branch is not merged automatically.
+                            {t("app.taskForm.worktreeBody")}
                           </small>
                         </span>
                       </label>
                       {worktreeEnabled ? (
                         <div className="form-row">
                           <label className="field">
-                            <span>Project</span>
+                            <span>{t("app.taskForm.project")}</span>
                             <select
                               value={taskProject}
                               onChange={(event) =>
@@ -4284,7 +4454,7 @@ export default function App() {
                             </select>
                           </label>
                           <label className="field">
-                            <span>Base branch</span>
+                            <span>{t("app.taskForm.baseBranch")}</span>
                             <select
                               value={taskBaseBranch}
                               onChange={(event) =>
@@ -4301,14 +4471,14 @@ export default function App() {
                               ) : (
                                 <option value="">
                                   {projectBranchesBusy
-                                    ? "Loading branches…"
-                                    : "No local branches"}
+                                    ? t("app.taskForm.loadingBranches")
+                                    : t("app.taskForm.noBranches")}
                                 </option>
                               )}
                             </select>
                           </label>
                           <div className="field">
-                            <span>Worktree branch</span>
+                            <span>{t("app.taskForm.worktreeBranch")}</span>
                             <code className="worktree-preview">
                               {worktreeBranchPreview(taskDescription)}
                             </code>
@@ -4332,7 +4502,9 @@ export default function App() {
                             projectBranchesBusy))
                       }
                     >
-                      {busy === "create-task" ? "Creating…" : "Create task"}
+                      {busy === "create-task"
+                        ? t("app.sidebar.creating")
+                        : t("app.taskForm.create")}
                     </button>
                     <button
                       type="button"
@@ -4342,7 +4514,7 @@ export default function App() {
                         setView("chat");
                       }}
                     >
-                      Cancel
+                      {t("app.taskForm.cancel")}
                     </button>
                   </div>
                 </form>
@@ -4350,10 +4522,10 @@ export default function App() {
             </div>
           ) : (
             <div className="empty-workspace">
-              <p className="empty-title">No task selected.</p>
-              <p>Pick a task in the inspector, or create a new one.</p>
+              <p className="empty-title">{t("app.taskForm.noTaskTitle")}</p>
+              <p>{t("app.taskForm.noTaskBody")}</p>
               <button type="button" className="primary-button" onClick={startCreatingTask}>
-                New task
+                {t("app.taskForm.newTask")}
               </button>
             </div>
           )
@@ -4374,6 +4546,7 @@ export default function App() {
             onSessionChange={setSession}
             onAddProject={handleAddProject}
             onRemoveProject={handleRemoveProject}
+            onOpenLanguage={() => setLanguageOpen(true)}
           />
         )}
       </main>
@@ -4408,6 +4581,10 @@ export default function App() {
         />
       ) : null}
 
+      {languageOpen ? (
+        <LanguageDialog onClose={() => setLanguageOpen(false)} />
+      ) : null}
+
       {menu ? (
         <ContextMenu
           x={menu.x}
@@ -4430,8 +4607,8 @@ export default function App() {
         <Modal
           title={
             dialog.channel.kind === "conversation"
-              ? "Rename conversation"
-              : "Rename channel"
+              ? t("app.dialog.renameConversation")
+              : t("app.dialog.renameChannel")
           }
           onClose={closeDialog}
           footer={
@@ -4442,7 +4619,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="submit"
@@ -4450,14 +4627,14 @@ export default function App() {
                 className="primary-button"
                 disabled={dialogBusy || !dialogName.trim()}
               >
-                {dialogBusy ? "Saving…" : "Save"}
+                {dialogBusy ? t("app.dialog.saving") : t("app.dialog.save")}
               </button>
             </>
           }
         >
           <form id="rename-channel-form" className="dialog-form" onSubmit={submitRename}>
             <label className="field">
-              <span>Name</span>
+              <span>{t("app.dialog.name")}</span>
               <input
                 value={dialogName}
                 onChange={(event) => setDialogName(event.target.value)}
@@ -4465,7 +4642,7 @@ export default function App() {
               />
             </label>
             <label className="field">
-              <span>Topic</span>
+              <span>{t("app.dialog.topic")}</span>
               <input
                 value={dialogTopic}
                 onChange={(event) => setDialogTopic(event.target.value)}
@@ -4483,8 +4660,8 @@ export default function App() {
         <Modal
           title={
             dialog.channel.kind === "conversation"
-              ? "Delete conversation"
-              : "Delete channel"
+              ? t("app.dialog.deleteConversation")
+              : t("app.dialog.deleteChannel")
           }
           onClose={closeDialog}
           footer={
@@ -4495,7 +4672,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="button"
@@ -4504,24 +4681,25 @@ export default function App() {
                 disabled={dialogBusy}
               >
                 {dialogBusy
-                  ? "Deleting…"
+                  ? t("app.dialog.deleting")
                   : dialog.channel.kind === "conversation"
-                    ? "Delete conversation"
-                    : "Delete channel"}
+                    ? t("app.dialog.deleteConversation")
+                    : t("app.dialog.deleteChannel")}
               </button>
             </>
           }
         >
           {dialog.channel.kind === "conversation" ? (
             <p className="dialog-copy">
-              Delete <strong>{dialog.channel.name}</strong>? Its messages and context
-              will be deleted. This cannot be undone.
+              {t("app.dialog.deleteConversationBody", {
+                name: dialog.channel.name,
+              })}
             </p>
           ) : (
             <p className="dialog-copy">
-              Delete <strong>#{dialog.channel.name}</strong>? Its messages will be
-              deleted. Tasks keep their history but are no longer linked to the
-              channel.
+              {t("app.dialog.deleteChannelBody", {
+                name: dialog.channel.name,
+              })}
             </p>
           )}
           {dialogError ? (
@@ -4532,7 +4710,7 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "clear-history" ? (
         <Modal
-          title="Clear conversation"
+          title={t("app.dialog.clearConversation")}
           onClose={closeDialog}
           footer={
             <>
@@ -4542,7 +4720,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="button"
@@ -4550,14 +4728,17 @@ export default function App() {
                 onClick={() => void submitClear()}
                 disabled={dialogBusy}
               >
-                {dialogBusy ? "Clearing…" : "Clear history"}
+                {dialogBusy
+                  ? t("app.dialog.clearing")
+                  : t("app.dialog.clearHistory")}
               </button>
             </>
           }
         >
           <p className="dialog-copy">
-            Clear the conversation with <strong>{dialog.agent.name}</strong>? All
-            messages in this conversation will be deleted; the agent stays.
+            {t("app.dialog.clearHistoryBody", {
+              name: dialog.agent.name,
+            })}
           </p>
           {dialogError ? (
             <p className="dialog-error" role="alert">
@@ -4567,7 +4748,7 @@ export default function App() {
         </Modal>
       ) : dialog?.kind === "edit-agent" ? (
         <Modal
-          title="Edit agent"
+          title={t("app.dialog.editAgent")}
           onClose={closeDialog}
           footer={
             <>
@@ -4577,7 +4758,7 @@ export default function App() {
                 onClick={closeDialog}
                 disabled={dialogBusy}
               >
-                Cancel
+                {t("app.dialog.cancel")}
               </button>
               <button
                 type="submit"
@@ -4585,14 +4766,14 @@ export default function App() {
                 className="primary-button"
                 disabled={dialogBusy || !dialogName.trim()}
               >
-                {dialogBusy ? "Saving…" : "Save"}
+                {dialogBusy ? t("app.dialog.saving") : t("app.dialog.save")}
               </button>
             </>
           }
         >
           <form id="edit-agent-form" className="dialog-form" onSubmit={submitEditAgent}>
             <label className="field">
-              <span>Name</span>
+              <span>{t("app.dialog.name")}</span>
               <input
                 value={dialogName}
                 onChange={(event) => setDialogName(event.target.value)}
@@ -4600,7 +4781,7 @@ export default function App() {
               />
             </label>
             <label className="field">
-              <span>Role</span>
+              <span>{t("app.dialog.role")}</span>
               <input
                 value={dialogRole}
                 onChange={(event) => setDialogRole(event.target.value)}
@@ -4608,9 +4789,9 @@ export default function App() {
               />
             </label>
             <fieldset className="tool-picker">
-              <legend>Tools</legend>
+              <legend>{t("app.dialog.tools")}</legend>
               {availableTools.length === 0 ? (
-                <p className="dialog-copy">Loading tools…</p>
+                <p className="dialog-copy">{t("app.dialog.loadingTools")}</p>
               ) : (
                 availableTools.map((tool) => (
                   <label key={tool.name} className="tool-option">
@@ -4642,7 +4823,7 @@ export default function App() {
           initialContent={rememberMessage.content}
           onClose={() => setRememberMessage(null)}
           onSaved={() => {
-            setNotice("Saved to memory.");
+            setNotice(t("app.notice.savedToMemory"));
             setContextVersion((version) => version + 1);
           }}
         />
