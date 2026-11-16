@@ -181,6 +181,7 @@ pub const APPROVAL_CHOICES: &[&str] = &["safe_auto", "ask", "accept_edits", "pla
 
 /// Sections accepted by `/settings`, matching the desktop's Settings view.
 pub const SETTINGS_CHOICES: &[&str] = &[
+    "general",
     "model",
     "team",
     "memory",
@@ -331,7 +332,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "/settings [section]",
         summary: "Open Settings at a section.",
         args: &[CommandArg {
-            placeholder: "model|team|memory|approvals|audit|projects|workspace|about",
+            placeholder: "general|model|team|memory|approvals|audit|projects|workspace|about",
             required: false,
             kind: CommandArgKind::Choice(SETTINGS_CHOICES),
         }],
