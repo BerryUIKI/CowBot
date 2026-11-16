@@ -26,11 +26,15 @@ import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
 import SideAnswerPanel from "./SideAnswerPanel";
 import SlashCommandMenu from "./SlashCommandMenu";
-import { planCommand } from "./commandActions";
-import type { CommandAction } from "./commandActions";
+import CommandArgumentMenu from "./CommandArgumentMenu";
+import { argumentSuggestions, planCommand } from "./commandActions";
+import type { ArgumentSuggestion, CommandAction } from "./commandActions";
 import {
   acceptedDraft,
+  argumentQuery,
   filterCommands,
+  findDraftCommand,
+  hasArgumentsAfterCommandToken,
   isCommandDraft,
   loadCommands,
   slashQuery,
@@ -313,6 +317,10 @@ export default function App() {
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [commandHint, setCommandHint] = useState<string | null>(null);
   const [commandExpanded, setCommandExpanded] = useState(false);
+  /// Escape on a mistyped command marks this draft to be sent as a message.
+  const [commandAsMessage, setCommandAsMessage] = useState(false);
+  const [argumentIndex, setArgumentIndex] = useState(0);
+  const [argumentDismissed, setArgumentDismissed] = useState(false);
   const [contextOpenSignal, setContextOpenSignal] = useState(0);
   const [sideAnswer, setSideAnswer] = useState<SideAnswer | null>(null);
   const [sideQuestionBusy, setSideQuestionBusy] = useState(false);
@@ -1210,6 +1218,45 @@ export default function App() {
     return filterCommands(commandCatalogue, commandQuery);
   }, [commandCatalogue, commandDismissed, commandExpanded, commandQuery]);
 
+  /// The state the command planner and the argument completion read.
+  const commandTargets = useMemo(
+    () => ({
+      channel: selectedChannel,
+      participants: conversationParticipants.map((participant) => ({
+        agentId: participant.agent_id,
+        name: participant.agent_name,
+      })),
+      providers: (modelSettings?.providers ?? []).map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        active: provider.active,
+        model: provider.model,
+        models: provider.models,
+      })),
+      approval: channelApproval,
+    }),
+    [channelApproval, conversationParticipants, modelSettings, selectedChannel],
+  );
+
+  const argumentDraft = useMemo(
+    () => argumentQuery(draft, commandCatalogue),
+    [commandCatalogue, draft],
+  );
+
+  const argumentCandidates = useMemo(() => {
+    if (!argumentDraft || argumentDismissed) return [];
+    return argumentSuggestions(
+      argumentDraft.command.name,
+      argumentDraft.query,
+      commandTargets,
+    );
+  }, [argumentDismissed, argumentDraft, commandTargets]);
+
+  const activeArgumentIndex = Math.min(
+    argumentIndex,
+    Math.max(0, argumentCandidates.length - 1),
+  );
+
   const activeCommandIndex = Math.min(
     commandIndex,
     Math.max(0, commandCandidates.length - 1),
@@ -1800,7 +1847,10 @@ export default function App() {
     setCommandHint(null);
     setCommandExpanded(false);
     setCommandDismissed(true);
+    setCommandAsMessage(false);
     setCommandIndex(0);
+    setArgumentIndex(0);
+    setArgumentDismissed(false);
     const next = acceptedDraft(command);
     if (next) {
       setDraft(next);
@@ -1808,6 +1858,14 @@ export default function App() {
       return;
     }
     void runCommand(`/${command.name}`);
+  }
+
+  function acceptArgument(suggestion: ArgumentSuggestion) {
+    if (!argumentDraft) return;
+    setDraft(`${draft.slice(0, argumentDraft.start)}${suggestion.value}`);
+    setArgumentDismissed(true);
+    setArgumentIndex(0);
+    composerRef.current?.focus();
   }
 
   /// Dispatch a complete command line through the pure command planner, then
@@ -1820,6 +1878,12 @@ export default function App() {
         await sendMessage(line);
         return;
       case "unknown":
+        // A slash token followed by more text is a path or prose, not a
+        // mistyped command, so it is sent instead of blocked (ADR-0038).
+        if (hasArgumentsAfterCommandToken(line)) {
+          await sendMessage(line);
+          return;
+        }
         setCommandHint(
           "Unknown command. Press Esc to send as a message, or type /help.",
         );
@@ -1829,25 +1893,7 @@ export default function App() {
         setCommandHint(`Usage: ${parsed.usage}`);
         return;
       case "invocation": {
-        const action = planCommand(
-          parsed,
-          {
-            channel: selectedChannel,
-            participants: conversationParticipants.map((participant) => ({
-              agentId: participant.agent_id,
-              name: participant.agent_name,
-            })),
-            providers: (modelSettings?.providers ?? []).map((provider) => ({
-              id: provider.id,
-              name: provider.name,
-              active: provider.active,
-              model: provider.model,
-              models: provider.models,
-            })),
-            approval: channelApproval,
-          },
-          runningTaskIds,
-        );
+        const action = planCommand(parsed, commandTargets, runningTaskIds);
         // A notice keeps the draft so the user can correct an argument; a
         // command that did something clears it.
         if (action.kind === "notice" || action.kind === "error") {
@@ -1860,6 +1906,9 @@ export default function App() {
         setCommandHint(null);
         setCommandDismissed(false);
         setCommandExpanded(false);
+        setCommandAsMessage(false);
+        setArgumentIndex(0);
+        setArgumentDismissed(false);
         setDraft("");
         await applyCommandAction(action);
         return;
@@ -2232,6 +2281,34 @@ export default function App() {
   }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (argumentCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setArgumentIndex(
+          (current) => (current + 1) % argumentCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setArgumentIndex(
+          (current) =>
+            (current - 1 + argumentCandidates.length) % argumentCandidates.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const candidate = argumentCandidates[activeArgumentIndex];
+        if (candidate) acceptArgument(candidate);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setArgumentDismissed(true);
+        return;
+      }
+    }
     if (commandCandidates.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -2257,6 +2334,7 @@ export default function App() {
         setCommandDismissed(true);
         setCommandExpanded(false);
         setCommandHint(null);
+        setCommandAsMessage(findDraftCommand(draft, commandCatalogue) === null);
         return;
       }
     }
@@ -2286,12 +2364,27 @@ export default function App() {
         return;
       }
     }
+    if (event.key === "Escape" && isCommandDraft(draft)) {
+      event.preventDefault();
+      setCommandDismissed(true);
+      setCommandExpanded(false);
+      setCommandHint(null);
+      // A mistyped command becomes a plain message on the next Enter; a real
+      // command keeps its command path, so the draft is only downgraded when
+      // the catalogue does not know it.
+      setCommandAsMessage(findDraftCommand(draft, commandCatalogue) === null);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (conversationFull) return;
-      // After Escape or any dispatch failure the draft is a slash line that is
-      // not a catalogue command, and the user chose to send it as a message.
-      if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+      // Escape on an unknown command marks this draft as a message; every
+      // other slash draft goes through the command path.
+      if (
+        commandCatalogue.length > 0 &&
+        isCommandDraft(draft) &&
+        !commandAsMessage
+      ) {
         void sendCommandDraft();
         return;
       }
@@ -3792,7 +3885,11 @@ export default function App() {
                 className="composer-bar"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (commandCatalogue.length > 0 && isCommandDraft(draft)) {
+                  if (
+                    commandCatalogue.length > 0 &&
+                    isCommandDraft(draft) &&
+                    !commandAsMessage
+                  ) {
                     void sendCommandDraft();
                     return;
                   }
@@ -3807,6 +3904,14 @@ export default function App() {
                       onAccept={acceptCommand}
                       onHover={setCommandIndex}
                       hint={commandHint}
+                    />
+                  ) : null}
+                  {argumentCandidates.length > 0 ? (
+                    <CommandArgumentMenu
+                      suggestions={argumentCandidates}
+                      activeIndex={activeArgumentIndex}
+                      onAccept={acceptArgument}
+                      onHover={setArgumentIndex}
                     />
                   ) : null}
                   {mentionCandidates.length > 0 ? (
@@ -3856,8 +3961,11 @@ export default function App() {
                       setDraft(event.target.value);
                       // A new draft is a new question for the command menu.
                       setCommandDismissed(false);
+                      setCommandAsMessage(false);
                       setCommandIndex(0);
                       setCommandHint(null);
+                      setArgumentDismissed(false);
+                      setArgumentIndex(0);
                       if (slashQuery(event.target.value) === null) {
                         setCommandExpanded(false);
                       }
@@ -3873,21 +3981,27 @@ export default function App() {
                     aria-label={`Message ${composerTarget}`}
                     aria-autocomplete="list"
                     aria-expanded={
-                      commandCandidates.length > 0 || mentionCandidates.length > 0
+                      argumentCandidates.length > 0 ||
+                      commandCandidates.length > 0 ||
+                      mentionCandidates.length > 0
                     }
                     aria-controls={
-                      commandCandidates.length > 0
-                        ? "command-suggestions"
-                        : mentionCandidates.length > 0
-                          ? "mention-suggestions"
-                          : undefined
+                      argumentCandidates.length > 0
+                        ? "command-argument-suggestions"
+                        : commandCandidates.length > 0
+                          ? "command-suggestions"
+                          : mentionCandidates.length > 0
+                            ? "mention-suggestions"
+                            : undefined
                     }
                     aria-activedescendant={
-                      commandCandidates.length > 0
-                        ? `command-option-${activeCommandIndex}`
-                        : mentionCandidates.length > 0
-                          ? `mention-option-${activeMentionIndex}`
-                          : undefined
+                      argumentCandidates.length > 0
+                        ? `command-argument-option-${activeArgumentIndex}`
+                        : commandCandidates.length > 0
+                          ? `command-option-${activeCommandIndex}`
+                          : mentionCandidates.length > 0
+                            ? `mention-option-${activeMentionIndex}`
+                            : undefined
                     }
                     disabled={conversationFull}
                     rows={1}

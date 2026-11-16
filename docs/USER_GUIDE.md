@@ -518,7 +518,10 @@ model-generated commands as untrusted.
 Type `/` at the start of the composer to open the command menu. Keep typing to
 filter by name or alias, move with the arrow keys, and press Enter or Tab to
 choose a row. A command that needs an argument inserts `/name ` and leaves the
-cursor in the composer; a command that needs nothing runs at once. Commands are
+cursor in the composer; a command that needs nothing runs at once. While the
+first argument is being typed, the menu completes model names on the active
+provider, approval modes, Settings sections, and participant names; Enter or Tab
+inserts the highlighted value and Escape closes the list. Commands are
 actions, never messages: nothing is posted to the chat, nothing enters the
 context branch, and no command appears in the timeline or the context meter.
 Feedback appears in the notice area above the chat.
