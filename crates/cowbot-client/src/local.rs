@@ -44,6 +44,43 @@ use cowbot_tools::ToolRegistry;
 use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
+/// Schema state of a local workspace database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatabaseSchema {
+    /// Newest migration recorded in the database; `None` for a new database.
+    pub current: Option<i64>,
+    /// Newest migration this build provides.
+    pub target: i64,
+}
+
+impl DatabaseSchema {
+    /// Whether opening this database would apply one or more migrations.
+    pub fn needs_upgrade(self) -> bool {
+        self.current.is_none_or(|current| current < self.target)
+    }
+
+    /// Whether the database was migrated by a newer build.
+    pub fn is_newer(self) -> bool {
+        self.current.is_some_and(|current| current > self.target)
+    }
+}
+
+/// Read a local database's schema state without opening or migrating it.
+///
+/// A caller uses this to warn before a one-way upgrade or to refuse a database
+/// that a newer build already migrated.
+pub async fn database_schema(path: impl AsRef<Path>) -> CowResult<DatabaseSchema> {
+    Ok(DatabaseSchema {
+        current: cowbot_store::database_version(path).await?,
+        target: latest_database_schema_version(),
+    })
+}
+
+/// The newest database schema version this build provides.
+pub fn latest_database_schema_version() -> i64 {
+    cowbot_store::latest_version()
+}
+
 use crate::{
     AgentUpdate, Client, ClientSession, ClientUser, ConversationSummary, EventStream, MemoryFilter,
     MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,

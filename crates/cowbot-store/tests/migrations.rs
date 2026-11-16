@@ -1,9 +1,13 @@
-//! Migration checksum compatibility tests.
+//! Migration compatibility tests.
 //!
-//! These build databases with CRLF migration files, which is what a Windows
-//! checkout using `core.autocrlf=true` produced before the repository pinned
-//! the migration files to LF. The SQL and schema are identical to the embedded
-//! migrations; only the recorded SHA-384 checksums differ.
+//! The checksum cases build databases with CRLF migration files, which is what
+//! a Windows checkout using `core.autocrlf=true` produced before the repository
+//! pinned the migration files to LF. The SQL and schema are identical to the
+//! embedded migrations; only the recorded SHA-384 checksums differ.
+//!
+//! The version cases check that a database from a newer build is refused with a
+//! message that names both schema versions, and that a database can be
+//! inspected without being migrated.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -179,4 +183,64 @@ async fn migrates_a_fresh_database_without_repairs() {
     store.migrate().await.unwrap();
 
     assert_eq!(recorded_checksums(store.pool()).await, embedded_checksums());
+}
+
+/// Record a migration this build does not provide, as a newer build would.
+async fn record_future_migration(pool: &SqlitePool, version: i64) {
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+         VALUES (?, 'future_migration', 1, ?, 0)",
+    )
+    .bind(version)
+    .bind(vec![0xAA_u8; 48])
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn rejects_a_database_from_a_newer_build() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("workspace.db");
+
+    let store = Store::connect(&path).await.unwrap();
+    store.migrate().await.unwrap();
+    let supported = cowbot_store::latest_version();
+    record_future_migration(store.pool(), supported + 1).await;
+    let before = recorded_checksums(store.pool()).await;
+
+    let error = store.migrate().await.unwrap_err().to_string();
+
+    assert!(error.contains(&format!("schema version {}", supported + 1)));
+    assert!(error.contains("newer than this build provides"));
+    assert!(error.contains(&format!("schema version {supported}")));
+    assert!(error.contains("CowBot left the database unchanged"));
+    assert!(error.contains("Do not open this database with an older build"));
+    // The refused upgrade wrote nothing.
+    assert_eq!(recorded_checksums(store.pool()).await, before);
+}
+
+#[tokio::test]
+async fn reports_the_schema_version_without_migrating() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("missing.db");
+
+    // A missing file is a new database and stays missing.
+    assert_eq!(cowbot_store::database_version(&path).await.unwrap(), None);
+    assert!(!path.exists());
+
+    let store = Store::connect(&path).await.unwrap();
+    store.migrate().await.unwrap();
+    assert_eq!(
+        cowbot_store::database_version(&path).await.unwrap(),
+        Some(cowbot_store::latest_version())
+    );
+
+    // An older database reports its own version, not the build's.
+    let legacy = temp.path().join("legacy.db");
+    create_legacy_database(&legacy, temp.path(), &MIGRATION_FILES).await;
+    assert_eq!(
+        cowbot_store::database_version(&legacy).await.unwrap(),
+        Some(MIGRATION_FILES.len() as i64)
+    );
 }
