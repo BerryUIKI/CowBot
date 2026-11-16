@@ -418,6 +418,8 @@ export const zhCN: Catalog = {
     shell: {
       dismiss: "忽略",
       opening: "正在打开工作区…",
+      loadFailed: "CowBot 无法打开此工作区。",
+      retry: "重试",
     },
     chat: {
       group: "群组",

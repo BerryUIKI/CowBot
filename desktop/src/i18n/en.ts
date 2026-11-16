@@ -430,6 +430,8 @@ export const en = {
     shell: {
       dismiss: "Dismiss",
       opening: "Opening your workspace…",
+      loadFailed: "CowBot could not open this workspace.",
+      retry: "Try again",
     },
     chat: {
       group: "Group",

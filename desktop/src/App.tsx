@@ -417,6 +417,10 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [runningTasks, setRunningTasks] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
+  /** Why the last attempt to load the workspace failed, if it did. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Bumped by Retry so the initial load runs again. */
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -663,6 +667,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    setLoading(true);
     (async () => {
       try {
         const [
@@ -704,8 +709,9 @@ export default function App() {
             nextSummaries.map((summary) => [summary.channel.id, summary]),
           ),
         );
+        setLoadError(null);
       } catch (err) {
-        if (!cancelled) setError(errorMessage(err));
+        if (!cancelled) setLoadError(errorMessage(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -714,7 +720,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [applyChannels]);
+  }, [applyChannels, loadAttempt]);
 
   useEffect(() => {
     refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
@@ -876,7 +882,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [view]);
+  }, [view, loadAttempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3647,7 +3653,19 @@ export default function App() {
           </div>
         ) : null}
 
-        {loading ? (
+        {loadError !== null && !loading ? (
+          <div className="loading-state" role="alert">
+            <p>{t("app.shell.loadFailed")}</p>
+            <p className="settings-status is-error">{loadError}</p>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            >
+              {t("app.shell.retry")}
+            </button>
+          </div>
+        ) : loading ? (
           <div className="loading-state">
             <p>{t("app.shell.opening")}</p>
           </div>
