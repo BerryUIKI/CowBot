@@ -25,4 +25,19 @@ reply_cleanup: boolean | null,
 /**
  * Replace the participant that answers unaddressed messages.
  */
-default_responder?: AgentId | null, };
+default_responder?: AgentId | null, 
+/**
+ * Replace the provider snapshot; an empty string clears it.
+ */
+provider_id: string | null, 
+/**
+ * Replace the model snapshot; the service rejects a blank model.
+ */
+model: string | null, 
+/**
+ * Make the conversation follow, or stop following, the default model.
+ *
+ * Following carries the default's provider and model in the same update,
+ * so a reader never sees the flag without the pair it refers to.
+ */
+model_follows_default: boolean | null, };

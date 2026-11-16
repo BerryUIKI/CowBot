@@ -332,6 +332,53 @@ async fn a_conversation_cannot_be_read_through_another_workspace() {
 }
 
 #[tokio::test]
+async fn a_conversation_model_scope_patch_is_persisted() {
+    let f = fixture().await;
+    let agent = seed_agent(&f).await;
+    let (status, created) = call(
+        f.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/conversations", f.workspace_id),
+        Some(json!({
+            "title": "Model scope",
+            "agent_ids": [agent.id.0],
+            "model": "mock-model",
+            "provider_id": "provider-1",
+        })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {created}");
+    let channel_id = created["id"].as_str().unwrap().to_string();
+    let path = format!(
+        "/api/v1/workspaces/{}/conversations/{channel_id}",
+        f.workspace_id
+    );
+
+    // A new conversation follows the default until someone pins it.
+    let (status, settings) = call(f.router.clone(), "GET", &path, None, Some(&f.owner_token)).await;
+    assert_eq!(status, StatusCode::OK, "body: {settings}");
+    assert_eq!(settings["model_follows_default"], true);
+
+    let (status, patched) = call(
+        f.router.clone(),
+        "PATCH",
+        &path,
+        Some(json!({
+            "provider_id": "provider-2",
+            "model": "qwen-plus",
+            "model_follows_default": false,
+        })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {patched}");
+    assert_eq!(patched["provider_id"], "provider-2");
+    assert_eq!(patched["model"], "qwen-plus");
+    assert_eq!(patched["model_follows_default"], false);
+}
+
+#[tokio::test]
 async fn a_snapshot_settings_change_requires_administration() {
     let f = fixture().await;
     let settings = format!("/api/v1/workspaces/{}/snapshots/settings", f.workspace_id);

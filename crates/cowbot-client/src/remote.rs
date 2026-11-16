@@ -554,6 +554,9 @@ impl Client for RemoteClient {
                     .default_responder
                     .as_ref()
                     .map(|id| id.0.clone()),
+                "provider_id": update.provider_id,
+                "model": update.model,
+                "model_follows_default": update.model_follows_default,
             })),
         )
         .await

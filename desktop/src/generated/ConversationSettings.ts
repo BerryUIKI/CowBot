@@ -17,6 +17,15 @@ provider_id: string | null,
  */
 model: string, 
 /**
+ * Whether this conversation follows the desktop's default model.
+ *
+ * A following conversation mirrors the default's provider and model
+ * whenever the default changes, so its meter and compaction keep the
+ * tokenizer the next turn will use. Settings written before ADR-0049
+ * deserialize as pinned, which is how they behaved.
+ */
+model_follows_default: boolean, 
+/**
  * Participant that answers an unaddressed message, when one is configured.
  */
 default_responder?: AgentId | null, 
