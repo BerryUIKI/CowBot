@@ -1,6 +1,6 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.11 and the `dev` branch at the time of writing.
+**Applies to:** CowBot 0.1.12 and the `dev` branch at the time of writing.
 **Last reviewed:** 2026-11-16.
 
 This page is the honest boundary of the product. It says what works, what does
@@ -13,7 +13,7 @@ is stale — please open an issue.
 
 ## What works today
 
-CowBot 0.1.11 is a local-first **desktop app and CLI**. The default mode runs
+CowBot 0.1.12 is a local-first **desktop app and CLI**. The default mode runs
 everything on your machine against a SQLite database; an optional self-hosted
 server shares a workspace with a small team over HTTP and WebSocket.
 
