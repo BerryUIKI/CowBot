@@ -1214,6 +1214,10 @@ export default function SettingsView({
                   <dd>{updater.state.currentVersion ?? "—"}</dd>
                 </div>
                 <div>
+                  <dt>{t("settings.about.databaseSchema")}</dt>
+                  <dd>{updater.state.currentDatabaseSchema ?? "—"}</dd>
+                </div>
+                <div>
                   <dt>{t("settings.about.channel")}</dt>
                   <dd>{t("settings.about.stable")}</dd>
                 </div>

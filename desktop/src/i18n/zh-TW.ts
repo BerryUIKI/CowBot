@@ -230,6 +230,7 @@ export const zhTW: Catalog = {
       "title": "關於 CowBot",
       "hint": "桌面版版本與更新。CowBot 會從 GitHub Releases 檢查穩定版本。",
       "version": "版本",
+      "databaseSchema": "資料庫結構版本",
       "channel": "更新通道",
       "stable": "穩定版 · GitHub Releases",
       "lastChecked": "上次檢查",
@@ -1115,7 +1116,34 @@ export const zhTW: Catalog = {
     "agentsCountOther": "此工作區有 {count} 個代理。",
     "finish": "完成設定",
     "addedNoticeOne": "已從 {name} 新增 {count} 個代理。",
-    "addedNoticeOther": "已從 {name} 新增 {count} 個代理。"
+    "addedNoticeOther": "已從 {name} 新增 {count} 個代理。",
+    "language": "語言",
+    "databaseTitle": "資料庫資料夾",
+    "databaseHint":
+      "工作區資料庫和備份都存放在這個資料夾。變更後會重新啟動 CowBot 並在新位置開啟工作區。",
+    "databaseCurrent": "目前資料夾",
+    "databaseChange": "變更…",
+    "databaseChanging": "正在重新啟動…"
+  },
+  "startup": {
+    "loading": "正在啟動 CowBot…",
+    "kicker": "工作區資料庫",
+    "upgradeTitle": "資料庫升級",
+    "upgradeCopy":
+      "這個工作區使用結構版本 {current}，CowBot 會升級到結構版本 {target}。",
+    "upgradeOneWay": "升級是單向的：舊版 CowBot 無法開啟升級後的資料庫。",
+    "backupHint": "「備份並升級」會在這裡寫入一份副本：",
+    "upgradeAction": "升級",
+    "upgradeBackupAction": "備份並升級",
+    "newerTitle": "這個工作區由更新版本的 CowBot 建立",
+    "newerCopy":
+      "資料庫的結構版本是 {current}，目前 CowBot 只提供到 {target}。用這個版本開啟可能損壞資料。",
+    "backupsTitle": "相容的備份",
+    "restoreAction": "還原備份",
+    "freshAction": "使用空白工作區",
+    "freshHint": "目前資料庫會保留為：",
+    "failedTitle": "CowBot 無法開啟工作區資料庫",
+    "quit": "結束 CowBot"
   },
   "taskList": {
     "aria": "任務",

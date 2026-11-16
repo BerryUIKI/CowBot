@@ -1,6 +1,6 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.10 and the `dev` branch at the time of writing.
+**Applies to:** CowBot 0.1.11 and the `dev` branch at the time of writing.
 **Last reviewed:** 2026-11-16.
 
 This page is the honest boundary of the product. It says what works, what does
@@ -13,7 +13,7 @@ is stale — please open an issue.
 
 ## What works today
 
-CowBot 0.1.10 is a local-first **desktop app and CLI**. The default mode runs
+CowBot 0.1.11 is a local-first **desktop app and CLI**. The default mode runs
 everything on your machine against a SQLite database; an optional self-hosted
 server shares a workspace with a small team over HTTP and WebSocket.
 
@@ -112,6 +112,11 @@ tracked.
 - **A side question cannot use conversation history**, by design.
 - **The CLI cannot create group conversations**, and it does not render the
   desktop's panels.
+- **Database migrations are forward-only.** An older CowBot cannot open a
+  database a newer one upgraded; the desktop asks before upgrading and keeps a
+  copy, and refuses a newer database with recovery choices instead of starting.
+  The CLI upgrades without asking. Development builds use their own `dev` data
+  directory so they cannot upgrade an installed workspace.
 - **Interface localisation covers the desktop chrome.** English, Simplified
   Chinese, and Traditional Chinese are shipped. Service diagnostics, agent
   profiles, template content, stored audit reasons, and the CLI remain in
@@ -145,6 +150,13 @@ expect.
 - **Workspace packages never carry device-local state.** Prompt snapshots, LLM
   usage, group turn rows, and model providers stay on the device that produced
   them.
+- **A schema upgrade is one-way.** CowBot warns on a startup screen and offers
+  either a direct upgrade or a copy first, but the upgraded file cannot be
+  opened by an older build. Recovery restores a backup or starts an empty
+  workspace; it never deletes the database it replaces.
+- **Only one CowBot window runs at a time.** Launching the app again focuses the
+  open window instead of starting a second copy, including a development build
+  while an installed release is running.
 - **Builds are unsigned.** macOS may ask you to allow CowBot again after an
   update, and Windows may show a SmartScreen prompt. See
   [ADR-0014](ADR/0014-desktop-release-builds.md).

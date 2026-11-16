@@ -21,7 +21,7 @@ Editing migrations 0001 and 0002 to match one particular variant cannot solve th
 3. Before rewriting anything, the live `sqlite_master` schema (tables and indexes, with line endings normalized) must exactly match a fresh in-memory application of the embedded migrations up to the highest recorded version.
 4. Only then is the `checksum` column updated, for all mismatched versions in one transaction. Migration SQL and the recorded history are otherwise untouched, and sqlx then performs its normal run.
 
-Any other mismatch — unknown content, a failed migration, or a schema that differs — leaves the database untouched and returns a storage error naming the affected migration, the first schema difference, and the standard recovery steps (back up the database, create or import a workspace, report the message). A database created by a newer build is left for sqlx to report as a missing migration.
+Any other mismatch — unknown content, a failed migration, or a schema that differs — leaves the database untouched and returns a storage error naming the affected migration, the first schema difference, and the standard recovery steps (back up the database, create or import a workspace, report the message). A database created by a newer build is refused before sqlx runs, with a message that names both schema versions; see [ADR-0051](0051-database-lifecycle-safeguards.md).
 
 The repository also pins `crates/cowbot-store/migrations/*.sql` to `text eol=lf` in `.gitattributes` so new checkouts produce the same bytes on every platform.
 
@@ -39,5 +39,5 @@ The repository also pins `crates/cowbot-store/migrations/*.sql` to `text eol=lf`
 - The repair is idempotent: once the checksums match, the compatibility check is a no-op.
 - A database that genuinely diverged from its recorded migrations fails with a message that names the first schema difference and recovery steps instead of sqlx's terse error.
 - The schema comparison normalizes CRLF/LF only; any real SQL or object difference is still rejected.
-- Coverage: `crates/cowbot-store/tests/migrations.rs` builds CRLF migration databases and covers repair, repair with a pending migration, schema divergence, unknown checksums, and fresh databases.
+- Coverage: `crates/cowbot-store/tests/migrations.rs` builds CRLF migration databases and covers repair, repair with a pending migration, schema divergence, unknown checksums, fresh databases, a database from a newer build, and reading a database's schema version without migrating it.
 - If a future migration uses a construct that `raw_sql` cannot replay for the reference schema, the comparison path must be revisited.

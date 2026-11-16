@@ -39,9 +39,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{config, AppState};
+use crate::{config, startup, AppState};
 
 /// Payload emitted on `cowbot-run-finished` when a crew run settles.
 #[derive(Debug, Clone, Serialize)]
@@ -2493,20 +2493,143 @@ pub async fn activate_model_provider(
 
 /// First-run onboarding state for the desktop.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OnboardingState {
     pub completed: bool,
+    /// Absolute path of the workspace database the app opened.
+    pub database: String,
+    /// Folder that holds workspace databases.
+    pub database_dir: String,
 }
 
-fn onboarding_state(config: &config::AppConfig) -> OnboardingState {
+fn onboarding_state(config: &config::AppConfig, state: &AppState) -> OnboardingState {
     OnboardingState {
         completed: config.onboarding_completed,
+        database: state.database_path.display().to_string(),
+        database_dir: state.database_dir.display().to_string(),
     }
+}
+
+/// What the frontend needs to decide before the workspace opens.
+#[tauri::command]
+pub fn get_startup_status(state: State<'_, startup::StartupState>) -> startup::StartupStatus {
+    state.status()
+}
+
+/// The user's answer to a startup question.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum StartupAction {
+    /// Apply the pending migrations directly.
+    Upgrade,
+    /// Copy the database, then apply the pending migrations.
+    UpgradeWithBackup,
+    /// Replace the database with one of the reported backups.
+    Restore { backup: String },
+    /// Move the database aside and open an empty workspace.
+    Fresh,
+}
+
+/// Apply a startup decision and open the workspace when it becomes possible.
+#[tauri::command]
+pub async fn resolve_startup(
+    app: AppHandle,
+    state: State<'_, startup::StartupState>,
+    action: StartupAction,
+) -> Result<startup::StartupStatus, String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(startup::StartupStatus::Ready);
+    }
+
+    match action {
+        StartupAction::Upgrade => {
+            return open_workspace(&app, &state).await;
+        }
+        StartupAction::UpgradeWithBackup => {
+            let startup::StartupStatus::Upgrade { backup, .. } = state.status() else {
+                return Err("This workspace does not need an upgrade.".to_string());
+            };
+            startup::backup_database(&state.db_path, Path::new(&backup))
+                .map_err(|error| format!("failed to back up the database: {error}"))?;
+
+            // Opening the database applies the migrations; inspecting first
+            // would still report the old schema version.
+            return open_workspace(&app, &state).await;
+        }
+        StartupAction::Restore { backup } => {
+            startup::restore_from(Path::new(&backup), &state.db_path, &state.database_dir).await?;
+        }
+        StartupAction::Fresh => {
+            startup::start_fresh(&state.db_path)?;
+        }
+    }
+
+    let next = startup::inspect(&state.db_path, &state.database_dir).await;
+    state.set_status(next.clone());
+    if next.is_ready() {
+        return open_workspace(&app, &state).await;
+    }
+    Ok(next)
+}
+
+/// Finish startup and report what the window should show next.
+async fn open_workspace(
+    app: &AppHandle,
+    state: &startup::StartupState,
+) -> Result<startup::StartupStatus, String> {
+    match crate::finish(app).await {
+        Ok(()) => {
+            state.set_status(startup::StartupStatus::Ready);
+            Ok(startup::StartupStatus::Ready)
+        }
+        Err(error) => {
+            crate::mark_failed(app, &error);
+            Ok(state.status())
+        }
+    }
+}
+
+/// Close the app from the startup screen.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Point the app at another folder for workspace databases and restart.
+#[tauri::command]
+pub fn set_database_directory(
+    app: AppHandle,
+    state: State<'_, startup::StartupState>,
+    path: String,
+) -> Result<(), String> {
+    let folder = PathBuf::from(path.trim());
+    if !folder.is_absolute() {
+        return Err("Choose an absolute folder.".to_string());
+    }
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("failed to create {}: {error}", folder.display()))?;
+    if !folder.is_dir() {
+        return Err(format!("{} is not a folder.", folder.display()));
+    }
+
+    // Fail here rather than at the next launch when the folder is read-only.
+    let probe = folder.join(".cowbot-write-test");
+    std::fs::write(&probe, b"")
+        .map_err(|error| format!("{} is not writable: {error}", folder.display()))?;
+    let _ = std::fs::remove_file(&probe);
+
+    let mut config = config::load(&state.config_path).unwrap_or_default();
+    config.database_dir = Some(folder.to_string_lossy().into_owned());
+    config.active_workspace_database = None;
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))?;
+    app.restart();
 }
 
 #[tauri::command]
 pub fn get_onboarding_state(state: State<'_, AppState>) -> Result<OnboardingState, String> {
     let config = load_config(&state)?;
-    Ok(onboarding_state(&config))
+    Ok(onboarding_state(&config, &state))
 }
 
 /// Mark the guided first-run setup as completed or skipped.
@@ -2515,7 +2638,7 @@ pub fn complete_onboarding(state: State<'_, AppState>) -> Result<OnboardingState
     let mut config = load_config(&state)?;
     config.onboarding_completed = true;
     let config = persist_config(&state, config)?;
-    Ok(onboarding_state(&config))
+    Ok(onboarding_state(&config, &state))
 }
 
 /// Build version and update-check preference shown in the About settings section.
@@ -2524,6 +2647,8 @@ pub fn complete_onboarding(state: State<'_, AppState>) -> Result<OnboardingState
 pub struct AppInfo {
     pub version: String,
     pub auto_check_updates: bool,
+    /// Schema version of the workspace database this build provides.
+    pub database_schema: i64,
 }
 
 #[tauri::command]
@@ -2532,6 +2657,7 @@ pub fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInf
     Ok(AppInfo {
         version: app.package_info().version.to_string(),
         auto_check_updates,
+        database_schema: cowbot_client::latest_database_schema_version(),
     })
 }
 
@@ -2614,7 +2740,7 @@ pub fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<WorkspaceView>,
             database: entry.database.clone(),
             name: entry.name.clone(),
             active: entry.database == active,
-            available: config::resolve_database_path(&state.data_dir, &entry.database)
+            available: config::resolve_database_path(&state.database_dir, &entry.database)
                 .map(|path| path.exists())
                 .unwrap_or(false),
         })
@@ -2629,7 +2755,7 @@ pub fn switch_workspace(
     database: String,
 ) -> Result<(), String> {
     ensure_no_running_tasks(&state)?;
-    let path = config::resolve_database_path(&state.data_dir, &database)?;
+    let path = config::resolve_database_path(&state.database_dir, &database)?;
     if !path.exists() {
         return Err("Workspace database was not found.".to_string());
     }
@@ -2716,7 +2842,7 @@ pub async fn import_workspace(
         .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
 
     let database = format!("{}/{}.db", config::WORKSPACES_DIR, WorkspaceId::random().0);
-    let database_path = config::resolve_database_path(&state.data_dir, &database)?;
+    let database_path = config::resolve_database_path(&state.database_dir, &database)?;
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
@@ -2760,7 +2886,7 @@ pub async fn create_workspace(
 
     let name = name.trim();
     let database = format!("{}/{}.db", config::WORKSPACES_DIR, WorkspaceId::random().0);
-    let database_path = config::resolve_database_path(&state.data_dir, &database)?;
+    let database_path = config::resolve_database_path(&state.database_dir, &database)?;
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
