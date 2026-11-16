@@ -109,7 +109,8 @@ roster and no provider list, and the aliases a UI accepts (`auto` for
   and the fetched JSON — but only the Rust one is authored; the JSON is derived.
 - A command that needs a new capability (a side question, a CLI executor) must
   add its handler where the capability lives, not in the parser.
-- Unknown-token handling makes `/`-prefixed text safe to type, at the cost of
-  one Escape press before sending a line that starts with a path-like slash.
+- Unknown-token handling makes `/`-prefixed text safe to type: a path-like line
+  with arguments after the token is sent directly, and a bare unknown token
+  costs one Escape press before it can be sent as a message.
 - The catalogue's `target` field is advisory: the desktop enforces conversation
   commands, and another client is expected to enforce it too.

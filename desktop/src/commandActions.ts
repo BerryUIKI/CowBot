@@ -1,5 +1,6 @@
 import { approvalLevelLabel, approvalModes } from "./types";
 import type { ApprovalLevel } from "./types";
+import { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
 
 /// The state a command handler reads: the chat it applies to, the roster it
@@ -61,16 +62,9 @@ const APPROVAL_ALIASES: Record<string, ApprovalLevel> = {
   bypass: "trusted",
 };
 
-const SETTINGS_IDS: readonly SettingsSection[] = [
-  "model",
-  "team",
-  "memory",
-  "approvals",
-  "audit",
-  "projects",
-  "workspace",
-  "about",
-];
+const SETTINGS_IDS: readonly SettingsSection[] = settingsSections.map(
+  (section) => section.id,
+);
 
 /// Resolve an `@participant` argument against the roster, case-insensitively.
 ///
@@ -115,6 +109,81 @@ export function resolveModel(
   const active = matches.find((match) => match.active);
   if (active) return { kind: "active", model: active.model };
   return { kind: "other", model: matches[0].model, provider: matches[0].provider };
+}
+
+/// One value the composer offers while the first argument of a command is
+/// being typed.
+export interface ArgumentSuggestion {
+  /// Text inserted in place of the partial argument.
+  value: string;
+  /// Primary row text.
+  label: string;
+  /// Secondary row text, such as the provider or a mode's display name.
+  hint?: string;
+}
+
+const MAX_ARGUMENT_ROWS = 8;
+
+/// Values that complete the first argument of a command.
+///
+/// Only values the desktop can enumerate are covered; free-text arguments
+/// (`/rename`, `/task`, `/remember`, `/note`, `/btw`) return nothing.
+export function argumentSuggestions(
+  commandName: string,
+  query: string,
+  targets: Pick<CommandTargets, "participants" | "providers">,
+): ArgumentSuggestion[] {
+  const needle = query.trim().replace(/^@/, "").toLowerCase();
+
+  switch (commandName) {
+    case "model": {
+      // The composer can only switch models on an active provider; another
+      // provider's model is rejected by /model with an activation hint.
+      const rows: ArgumentSuggestion[] = [];
+      const seen = new Set<string>();
+      for (const provider of targets.providers) {
+        if (!provider.active) continue;
+        for (const model of provider.models) {
+          const key = model.toLowerCase();
+          if (seen.has(key) || !key.includes(needle)) continue;
+          seen.add(key);
+          rows.push({ value: model, label: model, hint: provider.name });
+        }
+      }
+      return rows.slice(0, MAX_ARGUMENT_ROWS);
+    }
+
+    case "approval":
+      return approvalModes
+        .filter((mode) => mode.value.toLowerCase().startsWith(needle))
+        .map((mode) => ({
+          value: mode.value,
+          label: mode.value,
+          hint: mode.label,
+        }));
+
+    case "settings":
+      return settingsSections
+        .filter((section) => section.id.toLowerCase().startsWith(needle))
+        .map((section) => ({
+          value: section.id,
+          label: section.id,
+          hint: section.label,
+        }));
+
+    case "compact":
+    case "clear":
+      return targets.participants
+        .filter((participant) => participant.name.toLowerCase().startsWith(needle))
+        .map((participant) => ({
+          value: `@${participant.name}`,
+          label: `@${participant.name}`,
+        }))
+        .slice(0, MAX_ARGUMENT_ROWS);
+
+    default:
+      return [];
+  }
 }
 
 /// `compact` and `clear` read a branch, so they only apply where the desktop
