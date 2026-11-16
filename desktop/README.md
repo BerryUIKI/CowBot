@@ -129,7 +129,9 @@ build's and shows a startup screen in the app. Pending migrations offer
 `cowbot.db.backup-<from>-<timestamp>`), or **Quit**; a database from a newer
 build offers a compatible backup, an empty workspace, or Quit (ADR-0051). The
 first-run guide can move the workspace databases to another folder, and a
-second launch focuses the open window instead of starting another copy.
+second launch focuses the open window instead of starting another copy. Only the
+release build takes that instance lock, so `tauri dev` can run beside an
+installed CowBot instead of being mistaken for it.
 
 ## Build
 

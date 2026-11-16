@@ -110,6 +110,15 @@ relative path. The folder is also where backup discovery looks.
 window, so two processes cannot open the same workspace database. The plugin is
 registered first, as it requires.
 
+The lock belongs to the release build only. The plugin names its lock after the
+bundle identifier, which a development build shares with the installed app even
+though the two keep separate data (`app_data_dir()/dev`). Registering it in both
+made launching the installed app while `tauri dev` was running exit the
+installed process and focus the development window — an app that opens with an
+empty workspace and no model configuration. A debug build therefore skips the
+plugin, and the invariant it protects (one process per data directory) holds:
+the two builds never share one.
+
 ## Alternatives considered
 
 - **`Migrator::ignore_missing(true)`.** Would let an older build open a newer
@@ -145,9 +154,9 @@ registered first, as it requires.
 - The welcome step can move the workspace databases to another folder and
   restarts the app to apply it. An existing workspace is not moved; the new
   folder starts with its own `cowbot.db`.
-- A second launch focuses the running window instead of opening a second copy,
-  including a debug build while an installed release runs, because both use the
-  same bundle identifier.
+- A second launch of the same build focuses the running window instead of
+  opening a second copy. A debug build does not take the instance lock, so it
+  can run beside the installed app it keeps separate data from.
 - A backup kept outside the database folder is not discovered; copy it in or
   rename it to `<db>.backup-*` first.
 - The desktop still refuses a database whose newest *recorded* migration is
