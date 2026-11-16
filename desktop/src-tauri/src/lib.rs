@@ -120,15 +120,26 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
-        // Keep one CowBot per machine: a second launch focuses the open window
-        // instead of opening a copy over the same workspace database.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
+    let builder = tauri::Builder::default();
+
+    // Keep one CowBot per machine: a second launch focuses the open window
+    // instead of opening a copy over the same workspace database.
+    //
+    // Only a release build claims that lock. The plugin derives its lock name
+    // from the bundle identifier alone, and a development build keeps its
+    // workspace under `app_data_dir()/dev` instead of the installed app's data
+    // directory. Sharing the lock would make the installed app exit and focus
+    // the development window whenever `tauri dev` is running, which looks like
+    // the app opening with an empty workspace.
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

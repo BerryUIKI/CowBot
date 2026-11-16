@@ -155,8 +155,8 @@ expect.
   opened by an older build. Recovery restores a backup or starts an empty
   workspace; it never deletes the database it replaces.
 - **Only one CowBot window runs at a time.** Launching the app again focuses the
-  open window instead of starting a second copy, including a development build
-  while an installed release is running.
+  open window instead of starting a second copy. A development build is exempt:
+  it keeps its own data under `dev/`, so it can run beside the installed app.
 - **Builds are unsigned.** macOS may ask you to allow CowBot again after an
   update, and Windows may show a SmartScreen prompt. See
   [ADR-0014](ADR/0014-desktop-release-builds.md).
