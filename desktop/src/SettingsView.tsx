@@ -69,7 +69,7 @@ export type SettingsSection =
   | "about";
 
 export const settingsSections: { id: SettingsSection; label: string }[] = [
-  { id: "model", label: "Model" },
+  { id: "model", label: "Models" },
   { id: "team", label: "Team" },
   { id: "memory", label: "Memory" },
   { id: "approvals", label: "Approvals" },
@@ -452,7 +452,7 @@ export default function SettingsView({
       <header className="view-header">
         <h2 className="view-title">Settings</h2>
         <p className="view-subtitle">
-          Model providers, team, and workspace details for this workspace.
+          Default model, connections, team, and workspace details for this workspace.
         </p>
       </header>
 
@@ -461,10 +461,12 @@ export default function SettingsView({
           {section === "model" ? (
             <section className="settings-section" aria-labelledby="settings-model">
               <div className="settings-section-head">
-                <h3 id="settings-model">Model providers</h3>
+                <h3 id="settings-model">Models</h3>
                 <p className="settings-hint">
-                  Connect an OpenAI-compatible, Anthropic-compatible, or Responses-compatible
-                  endpoint. Without an active provider, CowBot uses the offline mock model.
+                  Choose the default model agents run, and manage the connections
+                  that supply models. A connection can be OpenAI-compatible,
+                  Anthropic-compatible, or Responses-compatible; without one,
+                  CowBot runs the offline echo model.
                 </p>
               </div>
               <ModelProviderSettings />

@@ -68,6 +68,9 @@ pub struct SettingsBody {
     pub muted_participants: Option<Vec<String>>,
     pub reply_cleanup: Option<bool>,
     pub default_responder: Option<String>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub model_follows_default: Option<bool>,
 }
 
 pub async fn update_settings(
@@ -96,6 +99,9 @@ pub async fn update_settings(
             .map(|ids| ids.into_iter().map(AgentId::new).collect()),
         reply_cleanup: body.reply_cleanup,
         default_responder: body.default_responder.map(AgentId::new),
+        provider_id: body.provider_id,
+        model: body.model,
+        model_follows_default: body.model_follows_default,
     };
     let settings = state
         .conversations(&workspace_id)

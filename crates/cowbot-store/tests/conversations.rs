@@ -104,6 +104,53 @@ async fn conversation_round_trips_with_participant_and_settings() {
 }
 
 #[tokio::test]
+async fn conversation_model_scope_round_trips() {
+    let store = test_store().await;
+    let workspace = seed_workspace(&store).await;
+    let channel = Channel::conversation("Model scope", "Conversation with Planner");
+    let settings = ConversationSettings::new(
+        channel.id.clone(),
+        Some("provider-1".to_string()),
+        "deepseek-chat",
+    );
+    assert!(settings.model_follows_default);
+
+    store
+        .create_conversation(
+            &workspace.id,
+            &channel,
+            &settings,
+            &[AgentId::new("agent-planner")],
+        )
+        .await
+        .unwrap();
+
+    let stored = store
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.model_follows_default);
+    assert_eq!(stored.model, "deepseek-chat");
+
+    let mut pinned = stored;
+    pinned.model_follows_default = false;
+    pinned.provider_id = Some("provider-2".to_string());
+    pinned.model = "qwen-plus".to_string();
+    pinned.updated_at = Utc::now();
+    store.update_conversation_settings(&pinned).await.unwrap();
+
+    let reloaded = store
+        .get_conversation_settings(&channel.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!reloaded.model_follows_default);
+    assert_eq!(reloaded.provider_id.as_deref(), Some("provider-2"));
+    assert_eq!(reloaded.model, "qwen-plus");
+}
+
+#[tokio::test]
 async fn compaction_reports_a_branch_it_cannot_renumber() {
     let store = test_store().await;
     let workspace = seed_workspace(&store).await;

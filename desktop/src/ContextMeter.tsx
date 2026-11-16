@@ -592,8 +592,15 @@ export default function ContextMeter({
                             />
 
                             <p className="context-meta">
-                              {context.model}
-                              {context.provider_id ? ` · ${context.provider_id}` : ""} ·{" "}
+                              {context.provider_id ? context.model : "Offline model"}
+                              {context.provider_name
+                                ? ` · ${context.provider_name}`
+                                : ""}{" "}
+                              ·{" "}
+                              {context.model_follows_default
+                                ? "follows default"
+                                : "pinned"}
+                              {" · "}
                               {current.active_entries} active
                               {current.excluded_entries > 0
                                 ? `, ${current.excluded_entries} excluded`

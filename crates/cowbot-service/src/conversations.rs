@@ -338,6 +338,24 @@ impl ConversationService {
             }
             settings.muted_participants = unique;
         }
+        if let Some(model) = &update.model {
+            let model = model.trim();
+            if model.is_empty() {
+                return Err(CowError::Config(
+                    "a conversation needs a model; configure a model provider first".into(),
+                ));
+            }
+            settings.model = model.to_string();
+        }
+        if let Some(provider_id) = &update.provider_id {
+            // An empty id means "no provider recorded", which happens when the
+            // desktop is running the offline mock.
+            let provider_id = provider_id.trim();
+            settings.provider_id = (!provider_id.is_empty()).then(|| provider_id.to_string());
+        }
+        if let Some(follows) = update.model_follows_default {
+            settings.model_follows_default = follows;
+        }
         settings.updated_at = chrono::Utc::now();
         self.store.update_conversation_settings(&settings).await?;
         Ok(settings)

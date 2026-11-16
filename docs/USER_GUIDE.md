@@ -46,36 +46,49 @@ You can skip setup at any point. Everything is available later in **Settings**
 
 ## Connect a model
 
-Open **Settings → Model**. Providers are model endpoints; CowBot ships with an
-offline mock model and uses it whenever no provider is active.
+Open **Settings → Models**. The page has two parts: the default model at the
+top, and the connections that supply models below it. CowBot runs the offline
+echo model whenever no connection is active.
 
-1. **Add provider** opens a vendor catalogue grouped into model vendors,
+### Default model
+
+The default model is what tasks, channels, agent direct chats, and new
+conversations run. Pick one from the selector; choosing a model from another
+connection also makes that connection the active one. **Offline (no model)**
+runs without calling an endpoint. **Test** sends one small request to the
+selected model. The line below the selector shows the protocol, endpoint, and
+the model's known context window.
+
+### Connections
+
+1. **Add connection** opens a vendor catalogue grouped into model vendors,
    third-party platforms and relays, cloud providers, and local runtimes. Search
    the catalogue by name or URL.
 2. Pick a vendor to pre-fill the form, or **Custom** for a blank form and any
    compatible endpoint. Every field stays editable.
-3. **Protocol** is a dropdown in the form:
+3. Enter the name, base URL, and the first model. **Fetch models** asks the
+   endpoint which models the key can use; if it has no usable listing, type a
+   model name instead. Discovery is optional and never blocks saving.
+4. Enter the API key if the endpoint needs one. Local endpoints usually do not.
+5. **Advanced** holds the protocol:
    - **OpenAI Chat** — the Chat Completions API, used by OpenAI, DeepSeek,
      Ollama, OpenRouter, and most relays.
    - **Anthropic** — the Messages API, used by Claude and Claude
      Code-compatible relays.
    - **Responses** — the OpenAI Responses API, used by Codex-style endpoints.
+6. **Test connection** sends one small request. **Add connection** saves it.
 
-   Changing the protocol keeps the name, base URL, and model you entered.
-4. **Fetch models** asks the endpoint which models the key can use and adds them
-   to the model dropdown. Pick the active model there. If the endpoint has no
-   usable listing, the error appears beside the field; use **Add manually** to
-   type a model name instead. Discovery is optional and never blocks saving.
-5. Enter the API key if the endpoint needs one. Local endpoints usually do not.
-6. **Test connection** sends one small request. The result appears in the
-   editor.
-7. **Save provider**. The first provider becomes active; use **Use** on another
-   card to switch, or **Use offline mock** to run without a model. Each card
-   shows its active model and how many models the provider knows.
+The first connection becomes the default. A saved connection lists its models:
 
-A provider can hold several models. To change the active one, choose **Edit**,
-pick another model, and save; the stored API key is kept, so you never retype
-it.
+- Choose a model to make it the default.
+- **Limits** sets that model's context window and output limit.
+- **Manage models** fetches, adds, and removes the models the connection knows.
+- **Edit connection** changes the name, base URL, API key, or protocol.
+- **Delete** removes the connection; conversations that used it switch to the
+  default.
+
+Saving a connection never changes which model runs. A connection can hold
+several models, and each keeps its own limits.
 
 The base URL may be a bare host (`https://api.anthropic.com`), include `/v1`, or
 be the full endpoint (`https://api.anthropic.com/v1/messages`). CowBot appends
@@ -93,8 +106,8 @@ file as sensitive data.
   Check that the protocol matches the provider (for example, a Claude relay
   needs **Anthropic**, not **OpenAI Chat**).
 - **Model listing failed** — the endpoint does not expose a models catalogue, or
-  it returned an unexpected shape. Type the model name with **Add manually** and
-  continue.
+  it returned an unexpected shape. Type the model name with **Manage models**
+  and continue.
 
 ## Workspaces
 
@@ -368,11 +381,18 @@ or compacting the context never deletes messages.
   GPT-3.5-turbo), or **Estimated from characters** for every other model. The
   memory figure stays labelled as an estimate because the next turn's memory
   block is still counted heuristically.
+- **Model scope.** A conversation records the model it runs. New conversations
+  follow the default model, so a change in **Settings → Models** applies to them
+  too; choosing a model from the composer's model button pins the conversation
+  to that model, and **Follow the default model** in the same menu returns it.
+  The button shows `· default` or `· pinned`, and the popover's meta line names
+  the provider and the scope. Channels, agent direct chats, and task runs always
+  use the default model.
 - In a group, the popover has one tab per participant with that branch's
   breakdown, latest-run cache figure, and conversation-total cache figure. The
   tabs are keyboard accessible with the left and right arrow keys.
-- Percentages need a context window. Set **Context window** (and optionally
-  **Max output**) for the model in **Settings → Model**. Without it the ring
+- Percentages need a context window. Set **Limits** (context window and output
+  limit) for the model from its row in **Settings → Models**. Without it the ring
   shows absolute tokens only.
 - **Cache hit rate** for the latest run and the whole conversation comes from
   the usage the provider reports. Router and compaction calls count toward the
@@ -650,7 +670,7 @@ cowbot import --input my-workspace.cowpkg --db other.db
   they are mentioned by name (`@Planner`); an unknown name posts a notice
   listing the agents that exist.
 - **An agent answer stops with an error** — the conversation shows a system
-  notice with the model error; check the active provider in **Settings → Model**.
+  notice with the model error; check the default model in **Settings → Models**.
 - **A workspace cannot be switched** — finish or cancel running tasks first.
 - **A workspace shows Missing** — its database file was moved or deleted; remove
   it from the registry by restarting, or restore the file.

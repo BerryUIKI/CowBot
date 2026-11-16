@@ -134,6 +134,14 @@ pub struct ConversationSettings {
     pub provider_id: Option<String>,
     /// Model every turn of this conversation uses.
     pub model: String,
+    /// Whether this conversation follows the desktop's default model.
+    ///
+    /// A following conversation mirrors the default's provider and model
+    /// whenever the default changes, so its meter and compaction keep the
+    /// tokenizer the next turn will use. Settings written before ADR-0049
+    /// deserialize as pinned, which is how they behaved.
+    #[serde(default)]
+    pub model_follows_default: bool,
     /// Participant that answers an unaddressed message, when one is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_responder: Option<AgentId>,
@@ -168,6 +176,7 @@ impl ConversationSettings {
             mode: ConversationMode::Single,
             provider_id,
             model: model.into(),
+            model_follows_default: true,
             default_responder: None,
             router_enabled: false,
             routing_mode: RoutingMode::Mention,
@@ -214,6 +223,15 @@ pub struct ConversationSettingsUpdate {
     /// Replace the participant that answers unaddressed messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_responder: Option<AgentId>,
+    /// Replace the provider snapshot; an empty string clears it.
+    pub provider_id: Option<String>,
+    /// Replace the model snapshot; the service rejects a blank model.
+    pub model: Option<String>,
+    /// Make the conversation follow, or stop following, the default model.
+    ///
+    /// Following carries the default's provider and model in the same update,
+    /// so a reader never sees the flag without the pair it refers to.
+    pub model_follows_default: Option<bool>,
 }
 
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
@@ -1075,6 +1093,44 @@ mod tests {
         fn label(&self) -> &'static str {
             "test characters"
         }
+    }
+
+    #[test]
+    fn new_settings_follow_the_default_model() {
+        let settings = ConversationSettings::new(
+            ChannelId::new("channel"),
+            Some("provider-1".to_string()),
+            "deepseek-chat",
+        );
+        assert!(settings.model_follows_default);
+
+        let group = ConversationSettings::group(
+            ChannelId::new("group"),
+            None,
+            "deepseek-chat",
+            Some(AgentId::new("agent")),
+        );
+        assert!(group.model_follows_default);
+    }
+
+    #[test]
+    fn settings_without_the_scope_flag_load_as_pinned() {
+        let saved = serde_json::json!({
+            "channel_id": "channel",
+            "mode": "single",
+            "provider_id": "provider-1",
+            "model": "deepseek-chat",
+            "router_enabled": false,
+            "routing_mode": "mention",
+            "muted_participants": [],
+            "reply_cleanup": true,
+            "auto_compact": false,
+            "compact_threshold": 80,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        });
+        let settings: ConversationSettings = serde_json::from_value(saved).unwrap();
+        assert!(!settings.model_follows_default);
     }
 
     #[test]

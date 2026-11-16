@@ -38,6 +38,7 @@ struct SettingsRow {
     mode: String,
     provider_id: Option<String>,
     model: String,
+    model_follows_default: i64,
     default_responder: Option<String>,
     router_enabled: i64,
     routing_mode: String,
@@ -63,6 +64,7 @@ impl SettingsRow {
             mode,
             provider_id: self.provider_id,
             model: self.model,
+            model_follows_default: self.model_follows_default != 0,
             default_responder: self.default_responder.map(AgentId),
             router_enabled: self.router_enabled != 0,
             routing_mode,
@@ -276,15 +278,21 @@ impl Store {
 
         sqlx::query(
             "INSERT INTO conversation_settings
-                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                (channel_id, mode, provider_id, model, model_follows_default,
+                 default_responder, router_enabled,
                  routing_mode, muted_participants, reply_cleanup,
                  auto_compact, compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(settings.routing_mode.as_str())
@@ -376,7 +384,8 @@ impl Store {
         channel_id: &ChannelId,
     ) -> CowResult<Option<ConversationSettings>> {
         let row = sqlx::query_as::<_, SettingsRow>(
-            "SELECT channel_id, mode, provider_id, model, default_responder, router_enabled,
+            "SELECT channel_id, mode, provider_id, model, model_follows_default,
+                    default_responder, router_enabled,
                     routing_mode, muted_participants, reply_cleanup,
                     auto_compact, compact_threshold, created_at, updated_at
              FROM conversation_settings WHERE channel_id = ?",
@@ -393,7 +402,8 @@ impl Store {
         workspace_id: &WorkspaceId,
     ) -> CowResult<Vec<ConversationSettings>> {
         let rows = sqlx::query_as::<_, SettingsRow>(
-            "SELECT s.channel_id, s.mode, s.provider_id, s.model, s.default_responder,
+            "SELECT s.channel_id, s.mode, s.provider_id, s.model,
+                    s.model_follows_default, s.default_responder,
                     s.router_enabled, s.routing_mode, s.muted_participants, s.reply_cleanup,
                     s.auto_compact, s.compact_threshold, s.created_at,
                     s.updated_at
@@ -415,7 +425,8 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "UPDATE conversation_settings
-             SET mode = ?, provider_id = ?, model = ?, default_responder = ?,
+             SET mode = ?, provider_id = ?, model = ?, model_follows_default = ?,
+                 default_responder = ?,
                  router_enabled = ?, routing_mode = ?, muted_participants = ?,
                  reply_cleanup = ?, auto_compact = ?, compact_threshold = ?, updated_at = ?
              WHERE channel_id = ?",
@@ -423,6 +434,11 @@ impl Store {
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(settings.routing_mode.as_str())
@@ -448,15 +464,21 @@ impl Store {
     ) -> CowResult<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO conversation_settings
-                (channel_id, mode, provider_id, model, default_responder, router_enabled,
+                (channel_id, mode, provider_id, model, model_follows_default,
+                 default_responder, router_enabled,
                  routing_mode, muted_participants, reply_cleanup,
                  auto_compact, compact_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&settings.channel_id.0)
         .bind(settings.mode.as_str())
         .bind(&settings.provider_id)
         .bind(&settings.model)
+        .bind(if settings.model_follows_default {
+            1i64
+        } else {
+            0i64
+        })
         .bind(settings.default_responder.as_ref().map(|agent| &agent.0))
         .bind(if settings.router_enabled { 1i64 } else { 0i64 })
         .bind(settings.routing_mode.as_str())

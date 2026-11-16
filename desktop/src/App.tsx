@@ -703,7 +703,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [contextVersion, selectedChannel]);
+  }, [contextVersion, selectedChannel, view]);
 
   // A preview belongs to one conversation; switching chats clears it so the
   // inspector never shows another conversation's request.
@@ -1667,21 +1667,72 @@ export default function App() {
   }
 
   function openModelMenuAt(left: number, top: number) {
-    const modelCount =
-      modelSettings?.providers.find((provider) => provider.active)?.models
-        .length ?? 1;
+    const scopeProvider =
+      selectedChannel?.kind === "conversation" && conversationContext
+        ? modelSettings?.providers.find(
+            (provider) => provider.id === conversationContext.provider_id,
+          )
+        : modelSettings?.providers.find((provider) => provider.active);
+    const followItem =
+      selectedChannel?.kind === "conversation" &&
+      conversationContext &&
+      !conversationContext.model_follows_default
+        ? 1
+        : 0;
+    const modelCount = (scopeProvider?.models.length ?? 1) + followItem;
     setModelMenu({
       x: left,
       y: Math.max(8, top - 12 - (modelCount + 1) * 34),
     });
   }
 
-  async function handleComposerModel(model: string) {
-    const provider = modelSettings?.providers.find((candidate) => candidate.active);
-    if (!provider) return;
+  /// Change the model that answers here: the conversation's own model in a
+  /// conversation, the default everywhere else (ADR-0049).
+  async function handleComposerModel(providerId: string, model: string) {
     setError(null);
     try {
-      setModelSettings(await setActiveModel(provider.id, model));
+      if (selectedChannel?.kind === "conversation" && conversationContext) {
+        const context = await updateConversationSettings(
+          selectedChannel.id,
+          conversationContext.auto_compact,
+          conversationContext.compact_threshold,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          providerId,
+          model,
+          false,
+        );
+        setConversationContext(context);
+        return;
+      }
+      setModelSettings(await setActiveModel(providerId, model));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  /// Drop a conversation's pinned model and follow the default again.
+  async function handleFollowDefaultModel() {
+    if (selectedChannel?.kind !== "conversation" || !conversationContext) return;
+    setError(null);
+    try {
+      const context = await updateConversationSettings(
+        selectedChannel.id,
+        conversationContext.auto_compact,
+        conversationContext.compact_threshold,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      setConversationContext(context);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -2809,20 +2860,54 @@ export default function App() {
 
   const activeModelProvider =
     modelSettings?.providers.find((provider) => provider.active) ?? null;
-  const activeModelLabel = activeModelProvider?.model ?? "Mock model";
+  /// A conversation runs on its own recorded model; channels and direct chats
+  /// run on the default (ADR-0049).
+  const conversationScope =
+    selectedChannel?.kind === "conversation" ? conversationContext : null;
+  const composerProvider = conversationScope
+    ? (modelSettings?.providers.find(
+        (provider) => provider.id === conversationScope.provider_id,
+      ) ?? null)
+    : activeModelProvider;
+  const composerModel = conversationScope
+    ? conversationScope.model
+    : (activeModelProvider?.model ?? null);
+  /// The offline runtime reports its placeholder model name; present it as
+  /// "Offline model" when no connection supplies the conversation.
+  const composerModelLabel = conversationScope
+    ? conversationScope.provider_id
+      ? conversationScope.model
+      : "Offline model"
+    : (activeModelProvider?.model ?? "Offline model");
+  const composerModelTitle = conversationScope
+    ? `Conversation model: ${composerModelLabel} (${
+        conversationScope.model_follows_default ? "follows the default" : "pinned"
+      })`
+    : activeModelProvider
+      ? `${activeModelProvider.name} · ${activeModelProvider.model}`
+      : "Offline model";
   const modelMenuItems: ContextMenuItem[] = modelMenu
     ? [
-        ...(activeModelProvider
-          ? activeModelProvider.models.map((model) => ({
-              label: `${model === activeModelProvider.model ? "✓ " : ""}${model}`,
-              onSelect: () => void handleComposerModel(model),
+        ...(composerProvider
+          ? composerProvider.models.map((model) => ({
+              label: `${model === composerModel ? "✓ " : ""}${model}`,
+              onSelect: () =>
+                void handleComposerModel(composerProvider.id, model),
             }))
           : [
               {
-                label: "Mock model (offline)",
+                label: "Offline model",
                 onSelect: () => undefined,
               },
             ]),
+        ...(conversationScope && !conversationScope.model_follows_default
+          ? [
+              {
+                label: "Follow the default model",
+                onSelect: () => void handleFollowDefaultModel(),
+              },
+            ]
+          : []),
         {
           label: "Manage models…",
           onSelect: () => {
@@ -3979,14 +4064,15 @@ export default function App() {
                   className="composer-model"
                   aria-haspopup="menu"
                   aria-expanded={modelMenu !== null}
-                  title={
-                    activeModelProvider
-                      ? `${activeModelProvider.name} · ${activeModelProvider.model}`
-                      : "Offline mock model"
-                  }
+                  title={composerModelTitle}
                   onClick={openModelMenu}
                 >
-                  {activeModelLabel}
+                  {composerModelLabel}
+                  {conversationScope
+                    ? conversationScope.model_follows_default
+                      ? " · default"
+                      : " · pinned"
+                    : ""}
                 </button>
                 {agents.length > 0 ? (
                   <ApprovalModeMenu

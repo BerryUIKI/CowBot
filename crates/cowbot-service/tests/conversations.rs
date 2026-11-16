@@ -1645,6 +1645,56 @@ async fn group_without_a_mention_or_default_responder_is_silent() {
 }
 
 #[tokio::test]
+async fn conversation_model_scope_follows_or_pins_through_update() {
+    let (_store, _agent, service, _channels, channel) = setup().await;
+    let settings = service.settings(&channel.id).await.unwrap();
+    assert!(settings.model_follows_default);
+
+    let pinned = service
+        .update_settings(
+            &channel.id,
+            &ConversationSettingsUpdate {
+                provider_id: Some("provider-2".to_string()),
+                model: Some("qwen-plus".to_string()),
+                model_follows_default: Some(false),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!pinned.model_follows_default);
+    assert_eq!(pinned.provider_id.as_deref(), Some("provider-2"));
+    assert_eq!(pinned.model, "qwen-plus");
+
+    let following = service
+        .update_settings(
+            &channel.id,
+            &ConversationSettingsUpdate {
+                provider_id: Some(String::new()),
+                model: Some("deepseek-chat".to_string()),
+                model_follows_default: Some(true),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(following.model_follows_default);
+    assert_eq!(following.provider_id, None);
+    assert_eq!(following.model, "deepseek-chat");
+
+    let rejected = service
+        .update_settings(
+            &channel.id,
+            &ConversationSettingsUpdate {
+                model: Some("   ".to_string()),
+                ..ConversationSettingsUpdate::default()
+            },
+        )
+        .await;
+    assert!(matches!(rejected, Err(CowError::Config(_))));
+}
+
+#[tokio::test]
 async fn group_default_responder_answers_an_unaddressed_message() {
     let fixture = group_fixture(None).await;
     let planner = fixture.participants[0].id.clone();
