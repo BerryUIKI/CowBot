@@ -11,6 +11,7 @@ import {
 import { slotLabels } from "./ContextInspector";
 import { errorMessage } from "./errors";
 import { formatDateTime, formatTime, formatTokens } from "./format";
+import { t, type TranslationKey } from "./i18n/catalog";
 import type {
   LlmCallKind,
   PromptSnapshotDetail,
@@ -19,27 +20,29 @@ import type {
 } from "./types";
 import Modal from "./Modal";
 
-const callKindLabels: Record<LlmCallKind, string> = {
-  agent: "Agent",
-  router: "Router",
-  summary: "Summary",
-  compact: "Compaction",
-  memory_extract: "Memory extraction",
-  side_question: "Side question",
+const callKindLabels: Record<LlmCallKind, TranslationKey> = {
+  agent: "snapshot.callKind.agent",
+  router: "snapshot.callKind.router",
+  summary: "snapshot.callKind.summary",
+  compact: "snapshot.callKind.compact",
+  memory_extract: "snapshot.callKind.memoryExtraction",
+  side_question: "snapshot.callKind.sideQuestion",
 };
 
-const roleLabels: Record<string, string> = {
-  system: "System",
-  user: "User",
-  assistant: "Assistant",
-  tool: "Tool",
+const roleLabels: Record<string, TranslationKey> = {
+  system: "context.inspector.roleSystem",
+  user: "context.inspector.roleUser",
+  assistant: "context.inspector.roleAssistant",
+  tool: "context.inspector.roleTool",
 };
 
 /** One-line label for a stored snapshot list row. */
 function summaryLabel(summary: PromptSnapshotSummary): string {
-  return `${callKindLabels[summary.call_kind]} · ${summary.model} · ${formatTokens(
-    summary.token_count,
-  )}`;
+  return t("snapshot.summaryLine", {
+    kind: t(callKindLabels[summary.call_kind]),
+    model: summary.model,
+    tokens: formatTokens(summary.token_count),
+  });
 }
 
 /**
@@ -81,15 +84,15 @@ export function PromptSnapshotViewer({
 
   return (
     <Modal
-      title="Recorded prompt"
+      title={t("snapshot.title")}
       onClose={onClose}
       footer={
         <button type="button" className="ghost-button" onClick={onClose}>
-          Close
+          {t("snapshot.close")}
         </button>
       }
     >
-      {loading ? <p className="muted">Loading the snapshot…</p> : null}
+      {loading ? <p className="muted">{t("snapshot.loading")}</p> : null}
       {error ? (
         <p className="dialog-error" role="alert">
           {error}
@@ -97,8 +100,7 @@ export function PromptSnapshotViewer({
       ) : null}
       {!loading && !error && !snapshot ? (
         <p className="muted">
-          This call has no stored snapshot. Prompt snapshots may be turned off
-          for the workspace, or the call happened before they were recorded.
+          {t("snapshot.none")}
         </p>
       ) : null}
 
@@ -106,58 +108,54 @@ export function PromptSnapshotViewer({
         <div className="snapshot-viewer">
           <dl className="snapshot-meta">
             <div>
-              <dt>Kind</dt>
-              <dd>{callKindLabels[snapshot.call_kind]}</dd>
+              <dt>{t("snapshot.kind")}</dt>
+              <dd>{t(callKindLabels[snapshot.call_kind])}</dd>
             </div>
             <div>
-              <dt>Model</dt>
+              <dt>{t("snapshot.model")}</dt>
               <dd>{snapshot.model}</dd>
             </div>
             <div>
-              <dt>Tokens</dt>
+              <dt>{t("snapshot.tokens")}</dt>
               <dd>{formatTokens(snapshot.token_count)}</dd>
             </div>
             <div>
-              <dt>Recorded</dt>
+              <dt>{t("snapshot.recordedAt")}</dt>
               <dd>{formatDateTime(snapshot.created_at)}</dd>
             </div>
             <div>
-              <dt>Stored size</dt>
+              <dt>{t("snapshot.storedSize")}</dt>
               <dd>{formatTokens(detail.summary.byte_size)}</dd>
             </div>
           </dl>
 
           {detail.hash_mismatch ? (
             <p className="dialog-error" role="alert">
-              The stored document no longer matches its content hash. Treat it
-              as untrusted evidence.
+              {t("snapshot.hashMismatch")}
             </p>
           ) : null}
           {snapshot.redacted ? (
             <p className="snapshot-note">
-              Credential-shaped content was removed before storage.
+              {t("snapshot.redactedNote")}
             </p>
           ) : null}
           {snapshot.truncated ? (
             <p className="snapshot-note">
-              The payload was shortened to fit the size bound.
-              {snapshot.omitted_messages > 0
-                ? ` ${snapshot.omitted_messages} older message${
-                    snapshot.omitted_messages === 1 ? "" : "s"
-                  } were omitted.`
-                : ""}
+              {t("snapshot.truncatedNote", {
+                count: snapshot.omitted_messages,
+              })}
             </p>
           ) : null}
 
           {(snapshot.slots?.length ?? 0) > 0 ? (
             <section className="snapshot-section">
-              <h4>System prompt slots</h4>
+              <h4>{t("snapshot.slotsTitle")}</h4>
               <ul className="prompt-slots">
                 {(snapshot.slots ?? []).map((slot) => (
                   <li key={slot.name}>
                     <details>
                       <summary>
-                        <span>{slotLabels[slot.name] ?? slot.name}</span>
+                        <span>{t(slotLabels[slot.name])}</span>
                         <span className="muted">{formatTokens(slot.tokens)}</span>
                       </summary>
                       <pre className="context-inspector-content">
@@ -171,14 +169,16 @@ export function PromptSnapshotViewer({
           ) : null}
 
           <section className="snapshot-section">
-            <h4>Messages</h4>
+            <h4>{t("snapshot.messagesTitle")}</h4>
             <ol className="prompt-messages">
               {(snapshot.messages ?? []).map((message, index) => (
                 <li key={`${index}-${message.role}`}>
                   <details>
                     <summary>
                       <span className={`prompt-role prompt-role-${message.role}`}>
-                        {roleLabels[message.role] ?? message.role}
+                        {roleLabels[message.role]
+                          ? t(roleLabels[message.role])
+                          : message.role}
                       </span>
                       {message.name ? (
                         <span className="muted">{message.name}</span>
@@ -189,7 +189,7 @@ export function PromptSnapshotViewer({
                       </span>
                     </summary>
                     <pre className="context-inspector-content">
-                      {message.content || "(no text)"}
+                      {message.content || t("snapshot.noText")}
                     </pre>
                     {(message.tool_calls?.length ?? 0) > 0 ? (
                       <ul className="snapshot-tool-calls">
@@ -204,7 +204,11 @@ export function PromptSnapshotViewer({
                       </ul>
                     ) : null}
                     {message.tool_call_id ? (
-                      <p className="muted">Answers call {message.tool_call_id}</p>
+                      <p className="muted">
+                        {t("snapshot.answersCall", {
+                          id: message.tool_call_id,
+                        })}
+                      </p>
                     ) : null}
                   </details>
                 </li>
@@ -213,9 +217,9 @@ export function PromptSnapshotViewer({
           </section>
 
           <section className="snapshot-section">
-            <h4>Tools</h4>
+            <h4>{t("snapshot.toolsTitle")}</h4>
             {snapshot.tools.length === 0 ? (
-              <p className="muted">This request sent no tool schemas.</p>
+              <p className="muted">{t("snapshot.noTools")}</p>
             ) : (
               <ul className="prompt-slots">
                 {snapshot.tools.map((tool) => (
@@ -237,20 +241,22 @@ export function PromptSnapshotViewer({
 
           {snapshot.memory ? (
             <section className="snapshot-section">
-              <h4>Memory</h4>
+              <h4>{t("snapshot.memoryTitle")}</h4>
               <pre className="context-inspector-content">
                 {snapshot.memory.block}
               </pre>
               {(snapshot.selected_memory_ids?.length ?? 0) > 0 ? (
                 <p className="muted">
-                  Selected entries: {(snapshot.selected_memory_ids ?? []).join(", ")}
+                  {t("snapshot.selectedEntries", {
+                    ids: (snapshot.selected_memory_ids ?? []).join(", "),
+                  })}
                 </p>
               ) : null}
             </section>
           ) : null}
 
           <p className="snapshot-hash">
-            <span className="muted">Content hash</span>{" "}
+            <span className="muted">{t("snapshot.contentHash")}</span>{" "}
             <code>{snapshot.content_hash}</code>
           </p>
         </div>
@@ -291,13 +297,12 @@ export function RunPromptSnapshots({ runId }: { runId: string }) {
     );
   }
   if (!summaries) {
-    return <p className="muted">Loading recorded prompts…</p>;
+    return <p className="muted">{t("snapshot.loadingRun")}</p>;
   }
   if (summaries.length === 0) {
     return (
       <p className="muted">
-        No prompt snapshots recorded for this run. They may be turned off in
-        Settings → Audit, or the run predates them.
+        {t("snapshot.noneForRun")}
       </p>
     );
   }
@@ -313,15 +318,19 @@ export function RunPromptSnapshots({ runId }: { runId: string }) {
               onClick={() => setOpenCall(summary.llm_call_id)}
             >
               <span className="snapshot-kind">
-                {callKindLabels[summary.call_kind]}
+                {t(callKindLabels[summary.call_kind])}
               </span>
               <span className="muted">{summary.model}</span>
               <span className="muted">{formatTokens(summary.token_count)}</span>
               {summary.redacted ? (
-                <span className="settings-badge">Redacted</span>
+                <span className="settings-badge">
+                  {t("snapshot.redactedBadge")}
+                </span>
               ) : null}
               {summary.truncated ? (
-                <span className="settings-badge">Truncated</span>
+                <span className="settings-badge">
+                  {t("snapshot.truncatedBadge")}
+                </span>
               ) : null}
               <time className="summary-time">
                 {formatTime(summary.created_at)}
@@ -351,7 +360,9 @@ export function RunPromptSnapshotsToggle({ runId }: { runId: string }) {
         aria-expanded={shown}
         onClick={() => setShown((value) => !value)}
       >
-        {shown ? "Hide recorded prompts" : "Recorded prompts"}
+        {shown
+          ? t("snapshot.hideRecorded")
+          : t("snapshot.recorded")}
       </button>
       {shown ? <RunPromptSnapshots runId={runId} /> : null}
     </div>
@@ -421,10 +432,7 @@ export function PromptSnapshotAuditPanel() {
   return (
     <div className="snapshot-audit">
       <p className="muted">
-        Every model call can store the request it sent — messages, tool
-        schemas, prompt slots, and the memory it selected — redacted before
-        storage. Snapshots are device-local evidence and never leave this
-        workspace.
+        {t("snapshot.auditIntro")}
       </p>
 
       {error ? (
@@ -440,10 +448,10 @@ export function PromptSnapshotAuditPanel() {
             checked={enabledDraft}
             onChange={(event) => setEnabledDraft(event.target.checked)}
           />
-          <span>Store prompt snapshots</span>
+          <span>{t("snapshot.store")}</span>
         </label>
         <label className="field">
-          <span>Keep for (days)</span>
+          <span>{t("snapshot.keepFor")}</span>
           <input
             type="number"
             min={1}
@@ -459,7 +467,7 @@ export function PromptSnapshotAuditPanel() {
             onClick={() => void save()}
             disabled={busy}
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("snapshot.saving") : t("snapshot.save")}
           </button>
           <button
             type="button"
@@ -467,26 +475,28 @@ export function PromptSnapshotAuditPanel() {
             onClick={() => void purge()}
             disabled={busy}
           >
-            Purge expired now
+            {t("snapshot.purgeExpired")}
           </button>
         </div>
         {settings ? (
           <p className="muted">
-            Stored snapshots still expire when recording is off. Usage rows are
-            never deleted with them.
+            {t("snapshot.expiryNote")}
           </p>
         ) : null}
         {purged !== null ? (
           <p className="muted">
-            Removed {purged} expired snapshot{purged === 1 ? "" : "s"}.
+            {t(
+              purged === 1 ? "snapshot.purgedOne" : "snapshot.purgedOther",
+              { count: purged },
+            )}
           </p>
         ) : null}
       </div>
 
       <section className="snapshot-section">
-        <h4>Recent recorded prompts</h4>
+        <h4>{t("snapshot.recentTitle")}</h4>
         {summaries.length === 0 ? (
-          <p className="muted">No prompt snapshots recorded yet.</p>
+          <p className="muted">{t("snapshot.noneYet")}</p>
         ) : (
           <ul className="snapshot-list">
             {summaries.map((summary) => (
@@ -497,15 +507,19 @@ export function PromptSnapshotAuditPanel() {
                   onClick={() => setOpenCall(summary.llm_call_id)}
                 >
                   <span className="snapshot-kind">
-                    {callKindLabels[summary.call_kind]}
+                    {t(callKindLabels[summary.call_kind])}
                   </span>
                   <span className="muted">{summaryLabel(summary)}</span>
                   <span className="muted">
                     {summary.task_id
-                      ? `Task ${summary.task_id.slice(0, 8)}`
+                      ? t("snapshot.taskRef", {
+                          id: summary.task_id.slice(0, 8),
+                        })
                       : summary.channel_id
-                        ? `Channel ${summary.channel_id.slice(0, 8)}`
-                        : "Workspace"}
+                        ? t("snapshot.channelRef", {
+                            id: summary.channel_id.slice(0, 8),
+                          })
+                        : t("snapshot.workspaceRef")}
                   </span>
                   <time className="summary-time">
                     {formatDateTime(summary.created_at)}

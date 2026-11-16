@@ -10,6 +10,12 @@ import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
 import {
+  currentIntlLocale,
+  localeDefinitions,
+  useI18n,
+  type TranslationKey,
+} from "./i18n";
+import {
   clearSessionDecisions,
   createPermissionRule,
   createWorkspace,
@@ -56,9 +62,11 @@ interface SettingsViewProps {
   onSessionChange: (session: ClientSession) => void;
   onAddProject: (path: string) => Promise<void>;
   onRemoveProject: (project: Project) => Promise<void>;
+  onOpenLanguage: () => void;
 }
 
 export type SettingsSection =
+  | "general"
   | "model"
   | "team"
   | "memory"
@@ -68,15 +76,19 @@ export type SettingsSection =
   | "workspace"
   | "about";
 
-export const settingsSections: { id: SettingsSection; label: string }[] = [
-  { id: "model", label: "Models" },
-  { id: "team", label: "Team" },
-  { id: "memory", label: "Memory" },
-  { id: "approvals", label: "Approvals" },
-  { id: "audit", label: "Audit" },
-  { id: "projects", label: "Projects" },
-  { id: "workspace", label: "Workspace" },
-  { id: "about", label: "About" },
+export const settingsSections: {
+  id: SettingsSection;
+  labelKey: TranslationKey;
+}[] = [
+  { id: "general", labelKey: "settings.nav.general" },
+  { id: "model", labelKey: "settings.nav.model" },
+  { id: "team", labelKey: "settings.nav.team" },
+  { id: "memory", labelKey: "settings.nav.memory" },
+  { id: "approvals", labelKey: "settings.nav.approvals" },
+  { id: "audit", labelKey: "settings.nav.audit" },
+  { id: "projects", labelKey: "settings.nav.projects" },
+  { id: "workspace", labelKey: "settings.nav.workspace" },
+  { id: "about", labelKey: "settings.nav.about" },
 ];
 
 function agentInitials(name: string): string {
@@ -103,7 +115,7 @@ function releaseDate(value: string | null): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "—"
-    : date.toLocaleDateString(undefined, {
+    : date.toLocaleDateString(currentIntlLocale(), {
         year: "numeric",
         month: "short",
         day: "numeric",
@@ -126,7 +138,9 @@ export default function SettingsView({
   onSessionChange,
   onAddProject,
   onRemoveProject,
+  onOpenLanguage,
 }: SettingsViewProps) {
+  const { t, locale } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -307,7 +321,7 @@ export default function SettingsView({
 
   async function handleDeleteRule(rule: PermissionRule) {
     const label = rule.command ? `${rule.tool}: ${rule.command}` : rule.tool;
-    if (!window.confirm(`Delete the workspace rule "${label}"?`)) return;
+    if (!window.confirm(t("settings.approvals.deleteConfirm", { label }))) return;
     setRuleBusy(true);
     setRuleError(null);
     try {
@@ -339,9 +353,14 @@ export default function SettingsView({
     let target: string | null = null;
     try {
       target = await save({
-        title: "Export workspace",
+        title: t("settings.workspace.exportTitle"),
         defaultPath: packageFileName(session?.workspace.name),
-        filters: [{ name: "CowBot package", extensions: ["cowpkg"] }],
+        filters: [
+          {
+            name: t("settings.workspace.packageFilter"),
+            extensions: ["cowpkg"],
+          },
+        ],
       });
     } catch (error) {
       setWorkspaceError(errorMessage(error));
@@ -352,7 +371,9 @@ export default function SettingsView({
     setWorkspaceBusy("export");
     try {
       const written = await exportWorkspace(target);
-      setWorkspaceNotice(`Exported to ${written}`);
+      setWorkspaceNotice(
+        t("settings.workspace.exportedTo", { path: written }),
+      );
     } catch (error) {
       setWorkspaceError(errorMessage(error));
     } finally {
@@ -383,10 +404,15 @@ export default function SettingsView({
     let selected: string | null = null;
     try {
       selected = await open({
-        title: "Import workspace package",
+        title: t("settings.workspace.importTitle"),
         multiple: false,
         directory: false,
-        filters: [{ name: "CowBot package", extensions: ["cowpkg"] }],
+        filters: [
+          {
+            name: t("settings.workspace.packageFilter"),
+            extensions: ["cowpkg"],
+          },
+        ],
       });
     } catch (error) {
       setWorkspaceError(errorMessage(error));
@@ -408,7 +434,7 @@ export default function SettingsView({
     const selection = await open({
       directory: true,
       multiple: false,
-      title: "Register a git repository",
+      title: t("settings.projects.registerTitle"),
     });
     if (typeof selection === "string" && selection.trim()) {
       await onAddProject(selection);
@@ -418,7 +444,7 @@ export default function SettingsView({
   function handleRemoveProject(project: Project) {
     if (
       window.confirm(
-        `Remove '${project.name}' from CowBot? The folder and its files are not touched.`,
+        t("settings.projects.removeConfirm", { name: project.name }),
       )
     ) {
       void onRemoveProject(project);
@@ -430,6 +456,38 @@ export default function SettingsView({
     setProfileEmail(session?.user.email ?? "");
     setProfileError(null);
     setEditingProfile(true);
+  }
+
+  function decisionLabel(decision: string): string {
+    switch (decision) {
+      case "allow":
+        return t("settings.approvals.allow");
+      case "ask":
+        return t("settings.approvals.ask");
+      case "deny":
+        return t("settings.approvals.deny");
+      default:
+        return decision;
+    }
+  }
+
+  function auditSourceLabel(source: string | null | undefined): string {
+    switch (source) {
+      case "rule":
+        return t("settings.audit.rule");
+      case "model":
+        return t("settings.audit.model");
+      case "session":
+        return t("settings.audit.session");
+      case "human":
+        return t("settings.audit.human");
+      case "policy":
+        return t("settings.audit.policy");
+      case "system":
+        return t("settings.audit.system");
+      default:
+        return source ?? t("settings.audit.unknown");
+    }
   }
 
   async function handleProfileSave(event: FormEvent<HTMLFormElement>) {
@@ -450,23 +508,44 @@ export default function SettingsView({
   return (
     <div className="settings-view">
       <header className="view-header">
-        <h2 className="view-title">Settings</h2>
+        <h2 className="view-title">{t("settings.header.title")}</h2>
         <p className="view-subtitle">
-          Default model, connections, team, and workspace details for this workspace.
+          {t("settings.header.subtitle")}
         </p>
       </header>
 
       <div className="settings-layout">
         <div className="settings-content">
+          {section === "general" ? (
+            <section className="settings-section" aria-labelledby="settings-general">
+              <div className="settings-section-head">
+                <h3 id="settings-general">{t("settings.general.title")}</h3>
+                <p className="settings-hint">{t("settings.general.hint")}</p>
+              </div>
+              <div className="settings-language">
+                <div>
+                  <span className="settings-card-title">
+                    {t("language.title")}
+                  </span>
+                  <p className="settings-hint">{t("language.description")}</p>
+                </div>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={onOpenLanguage}
+                >
+                  {localeDefinitions[locale].shortName}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {section === "model" ? (
             <section className="settings-section" aria-labelledby="settings-model">
               <div className="settings-section-head">
-                <h3 id="settings-model">Models</h3>
+                <h3 id="settings-model">{t("settings.models.title")}</h3>
                 <p className="settings-hint">
-                  Choose the default model agents run, and manage the connections
-                  that supply models. A connection can be OpenAI-compatible,
-                  Anthropic-compatible, or Responses-compatible; without one,
-                  CowBot runs the offline echo model.
+                  {t("settings.models.hint")}
                 </p>
               </div>
               <ModelProviderSettings />
@@ -477,14 +556,13 @@ export default function SettingsView({
             <>
               <section className="settings-section" aria-labelledby="settings-templates">
                 <div className="settings-section-head">
-                  <h3 id="settings-templates">Agent templates</h3>
+                  <h3 id="settings-templates">{t("settings.team.templatesTitle")}</h3>
                   <p className="settings-hint">
-                    The Main Assistant is the primary agent; specialist templates
-                    add more agents to this workspace.
+                    {t("settings.team.templatesHint")}
                   </p>
                 </div>
                 {templates.length === 0 ? (
-                  <p className="settings-empty">No templates available.</p>
+                  <p className="settings-empty">{t("settings.team.noTemplates")}</p>
                 ) : (
                   <ul className="settings-list">
                     {templates.map((template) => (
@@ -498,8 +576,12 @@ export default function SettingsView({
                         ) : null}
                         <div className="settings-card-foot">
                           <span className="settings-meta-inline">
-                            {template.agents.length} agent
-                            {template.agents.length === 1 ? "" : "s"}
+                            {t(
+                              template.agents.length === 1
+                                ? "settings.team.agentCountOne"
+                                : "settings.team.agentCountOther",
+                              { count: template.agents.length },
+                            )}
                           </span>
                           <button
                             type="button"
@@ -511,8 +593,8 @@ export default function SettingsView({
                             disabled={busy === "add-agents"}
                           >
                             {busy === "add-agents" && templateId === template.id
-                              ? "Adding…"
-                              : "Add agents"}
+                              ? t("settings.team.adding")
+                              : t("settings.team.addAgents")}
                           </button>
                         </div>
                       </li>
@@ -523,15 +605,20 @@ export default function SettingsView({
 
               <section className="settings-section" aria-labelledby="settings-agents">
                 <div className="settings-section-head">
-                  <h3 id="settings-agents">Agents</h3>
+                  <h3 id="settings-agents">{t("settings.team.agentsTitle")}</h3>
                   <p className="settings-hint">
                     {agents.length === 0
-                      ? "No agents yet. Add a template above."
-                      : `${agents.length} agent${agents.length === 1 ? "" : "s"} in this workspace.`}
+                      ? t("settings.team.agentsEmpty")
+                      : t(
+                          agents.length === 1
+                            ? "settings.team.agentsCountOne"
+                            : "settings.team.agentsCountOther",
+                          { count: agents.length },
+                        )}
                   </p>
                 </div>
                 {agents.length === 0 ? (
-                  <p className="settings-empty">No agents yet.</p>
+                  <p className="settings-empty">{t("settings.team.noAgents")}</p>
                 ) : (
                   <ul className="settings-list">
                     {agents.map((agent) => (
@@ -549,17 +636,17 @@ export default function SettingsView({
                             className="text-button settings-card-action"
                             onClick={() => onEditAgent(agent)}
                           >
-                            Edit
+                            {t("settings.team.edit")}
                           </button>
                         </div>
                         {agent.goal ? <p className="settings-card-body">{agent.goal}</p> : null}
                         <div className="settings-card-foot">
                           <span className="settings-meta-inline">
-                            {agent.model ?? "default model"}
+                            {agent.model ?? t("settings.team.defaultModel")}
                           </span>
                           <span className="settings-meta-inline">
                             {agent.tools.length === 0
-                              ? "no tools"
+                              ? t("settings.team.noTools")
                               : agent.tools.join(", ")}
                           </span>
                         </div>
@@ -579,11 +666,9 @@ export default function SettingsView({
               aria-labelledby="settings-approvals"
             >
               <div className="settings-section-head">
-                <h3 id="settings-approvals">Session approvals</h3>
+                <h3 id="settings-approvals">{t("settings.approvals.title")}</h3>
                 <p className="settings-hint">
-                  Decisions remembered for this app session only. Restarting
-                  CowBot clears them. Rules and plan mode follow in this
-                  milestone.
+                  {t("settings.approvals.hint")}
                 </p>
               </div>
 
@@ -594,8 +679,7 @@ export default function SettingsView({
               ) : null}
               {sessionDecisions.length === 0 ? (
                 <p className="settings-empty">
-                  No session decisions yet. Use "Approve for session" on an
-                  approval card.
+                  {t("settings.approvals.noSessionDecisions")}
                 </p>
               ) : (
                 <ul className="settings-list">
@@ -604,7 +688,7 @@ export default function SettingsView({
                       <div className="settings-card-head">
                         <span className="settings-card-title">{entry.key}</span>
                         <span className="settings-badge">
-                          {entry.decision}
+                          {decisionLabel(entry.decision)}
                         </span>
                       </div>
                     </li>
@@ -619,17 +703,16 @@ export default function SettingsView({
                   onClick={handleClearSessionDecisions}
                   disabled={sessionBusy || sessionDecisions.length === 0}
                 >
-                  {sessionBusy ? "Resetting…" : "Reset session decisions"}
+                  {sessionBusy
+                    ? t("settings.approvals.resetting")
+                    : t("settings.approvals.reset")}
                 </button>
               </div>
 
               <div className="settings-section-head settings-subsection">
-                <h3>Bypass permissions</h3>
+                <h3>{t("settings.approvals.bypassTitle")}</h3>
                 <p className="settings-hint">
-                  Bypass permissions runs every tool call. Critical-risk calls
-                  under Bypass follow this setting; every other mode always
-                  blocks Critical calls. Selecting Bypass shows a warning each
-                  time and keeps a red marker while it is active.
+                  {t("settings.approvals.bypassHint")}
                 </p>
               </div>
 
@@ -640,7 +723,7 @@ export default function SettingsView({
               ) : null}
 
               <label className="field settings-audit-filter">
-                <span>Critical calls under Bypass</span>
+                <span>{t("settings.approvals.criticalLabel")}</span>
                 <select
                   value={bypassCritical}
                   onChange={(event) =>
@@ -649,21 +732,18 @@ export default function SettingsView({
                     )
                   }
                   disabled={policyBusy}
-                  aria-label="Critical calls under Bypass"
+                  aria-label={t("settings.approvals.criticalLabel")}
                 >
-                  <option value="allow">Allow (default)</option>
-                  <option value="ask">Ask with a red approval card</option>
-                  <option value="block">Block</option>
+                  <option value="allow">{t("settings.approvals.criticalAllow")}</option>
+                  <option value="ask">{t("settings.approvals.criticalAsk")}</option>
+                  <option value="block">{t("settings.approvals.criticalBlock")}</option>
                 </select>
               </label>
 
               <div className="settings-section-head settings-subsection">
-                <h3>Workspace rules</h3>
+                <h3>{t("settings.approvals.rulesTitle")}</h3>
                 <p className="settings-hint">
-                  Allow, ask, or deny rules evaluated before the model
-                  evaluator. Deny wins over ask, and ask over allow. Rules are
-                  stored with this workspace and exported with it; imported
-                  rules start disabled until reviewed.
+                  {t("settings.approvals.rulesHint")}
                 </p>
               </div>
 
@@ -675,35 +755,35 @@ export default function SettingsView({
 
               <form className="settings-rule-form" onSubmit={handleCreateRule}>
                 <label className="field">
-                  <span>Tool</span>
+                  <span>{t("settings.approvals.tool")}</span>
                   <input
                     value={ruleTool}
                     onChange={(event) => setRuleTool(event.target.value)}
-                    placeholder="execute_code or *"
-                    aria-label="Rule tool"
+                    placeholder={t("settings.approvals.toolPlaceholder")}
+                    aria-label={t("settings.approvals.ruleToolAria")}
                   />
                 </label>
                 <label className="field">
-                  <span>Command pattern</span>
+                  <span>{t("settings.approvals.commandPattern")}</span>
                   <input
                     value={ruleCommand}
                     onChange={(event) => setRuleCommand(event.target.value)}
-                    placeholder="git * (optional)"
-                    aria-label="Rule command pattern"
+                    placeholder={t("settings.approvals.commandPlaceholder")}
+                    aria-label={t("settings.approvals.ruleCommandAria")}
                   />
                 </label>
                 <label className="field">
-                  <span>Decision</span>
+                  <span>{t("settings.approvals.decision")}</span>
                   <select
                     value={ruleDecision}
                     onChange={(event) =>
                       setRuleDecision(event.target.value as RuleDecision)
                     }
-                    aria-label="Rule decision"
+                    aria-label={t("settings.approvals.ruleDecisionAria")}
                   >
-                    <option value="allow">Allow</option>
-                    <option value="ask">Ask</option>
-                    <option value="deny">Deny</option>
+                    <option value="allow">{t("settings.approvals.allow")}</option>
+                    <option value="ask">{t("settings.approvals.ask")}</option>
+                    <option value="deny">{t("settings.approvals.deny")}</option>
                   </select>
                 </label>
                 <button
@@ -711,14 +791,15 @@ export default function SettingsView({
                   className="primary-button"
                   disabled={ruleBusy}
                 >
-                  {ruleBusy ? "Adding…" : "Add rule"}
+                  {ruleBusy
+                    ? t("settings.approvals.adding")
+                    : t("settings.approvals.addRule")}
                 </button>
               </form>
 
               {rules.length === 0 ? (
                 <p className="settings-empty">
-                  No workspace rules yet. Rules apply to every agent in this
-                  workspace.
+                  {t("settings.approvals.noRules")}
                 </p>
               ) : (
                 <ul className="settings-list">
@@ -726,20 +807,22 @@ export default function SettingsView({
                     <li key={rule.id} className="settings-card">
                       <div className="settings-card-head">
                         <span className="settings-card-title">
-                          {rule.tool === "*" ? "all tools" : rule.tool}
+                          {rule.tool === "*"
+                            ? t("settings.approvals.allTools")
+                            : rule.tool}
                           {rule.command ? `: ${rule.command}` : ""}
                         </span>
                         <span className={`settings-badge rule-${rule.decision}`}>
-                          {rule.decision}
+                          {decisionLabel(rule.decision)}
                         </span>
                       </div>
                       <div className="settings-card-actions">
                         <span className="settings-meta-inline">
                           {rule.source === "imported"
-                            ? "imported — review before enabling"
+                            ? t("settings.approvals.importedReview")
                             : rule.enabled
-                              ? "enabled"
-                              : "disabled"}
+                              ? t("settings.approvals.enabled")
+                              : t("settings.approvals.disabled")}
                         </span>
                         <button
                           type="button"
@@ -747,7 +830,9 @@ export default function SettingsView({
                           disabled={ruleBusy}
                           onClick={() => void handleToggleRule(rule)}
                         >
-                          {rule.enabled ? "Disable" : "Enable"}
+                          {rule.enabled
+                            ? t("settings.approvals.disable")
+                            : t("settings.approvals.enable")}
                         </button>
                         <button
                           type="button"
@@ -755,7 +840,7 @@ export default function SettingsView({
                           disabled={ruleBusy}
                           onClick={() => void handleDeleteRule(rule)}
                         >
-                          Delete
+                          {t("settings.approvals.delete")}
                         </button>
                       </div>
                     </li>
@@ -771,28 +856,26 @@ export default function SettingsView({
               aria-labelledby="settings-audit"
             >
               <div className="settings-section-head">
-                <h3 id="settings-audit">Audit</h3>
+                <h3 id="settings-audit">{t("settings.audit.title")}</h3>
                 <p className="settings-hint">
-                  Every tool decision records its source: a workspace rule, the
-                  model evaluator, a session decision, a human approval, the
-                  active approval policy, or the runtime.
+                  {t("settings.audit.hint")}
                 </p>
               </div>
 
               <label className="field settings-audit-filter">
-                <span>Source</span>
+                <span>{t("settings.audit.source")}</span>
                 <select
                   value={auditSource}
                   onChange={(event) => setAuditSource(event.target.value)}
-                  aria-label="Audit source filter"
+                  aria-label={t("settings.audit.sourceFilterAria")}
                 >
-                  <option value="all">All sources</option>
-                  <option value="rule">Rule</option>
-                  <option value="model">Model</option>
-                  <option value="session">Session</option>
-                  <option value="human">Human</option>
-                  <option value="policy">Policy</option>
-                  <option value="system">System</option>
+                  <option value="all">{t("settings.audit.allSources")}</option>
+                  <option value="rule">{t("settings.audit.rule")}</option>
+                  <option value="model">{t("settings.audit.model")}</option>
+                  <option value="session">{t("settings.audit.session")}</option>
+                  <option value="human">{t("settings.audit.human")}</option>
+                  <option value="policy">{t("settings.audit.policy")}</option>
+                  <option value="system">{t("settings.audit.system")}</option>
                 </select>
               </label>
 
@@ -802,9 +885,9 @@ export default function SettingsView({
                 </p>
               ) : null}
               {auditBusy ? (
-                <p className="settings-empty">Loading audit events…</p>
+                <p className="settings-empty">{t("settings.audit.loading")}</p>
               ) : auditEvents.length === 0 ? (
-                <p className="settings-empty">No audit events for this source.</p>
+                <p className="settings-empty">{t("settings.audit.none")}</p>
               ) : (
                 <ul className="settings-list">
                   {auditEvents.map((event) => (
@@ -818,7 +901,7 @@ export default function SettingsView({
                             event.source ?? "none"
                           }`}
                         >
-                          {event.source ?? "unknown"}
+                          {auditSourceLabel(event.source)}
                         </span>
                       </div>
                       <p className="settings-meta-inline">
@@ -837,11 +920,9 @@ export default function SettingsView({
           {section === "projects" ? (
             <section className="settings-section" aria-labelledby="settings-projects">
               <div className="settings-section-head">
-                <h3 id="settings-projects">Projects</h3>
+                <h3 id="settings-projects">{t("settings.projects.title")}</h3>
                 <p className="settings-hint">
-                  Local git repositories that tasks can run in. CowBot creates an
-                  isolated worktree per task; registered paths stay on this
-                  machine and are not included in workspace packages.
+                  {t("settings.projects.hint")}
                 </p>
               </div>
 
@@ -852,14 +933,15 @@ export default function SettingsView({
                   onClick={() => void handleAddProject()}
                   disabled={busy === "add-project"}
                 >
-                  {busy === "add-project" ? "Adding…" : "Add folder"}
+                  {busy === "add-project"
+                    ? t("settings.projects.adding")
+                    : t("settings.projects.addFolder")}
                 </button>
               </div>
 
               {projects.length === 0 ? (
                 <p className="settings-empty">
-                  No projects yet. Add a git repository to run tasks in an
-                  isolated worktree.
+                  {t("settings.projects.empty")}
                 </p>
               ) : (
                 <ul className="settings-list">
@@ -873,7 +955,9 @@ export default function SettingsView({
                           </span>
                         ) : null}
                         {!project.available ? (
-                          <span className="settings-badge">Missing</span>
+                          <span className="settings-badge">
+                            {t("settings.projects.missing")}
+                          </span>
                         ) : null}
                       </div>
                       <p className="settings-card-body settings-path">
@@ -882,8 +966,8 @@ export default function SettingsView({
                       <div className="settings-card-foot">
                         <span className="settings-meta-inline">
                           {project.available
-                            ? "Available"
-                            : "Folder not found on this machine"}
+                            ? t("settings.projects.available")
+                            : t("settings.projects.databaseMissing")}
                         </span>
                         <div className="settings-card-actions">
                           <button
@@ -892,7 +976,7 @@ export default function SettingsView({
                             onClick={() => handleRemoveProject(project)}
                             disabled={busy === "remove-project"}
                           >
-                            Remove
+                            {t("settings.projects.remove")}
                           </button>
                         </div>
                       </div>
@@ -907,22 +991,22 @@ export default function SettingsView({
             <>
               <section className="settings-section" aria-labelledby="settings-workspace">
                 <div className="settings-section-head">
-                  <h3 id="settings-workspace">Workspace</h3>
+                  <h3 id="settings-workspace">{t("settings.workspace.title")}</h3>
                   <p className="settings-hint">
-                    Local workspace identity. Data stays on this machine.
+                    {t("settings.workspace.hint")}
                   </p>
                 </div>
                 <dl className="settings-meta">
                   <div>
-                    <dt>Workspace</dt>
+                    <dt>{t("settings.workspace.workspace")}</dt>
                     <dd>{session?.workspace.name ?? "—"}</dd>
                   </div>
                   <div>
-                    <dt>Owner</dt>
+                    <dt>{t("settings.workspace.owner")}</dt>
                     <dd>{session?.user.name ?? "—"}</dd>
                   </div>
                   <div>
-                    <dt>Email</dt>
+                    <dt>{t("settings.workspace.email")}</dt>
                     <dd>{session?.user.email ?? "—"}</dd>
                   </div>
                 </dl>
@@ -931,7 +1015,7 @@ export default function SettingsView({
                   <form className="settings-profile-form" onSubmit={handleProfileSave}>
                     <div className="settings-form-row">
                       <label className="field">
-                        <span>Display name</span>
+                        <span>{t("settings.workspace.displayName")}</span>
                         <input
                           value={profileName}
                           onChange={(event) => setProfileName(event.target.value)}
@@ -940,7 +1024,7 @@ export default function SettingsView({
                         />
                       </label>
                       <label className="field">
-                        <span>Email</span>
+                        <span>{t("settings.workspace.email")}</span>
                         <input
                           type="email"
                           value={profileEmail}
@@ -965,7 +1049,9 @@ export default function SettingsView({
                           !profileEmail.trim()
                         }
                       >
-                        {profileBusy ? "Saving…" : "Save profile"}
+                        {profileBusy
+                          ? t("settings.workspace.saving")
+                          : t("settings.workspace.saveProfile")}
                       </button>
                       <button
                         type="button"
@@ -973,7 +1059,7 @@ export default function SettingsView({
                         onClick={() => setEditingProfile(false)}
                         disabled={profileBusy}
                       >
-                        Cancel
+                        {t("settings.workspace.cancel")}
                       </button>
                     </div>
                   </form>
@@ -984,7 +1070,7 @@ export default function SettingsView({
                       className="ghost-button"
                       onClick={startEditProfile}
                     >
-                      Edit profile
+                      {t("settings.workspace.editProfile")}
                     </button>
                   </div>
                 )}
@@ -995,11 +1081,11 @@ export default function SettingsView({
                 aria-labelledby="settings-local-workspaces"
               >
                 <div className="settings-section-head">
-                  <h3 id="settings-local-workspaces">Local workspaces</h3>
+                  <h3 id="settings-local-workspaces">
+                    {t("settings.workspace.localTitle")}
+                  </h3>
                   <p className="settings-hint">
-                    Each workspace lives in its own local database. Creating,
-                    importing, and switching restart CowBot; finish running tasks
-                    first.
+                    {t("settings.workspace.localHint")}
                   </p>
                 </div>
 
@@ -1016,11 +1102,11 @@ export default function SettingsView({
 
                 <div className="workspace-create">
                   <label className="field">
-                    <span>New workspace</span>
+                    <span>{t("settings.workspace.newWorkspace")}</span>
                     <input
                       value={newWorkspaceName}
                       onChange={(event) => setNewWorkspaceName(event.target.value)}
-                      placeholder="Team workspace"
+                      placeholder={t("settings.workspace.newWorkspacePlaceholder")}
                       autoComplete="off"
                       disabled={workspaceBusy !== null}
                     />
@@ -1031,12 +1117,16 @@ export default function SettingsView({
                     onClick={handleCreateWorkspace}
                     disabled={workspaceBusy !== null || !newWorkspaceName.trim()}
                   >
-                    {workspaceBusy === "create" ? "Creating…" : "Create workspace"}
+                    {workspaceBusy === "create"
+                      ? t("settings.workspace.creating")
+                      : t("settings.workspace.createWorkspace")}
                   </button>
                 </div>
 
                 {workspaces.length === 0 ? (
-                  <p className="settings-empty">No workspaces registered.</p>
+                  <p className="settings-empty">
+                    {t("settings.workspace.noneRegistered")}
+                  </p>
                 ) : (
                   <ul className="settings-list">
                     {workspaces.map((workspace) => (
@@ -1045,21 +1135,23 @@ export default function SettingsView({
                           <span className="settings-card-title">{workspace.name}</span>
                           {workspace.active ? (
                             <span className="settings-badge settings-badge-active">
-                              Active
+                              {t("settings.workspace.active")}
                             </span>
                           ) : null}
                           {!workspace.available ? (
-                            <span className="settings-badge">Missing</span>
+                            <span className="settings-badge">
+                              {t("settings.workspace.missing")}
+                            </span>
                           ) : null}
                         </div>
                         <p className="settings-card-body">{workspace.database}</p>
                         <div className="settings-card-foot">
                           <span className="settings-meta-inline">
                             {workspace.active
-                              ? "Open now"
+                              ? t("settings.workspace.openNow")
                               : workspace.available
-                                ? "Available"
-                                : "Database file not found"}
+                                ? t("settings.workspace.available")
+                                : t("settings.workspace.databaseMissing")}
                           </span>
                           <div className="settings-card-actions">
                             {!workspace.active && workspace.available ? (
@@ -1070,8 +1162,8 @@ export default function SettingsView({
                                 disabled={workspaceBusy !== null}
                               >
                                 {workspaceBusy === `switch-${workspace.database}`
-                                  ? "Switching…"
-                                  : "Switch"}
+                                  ? t("settings.workspace.switching")
+                                  : t("settings.workspace.switch")}
                               </button>
                             ) : null}
                           </div>
@@ -1088,7 +1180,9 @@ export default function SettingsView({
                     onClick={handleExportWorkspace}
                     disabled={workspaceBusy !== null}
                   >
-                    {workspaceBusy === "export" ? "Exporting…" : "Export workspace"}
+                    {workspaceBusy === "export"
+                      ? t("settings.workspace.exporting")
+                      : t("settings.workspace.export")}
                   </button>
                   <button
                     type="button"
@@ -1096,7 +1190,9 @@ export default function SettingsView({
                     onClick={handleImportWorkspace}
                     disabled={workspaceBusy !== null}
                   >
-                    {workspaceBusy === "import" ? "Importing…" : "Import package"}
+                    {workspaceBusy === "import"
+                      ? t("settings.workspace.importing")
+                      : t("settings.workspace.importPackage")}
                   </button>
                 </div>
               </section>
@@ -1106,28 +1202,27 @@ export default function SettingsView({
           {section === "about" ? (
             <section className="settings-section" aria-labelledby="settings-about">
               <div className="settings-section-head">
-                <h3 id="settings-about">About CowBot</h3>
+                <h3 id="settings-about">{t("settings.about.title")}</h3>
                 <p className="settings-hint">
-                  Desktop version and updates. CowBot checks GitHub Releases for
-                  stable versions.
+                  {t("settings.about.hint")}
                 </p>
               </div>
 
               <dl className="settings-meta">
                 <div>
-                  <dt>Version</dt>
+                  <dt>{t("settings.about.version")}</dt>
                   <dd>{updater.state.currentVersion ?? "—"}</dd>
                 </div>
                 <div>
-                  <dt>Update channel</dt>
-                  <dd>Stable · GitHub Releases</dd>
+                  <dt>{t("settings.about.channel")}</dt>
+                  <dd>{t("settings.about.stable")}</dd>
                 </div>
                 <div>
-                  <dt>Last checked</dt>
+                  <dt>{t("settings.about.lastChecked")}</dt>
                   <dd>
                     {updater.state.checkedAt
                       ? formatDateTime(updater.state.checkedAt)
-                      : "Not checked yet"}
+                      : t("settings.about.notChecked")}
                   </dd>
                 </div>
               </dl>
@@ -1143,7 +1238,7 @@ export default function SettingsView({
                     });
                   }}
                 />
-                Check for updates automatically when CowBot starts
+                {t("settings.about.autoCheck")}
               </label>
 
               {updateError ? (
@@ -1166,8 +1261,8 @@ export default function SettingsView({
                   }
                 >
                   {updater.state.phase === "checking"
-                    ? "Checking…"
-                    : "Check for updates"}
+                    ? t("settings.about.checking")
+                    : t("settings.about.check")}
                 </button>
 
                 {updater.state.phase === "available" ||
@@ -1179,7 +1274,7 @@ export default function SettingsView({
                     onClick={() => void updater.install()}
                     disabled={tasksRunning}
                   >
-                    Download and install
+                    {t("settings.about.downloadInstall")}
                   </button>
                 ) : null}
 
@@ -1189,7 +1284,7 @@ export default function SettingsView({
                     className="primary-button"
                     onClick={() => void updater.restart()}
                   >
-                    Restart now
+                    {t("settings.about.restartNow")}
                   </button>
                 ) : null}
 
@@ -1206,33 +1301,34 @@ export default function SettingsView({
                       );
                     }}
                   >
-                    View release notes
+                    {t("settings.about.releaseNotes")}
                   </button>
                 ) : null}
               </div>
 
               {updater.state.phase === "checking" ? (
                 <p className="settings-status" role="status">
-                  Checking GitHub Releases…
+                  {t("settings.about.checkingReleases")}
                 </p>
               ) : null}
 
               {updater.state.phase === "current" ? (
                 <p className="settings-status is-ok" role="status">
-                  CowBot is up to date.
+                  {t("settings.about.upToDate")}
                 </p>
               ) : null}
 
               {updater.state.phase === "available" ? (
                 <p className="settings-status is-ok" role="status">
-                  Version {updater.state.version} is available
-                  {updater.state.date
-                    ? ` (released ${releaseDate(updater.state.date)})`
-                    : ""}
-                  .
-                  {tasksRunning
-                    ? " Finish running tasks before installing."
-                    : ""}
+                  {t("settings.about.availableVersion", {
+                    version: updater.state.version ?? "",
+                    released: updater.state.date
+                      ? t("settings.about.released", {
+                          date: releaseDate(updater.state.date),
+                        })
+                      : "",
+                  })}
+                  {tasksRunning ? t("settings.about.finishTasks") : ""}
                 </p>
               ) : null}
 
@@ -1246,25 +1342,24 @@ export default function SettingsView({
 
               {updater.state.phase === "ready" ? (
                 <p className="settings-status is-ok" role="status">
-                  Installed. Restart CowBot to finish updating.
+                  {t("settings.about.installedRestart")}
                 </p>
               ) : null}
 
               {updater.state.phase === "error" && updater.state.error ? (
                 <p className="settings-status is-error" role="alert">
                   {updater.state.version
-                    ? `Update failed: ${updater.state.error}`
-                    : `Could not check for updates: ${updater.state.error}`}
+                    ? t("settings.about.updateFailed", {
+                        error: updater.state.error,
+                      })
+                    : t("settings.about.checkFailed", {
+                        error: updater.state.error,
+                      })}
                 </p>
               ) : null}
 
               <p className="settings-note">
-                Automatic updates work for the NSIS installer on Windows, the app
-                installed from the DMG on macOS, and the AppImage on Linux. MSI
-                and deb installs update by downloading a new release. Builds are
-                unsigned, so macOS may ask you to allow CowBot again after an
-                update. When enabled, CowBot makes one request to GitHub at
-                startup; no workspace data is sent.
+                {t("settings.about.note")}
               </p>
             </section>
           ) : null}

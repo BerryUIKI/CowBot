@@ -12,6 +12,7 @@ import {
 } from "./api";
 import type { FetchedModel } from "./api";
 import { errorMessage } from "./errors";
+import { t, type TranslationKey } from "./i18n/catalog";
 import type {
   ModelMetadata,
   ModelProvider,
@@ -21,52 +22,50 @@ import type {
 
 interface ProtocolOption {
   id: ProviderProtocol;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
 }
 
 const protocolOptions: ProtocolOption[] = [
   {
     id: "openai",
-    label: "OpenAI Chat",
-    description: "Chat Completions API. OpenAI, DeepSeek, Ollama, and most relays.",
+    labelKey: "models.protocol.openai",
+    descriptionKey: "models.protocol.openaiDescription",
   },
   {
     id: "anthropic",
-    label: "Anthropic",
-    description: "Messages API. Claude and Claude Code-compatible relays.",
+    labelKey: "models.protocol.anthropic",
+    descriptionKey: "models.protocol.anthropicDescription",
   },
   {
     id: "openai-responses",
-    label: "Responses",
-    description: "Responses API. OpenAI and Codex-style endpoints.",
+    labelKey: "models.protocol.responses",
+    descriptionKey: "models.protocol.responsesDescription",
   },
 ];
 
 function protocolLabel(protocol: ProviderProtocol): string {
-  return (
-    protocolOptions.find((option) => option.id === protocol)?.label ?? protocol
-  );
+  const option = protocolOptions.find((candidate) => candidate.id === protocol);
+  return option ? t(option.labelKey) : protocol;
 }
 
 function protocolDescription(protocol: ProviderProtocol): string {
-  return (
-    protocolOptions.find((option) => option.id === protocol)?.description ?? ""
-  );
+  const option = protocolOptions.find((candidate) => candidate.id === protocol);
+  return option ? t(option.descriptionKey) : "";
 }
 
 type CatalogueCategory = "vendors" | "platforms" | "cloud" | "local";
 
 interface CatalogueGroup {
   id: CatalogueCategory;
-  label: string;
+  labelKey: TranslationKey;
 }
 
 const catalogueGroups: CatalogueGroup[] = [
-  { id: "vendors", label: "Model vendors" },
-  { id: "platforms", label: "Third-party platforms and relays" },
-  { id: "cloud", label: "Cloud providers" },
-  { id: "local", label: "Local runtimes" },
+  { id: "vendors", labelKey: "models.catalogueGroup.vendors" },
+  { id: "platforms", labelKey: "models.catalogueGroup.platforms" },
+  { id: "cloud", labelKey: "models.catalogueGroup.cloud" },
+  { id: "local", labelKey: "models.catalogueGroup.local" },
 ];
 
 interface CatalogueEntry {
@@ -76,7 +75,7 @@ interface CatalogueEntry {
   protocol: ProviderProtocol;
   baseUrl: string;
   model: string;
-  description: string;
+  descriptionKey: TranslationKey;
 }
 
 const catalogue: CatalogueEntry[] = [
@@ -88,7 +87,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o",
-    description: "Official OpenAI API",
+    descriptionKey: "models.catalogueDescription.openai",
   },
   {
     id: "anthropic",
@@ -97,7 +96,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "anthropic",
     baseUrl: "https://api.anthropic.com",
     model: "claude-sonnet-5-5",
-    description: "Claude models",
+    descriptionKey: "models.catalogueDescription.anthropic",
   },
   {
     id: "deepseek",
@@ -106,7 +105,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-chat",
-    description: "DeepSeek chat and reasoning models",
+    descriptionKey: "models.catalogueDescription.deepseek",
   },
   {
     id: "qwen",
@@ -115,7 +114,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-plus",
-    description: "Alibaba Qwen models",
+    descriptionKey: "models.catalogueDescription.qwen",
   },
   {
     id: "kimi",
@@ -124,7 +123,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.moonshot.cn/v1",
     model: "moonshot-v1-8k",
-    description: "Moonshot AI Kimi models",
+    descriptionKey: "models.catalogueDescription.kimi",
   },
   {
     id: "zhipu",
@@ -133,7 +132,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     model: "glm-4.5",
-    description: "GLM models",
+    descriptionKey: "models.catalogueDescription.zhipu",
   },
   {
     id: "gemini",
@@ -142,7 +141,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-2.5-pro",
-    description: "Gemini through its OpenAI-compatible endpoint",
+    descriptionKey: "models.catalogueDescription.gemini",
   },
   {
     id: "xai",
@@ -151,7 +150,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.x.ai/v1",
     model: "grok-4",
-    description: "Grok models",
+    descriptionKey: "models.catalogueDescription.xai",
   },
   {
     id: "mistral",
@@ -160,7 +159,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.mistral.ai/v1",
     model: "mistral-large-latest",
-    description: "Mistral and Codestral models",
+    descriptionKey: "models.catalogueDescription.mistral",
   },
   // Third-party platforms and relays
   {
@@ -170,7 +169,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openai/gpt-4o",
-    description: "Multi-vendor router",
+    descriptionKey: "models.catalogueDescription.openrouter",
   },
   {
     id: "siliconflow",
@@ -179,7 +178,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-V3",
-    description: "Hosted open models",
+    descriptionKey: "models.catalogueDescription.siliconflow",
   },
   {
     id: "groq",
@@ -188,7 +187,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.groq.com/openai/v1",
     model: "llama-3.3-70b-versatile",
-    description: "Low-latency hosted inference",
+    descriptionKey: "models.catalogueDescription.groq",
   },
   {
     id: "together",
@@ -197,7 +196,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.together.xyz/v1",
     model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    description: "Hosted open models",
+    descriptionKey: "models.catalogueDescription.together",
   },
   {
     id: "fireworks",
@@ -206,7 +205,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.fireworks.ai/inference/v1",
     model: "accounts/fireworks/models/llama-v3p3-70b-instruct",
-    description: "Hosted open models",
+    descriptionKey: "models.catalogueDescription.fireworks",
   },
   // Cloud providers
   {
@@ -216,7 +215,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
     model: "doubao-seed-1-6",
-    description: "ByteDance Doubao models",
+    descriptionKey: "models.catalogueDescription.volcengine",
   },
   {
     id: "hunyuan",
@@ -225,7 +224,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://api.hunyuan.cloud.tencent.com/v1",
     model: "hunyuan-turbos-latest",
-    description: "Tencent Hunyuan models",
+    descriptionKey: "models.catalogueDescription.hunyuan",
   },
   {
     id: "qianfan",
@@ -234,7 +233,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "https://qianfan.baidubce.com/v2",
     model: "ernie-4.5-turbo-128k",
-    description: "Baidu ERNIE models",
+    descriptionKey: "models.catalogueDescription.qianfan",
   },
   // Local runtimes
   {
@@ -244,7 +243,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.2",
-    description: "Local Ollama server on port 11434",
+    descriptionKey: "models.catalogueDescription.ollama",
   },
   {
     id: "lmstudio",
@@ -253,7 +252,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "http://localhost:1234/v1",
     model: "local-model",
-    description: "Local LM Studio server on port 1234",
+    descriptionKey: "models.catalogueDescription.lmstudio",
   },
   {
     id: "vllm",
@@ -262,7 +261,7 @@ const catalogue: CatalogueEntry[] = [
     protocol: "openai",
     baseUrl: "http://localhost:8000/v1",
     model: "",
-    description: "Self-hosted OpenAI-compatible server on port 8000",
+    descriptionKey: "models.catalogueDescription.vllm",
   },
 ];
 
@@ -334,12 +333,12 @@ function compactTokens(tokens: number): string {
 
 function windowLabel(metadata: ModelMetadata | undefined): string {
   return metadata?.context_window
-    ? `${compactTokens(metadata.context_window)} window`
-    : "window unknown";
+    ? t("models.window", { tokens: compactTokens(metadata.context_window) })
+    : t("models.windowUnknown");
 }
 
 function modelCountLabel(count: number): string {
-  return count === 1 ? "1 model" : `${count} models`;
+  return t(count === 1 ? "models.countOne" : "models.countOther", { count });
 }
 
 function optionalTokenCount(value: string): number | undefined {
@@ -420,7 +419,7 @@ export default function ModelProviderSettings({
   }, []);
 
   if (!modelSettings) {
-    return <p className="settings-empty">Loading model settings…</p>;
+    return <p className="settings-empty">{t("models.loading")}</p>;
   }
 
   const providers = modelSettings.providers;
@@ -448,7 +447,7 @@ export default function ModelProviderSettings({
       if (value === "offline") {
         applySettings(
           await activateModelProvider(null),
-          "Offline mode selected. Runs use the local echo model.",
+          t("models.notice.offlineSelected"),
         );
         return;
       }
@@ -456,7 +455,7 @@ export default function ModelProviderSettings({
       if (!selection) return;
       applySettings(
         await setActiveModel(selection.providerId, selection.model),
-        `Default model set to ${selection.model}.`,
+        t("models.notice.defaultSet", { model: selection.model }),
       );
     } catch (error) {
       setError(errorMessage(error));
@@ -467,7 +466,7 @@ export default function ModelProviderSettings({
 
   async function handleTestDefault() {
     if (!activeProvider) {
-      setNotice("Offline mode does not call an endpoint.");
+      setNotice(t("models.notice.offlineNoEndpoint"));
       return;
     }
     resetTransient();
@@ -499,7 +498,10 @@ export default function ModelProviderSettings({
         model: provider.model,
         apiKey: "",
       });
-      setNotice(`${provider.name}: ${message}`);
+      setNotice(t("models.notice.providerTest", {
+        provider: provider.name,
+        result: message,
+      }));
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -510,7 +512,7 @@ export default function ModelProviderSettings({
   async function handleDeleteProvider(provider: ModelProvider) {
     if (
       !window.confirm(
-        `Delete the connection "${provider.name}"?\n\nConversations that use it switch to the default model. Recorded prompts and usage stay.`,
+        t("models.confirmDelete", { name: provider.name }),
       )
     ) {
       return;
@@ -524,7 +526,7 @@ export default function ModelProviderSettings({
       if (editor?.providerId === provider.id) setEditor(null);
       if (managerId === provider.id) setManagerId(null);
       if (limitsFor?.providerId === provider.id) setLimitsFor(null);
-      setNotice("Connection deleted.");
+      setNotice(t("models.notice.deleteConnection"));
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -558,7 +560,7 @@ export default function ModelProviderSettings({
     ? catalogue.filter((entry) =>
         [
           entry.name,
-          entry.description,
+          t(entry.descriptionKey),
           entry.baseUrl,
           protocolLabel(entry.protocol),
         ].some((value) => value.toLowerCase().includes(query)),
@@ -570,20 +572,20 @@ export default function ModelProviderSettings({
       <section className="settings-default" aria-labelledby="settings-default-model">
         <div className="settings-default-head">
           <h4 id="settings-default-model" className="settings-card-title">
-            Default model
+            {t("models.default.title")}
           </h4>
           <span className="settings-meta-inline">
-            Used by tasks, channels, and conversations that follow the default
+            {t("models.default.hint")}
           </span>
         </div>
         <div className="settings-default-row">
           <select
-            aria-label="Default model"
+            aria-label={t("models.default.aria")}
             value={activeValue}
             onChange={(event) => void handleDefaultChange(event.target.value)}
             disabled={busy !== null}
           >
-            <option value="offline">Offline (no model)</option>
+            <option value="offline">{t("models.default.offline")}</option>
             {readyProviders.map((provider) => (
               <optgroup key={provider.id} label={provider.name}>
                 {provider.models.map((model) => (
@@ -600,13 +602,21 @@ export default function ModelProviderSettings({
             onClick={() => void handleTestDefault()}
             disabled={busy !== null}
           >
-            {busy === "test-default" ? "Testing…" : "Test"}
+            {busy === "test-default"
+              ? t("models.default.testing")
+              : t("models.default.test")}
           </button>
         </div>
         <p className="settings-card-body settings-default-meta">
           {activeProvider
-            ? `${protocolLabel(activeProvider.protocol)} · ${activeProvider.base_url} · ${windowLabel(activeProvider.model_metadata[activeProvider.model])}`
-            : "No endpoint is called. Runs use the local echo model."}
+            ? t("models.default.meta", {
+                protocol: protocolLabel(activeProvider.protocol),
+                url: activeProvider.base_url,
+                window: windowLabel(
+                  activeProvider.model_metadata[activeProvider.model],
+                ),
+              })
+            : t("models.default.offlineMeta")}
         </p>
       </section>
 
@@ -622,17 +632,17 @@ export default function ModelProviderSettings({
       ) : null}
 
       <div className="settings-subhead">
-        <h4 className="settings-card-title">Connections</h4>
+        <h4 className="settings-card-title">{t("models.connections.title")}</h4>
         {!catalogueOpen && !editor ? (
           <button type="button" className="settings-add-button" onClick={openCatalogue}>
-            <span aria-hidden="true">+</span> Add connection
+            <span aria-hidden="true">+</span> {t("models.connections.add")}
           </button>
         ) : null}
       </div>
 
       {providers.length === 0 ? (
         <p className="settings-empty">
-          No connections yet. Add one to run agents on a real model.
+          {t("models.connections.empty")}
         </p>
       ) : null}
 
@@ -647,14 +657,18 @@ export default function ModelProviderSettings({
                 <span className="settings-card-title">{provider.name}</span>
                 <span className="settings-badge">{protocolLabel(provider.protocol)}</span>
                 {provider.active ? (
-                  <span className="settings-badge settings-badge-active">Default</span>
+                  <span className="settings-badge settings-badge-active">
+                    {t("models.default.badge")}
+                  </span>
                 ) : null}
               </div>
               <p className="settings-card-body settings-path">{provider.base_url}</p>
 
               {provider.models.length === 0 ? (
                 <p className="settings-hint">
-                  No models yet. Open <strong>Manage models</strong> to fetch or add one.
+                  {t("models.connections.noModels", {
+                    manage: t("models.connections.manageModels"),
+                  })}
                 </p>
               ) : (
                 <ul className="provider-models">
@@ -672,7 +686,11 @@ export default function ModelProviderSettings({
                           onClick={() => void handleDefaultChange(modelKey(provider.id, model))}
                           disabled={busy !== null}
                           aria-current={isDefault ? "true" : undefined}
-                          title={isDefault ? "This is the default model" : "Use as the default model"}
+                          title={
+                            isDefault
+                              ? t("models.connections.defaultTitle")
+                              : t("models.connections.useDefaultTitle")
+                          }
                         >
                           {isDefault ? "✓ " : ""}
                           {model}
@@ -691,7 +709,9 @@ export default function ModelProviderSettings({
                             )
                           }
                         >
-                          {editingLimits ? "Close" : "Limits"}
+                          {editingLimits
+                            ? t("models.connections.close")
+                            : t("models.connections.limits")}
                         </button>
                         {editingLimits ? (
                           <ModelLimitsEditor
@@ -725,14 +745,18 @@ export default function ModelProviderSettings({
                   }
                 >
                   {isExpanded
-                    ? "Show fewer"
-                    : `Show all ${provider.models.length} models`}
+                    ? t("models.connections.showFewer")
+                    : t("models.connections.showAll", {
+                        count: provider.models.length,
+                      })}
                 </button>
               ) : null}
 
               <div className="settings-card-foot">
                 <span className="settings-meta-inline">
-                  {provider.has_api_key ? "API key saved" : "No API key"}
+                  {provider.has_api_key
+                    ? t("models.connections.apiKeySaved")
+                    : t("models.connections.noApiKey")}
                 </span>
                 <div className="settings-card-actions">
                   <button
@@ -744,7 +768,9 @@ export default function ModelProviderSettings({
                     }}
                     disabled={busy !== null}
                   >
-                    {isManager ? "Close models" : "Manage models"}
+                    {isManager
+                      ? t("models.connections.closeModels")
+                      : t("models.connections.manage")}
                   </button>
                   <button
                     type="button"
@@ -752,7 +778,9 @@ export default function ModelProviderSettings({
                     onClick={() => void handleTestProvider(provider)}
                     disabled={busy !== null}
                   >
-                    {busy === `test-${provider.id}` ? "Testing…" : "Test"}
+                    {busy === `test-${provider.id}`
+                      ? t("models.connections.testing")
+                      : t("models.connections.test")}
                   </button>
                   <button
                     type="button"
@@ -760,7 +788,7 @@ export default function ModelProviderSettings({
                     onClick={() => startEditProvider(provider)}
                     disabled={busy !== null}
                   >
-                    Edit connection
+                    {t("models.connections.edit")}
                   </button>
                   <button
                     type="button"
@@ -768,7 +796,9 @@ export default function ModelProviderSettings({
                     onClick={() => void handleDeleteProvider(provider)}
                     disabled={busy !== null}
                   >
-                    {busy === `delete-${provider.id}` ? "Deleting…" : "Delete"}
+                    {busy === `delete-${provider.id}`
+                      ? t("models.connections.deleting")
+                      : t("models.connections.delete")}
                   </button>
                 </div>
               </div>
@@ -816,8 +846,8 @@ export default function ModelProviderSettings({
               className="catalogue-search"
               value={catalogueQuery}
               onChange={(event) => setCatalogueQuery(event.target.value)}
-              placeholder="Search providers by name or URL"
-              aria-label="Search providers"
+              placeholder={t("models.catalogue.searchPlaceholder")}
+              aria-label={t("models.catalogue.searchAria")}
               autoComplete="off"
               autoFocus
             />
@@ -826,7 +856,7 @@ export default function ModelProviderSettings({
               className="ghost-button"
               onClick={() => setCatalogueOpen(false)}
             >
-              Cancel
+              {t("models.catalogue.cancel")}
             </button>
           </div>
 
@@ -835,9 +865,11 @@ export default function ModelProviderSettings({
             className="catalogue-custom"
             onClick={() => chooseCatalogueEntry(null)}
           >
-            <span className="catalogue-entry-label">Custom</span>
+            <span className="catalogue-entry-label">
+              {t("models.catalogue.custom")}
+            </span>
             <span className="catalogue-entry-hint">
-              Start from a blank form and enter any compatible endpoint.
+              {t("models.catalogue.customHint")}
             </span>
           </button>
 
@@ -848,7 +880,7 @@ export default function ModelProviderSettings({
             if (entries.length === 0) return null;
             return (
               <section key={group.id} className="catalogue-group">
-                <h4 className="catalogue-group-title">{group.label}</h4>
+                <h4 className="catalogue-group-title">{t(group.labelKey)}</h4>
                 <ul className="catalogue-list">
                   {entries.map((entry) => (
                     <li key={entry.id}>
@@ -861,7 +893,7 @@ export default function ModelProviderSettings({
                           {entry.name}
                         </span>
                         <span className="catalogue-entry-hint">
-                          {entry.description} · {entry.baseUrl}
+                          {t(entry.descriptionKey)} · {entry.baseUrl}
                         </span>
                       </button>
                     </li>
@@ -873,8 +905,9 @@ export default function ModelProviderSettings({
 
           {filteredCatalogue.length === 0 ? (
             <p className="settings-empty">
-              No providers match “{catalogueQuery.trim()}”. Choose Custom to
-              enter an endpoint by hand.
+              {t("models.catalogue.empty", {
+                query: catalogueQuery.trim(),
+              })}
             </p>
           ) : null}
         </div>
@@ -882,9 +915,11 @@ export default function ModelProviderSettings({
 
       {showConfigPath ? (
         <details className="settings-advanced">
-          <summary>Advanced</summary>
+          <summary>{t("models.advanced.summary")}</summary>
           <p className="settings-note settings-path">
-            Configuration: {modelSettings.config_path}
+            {t("models.advanced.config", {
+              path: modelSettings.config_path,
+            })}
           </p>
         </details>
       ) : null}
@@ -953,8 +988,13 @@ function ConnectionEditor({
       const withWindow = models.filter((model) => model.contextWindow).length;
       setStatus(
         withWindow > 0
-          ? `Fetched ${modelCountLabel(models.length)}. ${withWindow} reported a context window.`
-          : `Fetched ${modelCountLabel(models.length)}. None reported a context window, so set it by hand under Models.`,
+          ? t("models.notice.fetchedWithWindow", {
+              count: modelCountLabel(models.length),
+              withWindow,
+            })
+          : t("models.notice.fetchedSetByHand", {
+              count: modelCountLabel(models.length),
+            }),
       );
     } catch (error) {
       setError(errorMessage(error));
@@ -979,7 +1019,12 @@ function ConnectionEditor({
         apiKey: draft.apiKey,
         clearApiKey: draft.clearApiKey,
       });
-      onSaved(next, creating ? "Connection added." : "Connection updated.");
+      onSaved(
+        next,
+        creating
+          ? t("models.notice.connectionAdded")
+          : t("models.notice.connectionUpdated"),
+      );
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -1009,12 +1054,14 @@ function ConnectionEditor({
   return (
     <form className="settings-form provider-editor" onSubmit={handleSubmit}>
       <p className="settings-card-title">
-        {creating ? "New connection" : `Edit ${initial.name}`}
+        {creating
+          ? t("models.editor.newTitle")
+          : t("models.editor.editTitle", { name: initial.name })}
       </p>
 
       <div className="settings-form-row">
         <label className="field">
-          <span>Name</span>
+          <span>{t("models.editor.name")}</span>
           <input
             value={draft.name}
             onChange={(event) => update({ name: event.target.value })}
@@ -1023,7 +1070,7 @@ function ConnectionEditor({
           />
         </label>
         <label className="field">
-          <span>Base URL</span>
+          <span>{t("models.editor.baseUrl")}</span>
           <input
             value={draft.baseUrl}
             onChange={(event) => update({ baseUrl: event.target.value })}
@@ -1039,10 +1086,10 @@ function ConnectionEditor({
 
       {creating ? (
         <div className="field">
-          <span>First model</span>
+          <span>{t("models.editor.firstModel")}</span>
           <div className="model-toolbar">
             <input
-              aria-label="Model name"
+              aria-label={t("models.editor.modelNameAria")}
               value={draft.model}
               onChange={(event) => update({ model: event.target.value })}
               placeholder="gpt-4o"
@@ -1054,12 +1101,14 @@ function ConnectionEditor({
               onClick={() => void handleFetch()}
               disabled={busy !== null || !draft.baseUrl.trim()}
             >
-              {busy === "fetch-models" ? "Fetching…" : "Fetch models"}
+              {busy === "fetch-models"
+                ? t("models.editor.fetching")
+                : t("models.editor.fetchModels")}
             </button>
           </div>
           {fetched.length > 0 ? (
             <select
-              aria-label="Fetched models"
+              aria-label={t("models.editor.fetchedAria")}
               value={fetched.some((model) => model.id === draft.model) ? draft.model : ""}
               onChange={(event) =>
                 update({
@@ -1068,7 +1117,7 @@ function ConnectionEditor({
                 })
               }
             >
-              <option value="">Select a fetched model</option>
+              <option value="">{t("models.editor.selectFetched")}</option>
               {fetched.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.id}
@@ -1080,14 +1129,13 @@ function ConnectionEditor({
             </select>
           ) : null}
           <span className="settings-hint">
-            One model is enough to start. Add more, and set their context
-            windows, from the connection card.
+            {t("models.editor.modelHint")}
           </span>
         </div>
       ) : null}
 
       <label className="field">
-        <span>API key</span>
+        <span>{t("models.editor.apiKey")}</span>
         <input
           type="password"
           value={draft.apiKey}
@@ -1096,8 +1144,8 @@ function ConnectionEditor({
           }
           placeholder={
             hasStoredKey
-              ? "Saved — leave blank to keep"
-              : "Optional for local endpoints"
+              ? t("models.editor.savedKeyPlaceholder")
+              : t("models.editor.optionalKeyPlaceholder")
           }
           autoComplete="off"
         />
@@ -1115,14 +1163,14 @@ function ConnectionEditor({
               })
             }
           />
-          Remove the saved API key
+          {t("models.editor.removeSavedKey")}
         </label>
       ) : null}
 
       <details className="settings-advanced">
-        <summary>Advanced</summary>
+        <summary>{t("models.editor.advanced")}</summary>
         <label className="field">
-          <span>Protocol</span>
+          <span>{t("models.editor.protocol")}</span>
           <select
             value={draft.protocol}
             onChange={(event) =>
@@ -1132,7 +1180,7 @@ function ConnectionEditor({
           >
             {protocolOptions.map((option) => (
               <option key={option.id} value={option.id}>
-                {option.label}
+                {t(option.labelKey)}
               </option>
             ))}
           </select>
@@ -1163,10 +1211,10 @@ function ConnectionEditor({
           }
         >
           {busy === "save"
-            ? "Saving…"
+            ? t("models.editor.saving")
             : creating
-              ? "Add connection"
-              : "Save connection"}
+              ? t("models.editor.add")
+              : t("models.editor.save")}
         </button>
         <button
           type="button"
@@ -1176,7 +1224,9 @@ function ConnectionEditor({
             busy !== null || !draft.baseUrl.trim() || !draft.model.trim()
           }
         >
-          {busy === "test" ? "Testing…" : "Test connection"}
+          {busy === "test"
+            ? t("models.editor.testing")
+            : t("models.editor.test")}
         </button>
         <button
           type="button"
@@ -1184,14 +1234,12 @@ function ConnectionEditor({
           onClick={onCancel}
           disabled={busy !== null}
         >
-          Cancel
+          {t("models.editor.cancel")}
         </button>
       </div>
 
       <p className="settings-hint">
-        Saving a connection never changes which model runs. Keys are stored in
-        plain text in the local configuration file; protect it as sensitive
-        local data.
+        {t("models.editor.note")}
       </p>
     </form>
   );
@@ -1251,7 +1299,7 @@ function ModelLimitsEditor({
         apiKey: "",
         clearApiKey: false,
       });
-      onSaved(next, `${model} limits saved.`);
+      onSaved(next, t("models.notice.limitsSaved", { model }));
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -1263,7 +1311,7 @@ function ModelLimitsEditor({
     <form className="model-limits" onSubmit={handleSave}>
       <div className="settings-form-row">
         <label className="field">
-          <span>Context window (tokens)</span>
+          <span>{t("models.limits.contextWindow")}</span>
           <input
             type="number"
             min={1}
@@ -1274,7 +1322,7 @@ function ModelLimitsEditor({
           />
         </label>
         <label className="field">
-          <span>Max output (tokens)</span>
+          <span>{t("models.limits.maxOutput")}</span>
           <input
             type="number"
             min={1}
@@ -1292,10 +1340,10 @@ function ModelLimitsEditor({
       ) : null}
       <div className="form-actions">
         <button type="submit" className="primary-button" disabled={busy}>
-          {busy ? "Saving…" : "Save limits"}
+          {busy ? t("models.limits.saving") : t("models.limits.save")}
         </button>
         <button type="button" className="ghost-button" onClick={onClose}>
-          Cancel
+          {t("models.limits.cancel")}
         </button>
       </div>
     </form>
@@ -1349,8 +1397,13 @@ function ManageModelsPanel({
       const withWindow = next.filter((model) => model.contextWindow).length;
       setStatus(
         withWindow > 0
-          ? `Fetched ${modelCountLabel(next.length)}. ${withWindow} reported a context window.`
-          : `Fetched ${modelCountLabel(next.length)}. None reported a context window.`,
+          ? t("models.notice.fetchedWithWindow", {
+              count: modelCountLabel(next.length),
+              withWindow,
+            })
+          : t("models.notice.fetchedWithoutWindow", {
+              count: modelCountLabel(next.length),
+            }),
       );
     } catch (error) {
       setError(errorMessage(error));
@@ -1391,19 +1444,24 @@ function ManageModelsPanel({
     );
     setMetadata(seedMetadata(source));
     setModels(mergeModels(models, selected));
-    setStatus(`Added ${modelCountLabel(selected.length)} to ${provider.name}.`);
+    setStatus(
+      t("models.notice.addedToProvider", {
+        count: modelCountLabel(selected.length),
+        provider: provider.name,
+      }),
+    );
   }
 
   function addManual() {
     const value = manual.trim();
     if (!value) return;
     if (models.includes(value)) {
-      setStatus(`${value} is already known.`);
+      setStatus(t("models.notice.modelKnown", { model: value }));
       return;
     }
     setModels([...models, value]);
     setManual("");
-    setStatus(`Added ${value}.`);
+    setStatus(t("models.notice.modelAdded", { model: value }));
   }
 
   function remove(model: string) {
@@ -1426,7 +1484,7 @@ function ManageModelsPanel({
         apiKey: "",
         clearApiKey: false,
       });
-      onSaved(next, `Models for ${provider.name} saved.`);
+      onSaved(next, t("models.notice.modelsSaved", { provider: provider.name }));
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -1437,9 +1495,11 @@ function ManageModelsPanel({
   return (
     <div className="model-manager">
       <div className="model-manager-head">
-        <span className="settings-card-title">Models for {provider.name}</span>
+        <span className="settings-card-title">
+          {t("models.manage.title", { provider: provider.name })}
+        </span>
         <button type="button" className="text-button" onClick={onClose}>
-          Done
+          {t("models.manage.done")}
         </button>
       </div>
 
@@ -1450,13 +1510,15 @@ function ManageModelsPanel({
           onClick={() => void handleFetch()}
           disabled={busy !== null}
         >
-          {busy === "fetch" ? "Fetching…" : "Fetch models"}
+          {busy === "fetch"
+            ? t("models.manage.fetching")
+            : t("models.manage.fetch")}
         </button>
         <input
-          aria-label="Add a model name"
+          aria-label={t("models.manage.addAria")}
           value={manual}
           onChange={(event) => setManual(event.target.value)}
-          placeholder="Add a model name"
+          placeholder={t("models.manage.addPlaceholder")}
           autoComplete="off"
         />
         <button
@@ -1465,17 +1527,17 @@ function ManageModelsPanel({
           onClick={addManual}
           disabled={busy !== null || !manual.trim()}
         >
-          Add
+          {t("models.manage.add")}
         </button>
       </div>
 
       {fetched ? (
         <div className="model-catalogue-panel">
           <input
-            aria-label="Filter fetched models"
+            aria-label={t("models.manage.filterAria")}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter models"
+            placeholder={t("models.manage.filterPlaceholder")}
             autoComplete="off"
           />
           <div className="model-toolbar">
@@ -1484,14 +1546,14 @@ function ManageModelsPanel({
               className="ghost-button"
               onClick={() => setSelected((fetched ?? []).map((model) => model.id))}
             >
-              Select all
+              {t("models.manage.selectAll")}
             </button>
             <button
               type="button"
               className="ghost-button"
               onClick={() => setSelected([])}
             >
-              Clear
+              {t("models.manage.clear")}
             </button>
             <button
               type="button"
@@ -1499,7 +1561,7 @@ function ManageModelsPanel({
               onClick={addSelected}
               disabled={selected.length === 0}
             >
-              Add selected ({selected.length})
+              {t("models.manage.addSelected", { count: selected.length })}
             </button>
           </div>
           <ul className="model-catalogue-list">
@@ -1515,10 +1577,12 @@ function ManageModelsPanel({
                   <span className="settings-meta-inline">
                     {model.contextWindow
                       ? compactTokens(model.contextWindow)
-                      : "no window reported"}
+                      : t("models.manage.noWindow")}
                   </span>
                   {models.includes(model.id) ? (
-                    <span className="settings-meta-inline">Known</span>
+                    <span className="settings-meta-inline">
+                      {t("models.manage.known")}
+                    </span>
                   ) : null}
                 </label>
               </li>
@@ -1528,7 +1592,9 @@ function ManageModelsPanel({
       ) : null}
 
       <div className="field">
-        <span>Known models ({models.length})</span>
+        <span>
+          {t("models.manage.knownModels", { count: models.length })}
+        </span>
         <ul className="known-model-list">
           {models.map((model) => (
             <li
@@ -1540,7 +1606,9 @@ function ManageModelsPanel({
                 {windowLabel(metadata[model])}
               </span>
               {model === provider.model ? (
-                <span className="settings-meta-inline">Default</span>
+                <span className="settings-meta-inline">
+                  {t("models.manage.default")}
+                </span>
               ) : (
                 <button
                   type="button"
@@ -1548,7 +1616,7 @@ function ManageModelsPanel({
                   onClick={() => remove(model)}
                   disabled={busy !== null}
                 >
-                  Remove
+                  {t("models.manage.remove")}
                 </button>
               )}
             </li>
@@ -1574,13 +1642,14 @@ function ManageModelsPanel({
           onClick={() => void handleSave()}
           disabled={busy !== null}
         >
-          {busy === "save" ? "Saving…" : "Save models"}
+          {busy === "save"
+            ? t("models.manage.saving")
+            : t("models.manage.save")}
         </button>
       </div>
 
       <p className="settings-hint">
-        Set a model's context window beside it in the connection card. The
-        default model cannot be removed here; choose another default first.
+        {t("models.manage.note")}
       </p>
     </div>
   );

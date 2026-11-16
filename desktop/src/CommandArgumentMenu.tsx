@@ -1,4 +1,5 @@
 import type { ArgumentSuggestion } from "./commandActions";
+import { useT } from "./i18n";
 
 interface CommandArgumentMenuProps {
   suggestions: ArgumentSuggestion[];
@@ -18,12 +19,13 @@ export default function CommandArgumentMenu({
   onAccept,
   onHover,
 }: CommandArgumentMenuProps) {
+  const t = useT();
   return (
     <div
       className="command-suggestions"
       id="command-argument-suggestions"
       role="listbox"
-      aria-label="Command argument suggestions"
+      aria-label={t("commands.argumentAria")}
     >
       {suggestions.map((suggestion, index) => (
         <button

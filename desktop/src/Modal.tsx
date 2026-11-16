@@ -1,14 +1,24 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
+import { useT } from "./i18n";
+
 interface ModalProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  className?: string;
 }
 
-export default function Modal({ title, onClose, children, footer }: ModalProps) {
+export default function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+  className,
+}: ModalProps) {
+  const t = useT();
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -34,7 +44,7 @@ export default function Modal({ title, onClose, children, footer }: ModalProps) 
       }}
     >
       <div
-        className="modal"
+        className={`modal${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -45,7 +55,7 @@ export default function Modal({ title, onClose, children, footer }: ModalProps) 
           <button
             type="button"
             className="icon-button modal-close"
-            aria-label="Close"
+            aria-label={t("modal.close")}
             onClick={onClose}
           >
             ×

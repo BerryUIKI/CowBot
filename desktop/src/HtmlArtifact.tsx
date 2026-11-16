@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import Modal from "./Modal";
+import { useT } from "./i18n";
 
 const CSP =
   "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; " +
@@ -33,6 +34,7 @@ interface HtmlArtifactProps {
 }
 
 export default function HtmlArtifact({ html }: HtmlArtifactProps) {
+  const t = useT();
   const [mode, setMode] = useState<"preview" | "code">("preview");
   const [expanded, setExpanded] = useState(false);
   const document = useMemo(() => artifactDocument(html), [html]);
@@ -41,7 +43,7 @@ export default function HtmlArtifact({ html }: HtmlArtifactProps) {
     <iframe
       className="html-artifact-frame"
       style={{ height }}
-      title="HTML preview"
+      title={t("artifact.preview")}
       sandbox="allow-scripts allow-forms"
       referrerPolicy="no-referrer"
       srcDoc={document}
@@ -51,24 +53,24 @@ export default function HtmlArtifact({ html }: HtmlArtifactProps) {
   return (
     <div className="html-artifact">
       <div className="html-artifact-head">
-        <span className="html-artifact-label">HTML preview</span>
+        <span className="html-artifact-label">{t("artifact.preview")}</span>
         <div className="html-artifact-actions">
           <button
             type="button"
             aria-pressed={mode === "preview"}
             onClick={() => setMode("preview")}
           >
-            Preview
+            {t("artifact.preview")}
           </button>
           <button
             type="button"
             aria-pressed={mode === "code"}
             onClick={() => setMode("code")}
           >
-            Code
+            {t("artifact.code")}
           </button>
           <button type="button" onClick={() => setExpanded(true)}>
-            Expand
+            {t("artifact.expand")}
           </button>
         </div>
       </div>
@@ -80,7 +82,7 @@ export default function HtmlArtifact({ html }: HtmlArtifactProps) {
         </pre>
       )}
       {expanded ? (
-        <Modal title="HTML preview" onClose={() => setExpanded(false)}>
+        <Modal title={t("artifact.preview")} onClose={() => setExpanded(false)}>
           {frame("70vh")}
         </Modal>
       ) : null}

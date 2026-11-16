@@ -4,6 +4,7 @@ import ModelProviderSettings from "./ModelProviderSettings";
 import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
+import { useT } from "./i18n";
 import type { AgentProfile, TemplateDocument } from "./types";
 
 interface OnboardingProps {
@@ -21,6 +22,7 @@ export default function Onboarding({
   onAddAgents,
   onComplete,
 }: OnboardingProps) {
+  const t = useT();
   const [step, setStep] = useState(0);
   const [addingTemplate, setAddingTemplate] = useState<string | null>(null);
   const [addedTemplateIds, setAddedTemplateIds] = useState<Set<string>>(
@@ -46,7 +48,12 @@ export default function Onboarding({
       const added = await onAddAgents(template.id);
       setAddedTemplateIds((current) => new Set(current).add(template.id));
       setNotice(
-        `Added ${added.length} agent${added.length === 1 ? "" : "s"} from ${template.name}.`,
+        t(
+          added.length === 1
+            ? "onboarding.addedNoticeOne"
+            : "onboarding.addedNoticeOther",
+          { count: added.length, name: template.name },
+        ),
       );
     } catch (err) {
       setError(errorMessage(err));
@@ -72,7 +79,7 @@ export default function Onboarding({
       className="onboarding"
       role="dialog"
       aria-modal="true"
-      aria-label="CowBot setup"
+      aria-label={t("onboarding.setupAria")}
     >
       <header className="onboarding-header">
         <img className="wordmark" src={wordmark} alt="CowBot" />
@@ -82,7 +89,7 @@ export default function Onboarding({
           onClick={finish}
           disabled={busy}
         >
-          {finishing ? "Finishing…" : "Skip setup"}
+          {finishing ? t("onboarding.finishing") : t("onboarding.skip")}
         </button>
       </header>
 
@@ -93,19 +100,17 @@ export default function Onboarding({
               <span className="empty-icon-tile onboarding-icon-tile">
                 <img className="empty-icon" src={icon} alt="" />
               </span>
-              <p className="onboarding-kicker">Welcome to CowBot</p>
+              <p className="onboarding-kicker">{t("onboarding.welcomeKicker")}</p>
               <h1 className="onboarding-title">
-                A local workspace for your agent team.
+                {t("onboarding.welcomeTitle")}
               </h1>
               <p className="onboarding-copy">
-                CowBot runs agents on this machine. Messages, tasks, and run
-                history stay in a local database; only model requests leave the
-                device, to the endpoint you configure.
+                {t("onboarding.welcomeCopy")}
               </p>
               <ul className="onboarding-points">
-                <li>Every agent has a conversation; channels keep the team together.</li>
-                <li>Tool calls that touch your machine wait for approval.</li>
-                <li>Switch models or go offline at any time in Settings.</li>
+                <li>{t("onboarding.pointConversations")}</li>
+                <li>{t("onboarding.pointApprovals")}</li>
+                <li>{t("onboarding.pointModels")}</li>
               </ul>
               <div className="onboarding-actions">
                 <button
@@ -114,19 +119,18 @@ export default function Onboarding({
                   onClick={() => goToStep(1)}
                   autoFocus
                 >
-                  Get started
+                  {t("onboarding.getStarted")}
                 </button>
               </div>
             </>
           ) : step === 1 ? (
             <>
-              <p className="onboarding-kicker">Step 2 of 3</p>
-              <h1 className="onboarding-title">Connect a model</h1>
+              <p className="onboarding-kicker">
+                {t("onboarding.stepOf", { current: 2, total: steps.length })}
+              </p>
+              <h1 className="onboarding-title">{t("onboarding.connectTitle")}</h1>
               <p className="onboarding-copy">
-                Add a connection from the catalogue, or choose Custom to enter
-                your own endpoint, then pick the default model agents run. Skip
-                this step and CowBot will use the offline echo model until you
-                configure one.
+                {t("onboarding.connectCopy")}
               </p>
               <div className="onboarding-provider">
                 <ModelProviderSettings showConfigPath={false} />
@@ -137,28 +141,28 @@ export default function Onboarding({
                   className="primary-button"
                   onClick={() => goToStep(2)}
                 >
-                  Next
+                  {t("onboarding.next")}
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
                   onClick={() => goToStep(0)}
                 >
-                  Back
+                  {t("onboarding.back")}
                 </button>
               </div>
             </>
           ) : (
             <>
-              <p className="onboarding-kicker">Step 3 of 3</p>
-              <h1 className="onboarding-title">Assemble a starter team</h1>
+              <p className="onboarding-kicker">
+                {t("onboarding.stepOf", { current: 3, total: steps.length })}
+              </p>
+              <h1 className="onboarding-title">{t("onboarding.teamTitle")}</h1>
               <p className="onboarding-copy">
-                Start with the Main Assistant, the primary agent that can create
-                channels, start specialist teams, and assign work. You can add
-                more from Settings later.
+                {t("onboarding.teamCopy")}
               </p>
               {templates.length === 0 ? (
-                <p className="settings-empty">No templates available.</p>
+                <p className="settings-empty">{t("onboarding.noTemplates")}</p>
               ) : (
                 <ul className="settings-list onboarding-templates">
                   {templates.map((template) => {
@@ -172,7 +176,7 @@ export default function Onboarding({
                           <span className="settings-badge">{template.kind}</span>
                           {added ? (
                             <span className="settings-badge settings-badge-active">
-                              Added
+                              {t("onboarding.added")}
                             </span>
                           ) : null}
                         </div>
@@ -183,8 +187,12 @@ export default function Onboarding({
                         ) : null}
                         <div className="settings-card-foot">
                           <span className="settings-meta-inline">
-                            {template.agents.length} agent
-                            {template.agents.length === 1 ? "" : "s"}
+                            {t(
+                              template.agents.length === 1
+                                ? "settings.team.agentCountOne"
+                                : "settings.team.agentCountOther",
+                              { count: template.agents.length },
+                            )}
                           </span>
                           <button
                             type="button"
@@ -193,10 +201,10 @@ export default function Onboarding({
                             disabled={busy || added}
                           >
                             {addingTemplate === template.id
-                              ? "Adding…"
+                              ? t("onboarding.adding")
                               : added
-                                ? "Added"
-                                : "Add agents"}
+                                ? t("onboarding.added")
+                                : t("onboarding.addAgents")}
                           </button>
                         </div>
                       </li>
@@ -206,8 +214,13 @@ export default function Onboarding({
               )}
               <p className="settings-hint">
                 {agents.length === 0
-                  ? "No agents in this workspace yet."
-                  : `${agents.length} agent${agents.length === 1 ? "" : "s"} in this workspace.`}
+                  ? t("onboarding.noAgents")
+                  : t(
+                      agents.length === 1
+                        ? "onboarding.agentsCountOne"
+                        : "onboarding.agentsCountOther",
+                      { count: agents.length },
+                    )}
               </p>
               <div className="onboarding-actions">
                 <button
@@ -216,7 +229,9 @@ export default function Onboarding({
                   onClick={finish}
                   disabled={busy}
                 >
-                  {finishing ? "Finishing…" : "Finish setup"}
+                  {finishing
+                    ? t("onboarding.finishing")
+                    : t("onboarding.finish")}
                 </button>
                 <button
                   type="button"
@@ -224,7 +239,7 @@ export default function Onboarding({
                   onClick={() => goToStep(1)}
                   disabled={busy}
                 >
-                  Back
+                  {t("onboarding.back")}
                 </button>
               </div>
             </>
@@ -251,7 +266,10 @@ export default function Onboarding({
               ))}
             </span>
             <span className="settings-meta-inline">
-              Step {step + 1} of {steps.length}
+              {t("onboarding.stepOf", {
+                current: step + 1,
+                total: steps.length,
+              })}
             </span>
           </footer>
         </div>

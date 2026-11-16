@@ -688,6 +688,15 @@ export function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("get_app_info");
 }
 
+/** Stored interface locale preference (`system`, `en`, or a locale tag). */
+export function getUiLocale(): Promise<string | null> {
+  return invoke<string | null>("get_ui_locale");
+}
+
+export function setUiLocale(locale: string): Promise<void> {
+  return invoke<void>("set_ui_locale", { locale });
+}
+
 export function setAutoCheckUpdates(enabled: boolean): Promise<void> {
   return invoke<void>("set_auto_check_updates", { enabled });
 }

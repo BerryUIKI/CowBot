@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 import ApprovalCards from "./ApprovalCards";
 import BackgroundTasksContent from "./BackgroundTasksContent";
+import { useT } from "./i18n";
+import type { TranslationKey } from "./i18n/catalog";
 import type {
   AgentProfile,
   Approval,
@@ -37,13 +39,13 @@ interface InspectorProps {
   ) => void;
 }
 
-const baseTabs: { id: InspectorTab; label: string }[] = [
-  { id: "approvals", label: "Approvals" },
-  { id: "background", label: "Background" },
+const baseTabs: { id: InspectorTab; labelKey: TranslationKey }[] = [
+  { id: "approvals", labelKey: "inspector.approvals" },
+  { id: "background", labelKey: "inspector.background" },
 ];
 
-const middleTabs: { id: InspectorTab; label: string }[] = [
-  { id: "context", label: "Context" },
+const middleTabs: { id: InspectorTab; labelKey: TranslationKey }[] = [
+  { id: "context", labelKey: "inspector.context" },
 ];
 
 export default function Inspector({
@@ -64,21 +66,22 @@ export default function Inspector({
   decidingId,
   onDecide,
 }: InspectorProps) {
+  const t = useT();
   const activeCount = overview.filter((entry) =>
     isActiveOverviewStatus(entry.status),
   ).length;
 
   const tabs = [
-    { id: "task" as const, label: "Task" },
+    { id: "task" as const, labelKey: "inspector.task" as const },
     ...middleTabs,
     ...baseTabs,
   ];
   const activeTab: InspectorTab = tab;
 
   return (
-    <aside className="inspector" aria-label="Inspector" inert={inert}>
+    <aside className="inspector" aria-label={t("inspector.aria")} inert={inert}>
       <header className="inspector-head">
-        <div className="inspector-tabs" role="tablist" aria-label="Inspector">
+        <div className="inspector-tabs" role="tablist" aria-label={t("inspector.tabsAria")}>
           {tabs.map((item) => (
             <button
               key={item.id}
@@ -90,7 +93,7 @@ export default function Inspector({
               className={`inspector-tab${activeTab === item.id ? " is-active" : ""}`}
               onClick={() => onTabChange(item.id)}
             >
-              {item.label}
+              {t(item.labelKey)}
               {item.id === "approvals" && approvals.length > 0 ? (
                 <span className="nav-count">{approvals.length}</span>
               ) : null}
@@ -103,8 +106,8 @@ export default function Inspector({
         <button
           type="button"
           className="icon-button"
-          aria-label="Close inspector"
-          title="Close"
+          aria-label={t("inspector.close")}
+          title={t("inspector.closeTitle")}
           onClick={onClose}
         >
           ×

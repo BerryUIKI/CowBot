@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import NotesEditor from "./NotesEditor";
 import { formatTokens } from "./format";
+import { t } from "./i18n/catalog";
 import type {
   CacheUsageSummary,
   ConversationContext,
@@ -56,17 +57,21 @@ function cacheRate(summary: CacheUsageSummary): number | null {
 
 function cacheLabel(summary: CacheUsageSummary): string {
   const rate = cacheRate(summary);
-  if (rate === null) return "No usage recorded";
-  return `${Math.round(rate * 100)}% cached · ${formatTokens(
-    summary.cached_input_tokens,
-  )} of ${formatTokens(summary.total_input_tokens)} input`;
+  if (rate === null) return t("context.meter.cacheNone");
+  return t("context.meter.cacheValue", {
+    percent: Math.round(rate * 100),
+    cached: formatTokens(summary.cached_input_tokens),
+    total: formatTokens(summary.total_input_tokens),
+  });
 }
 
 /** How the meter's token numbers were counted. */
 function tokenSourceLabel(context: ConversationContext): string {
-  if (context.token_source === "estimate") return "Estimated from characters";
+  if (context.token_source === "estimate") {
+    return t("context.meter.sourceEstimated");
+  }
   const counter = context.token_counter ?? context.token_source;
-  return `Exact · ${counter}`;
+  return t("context.meter.sourceExactWithCounter", { counter });
 }
 
 interface ContextSegment {
@@ -95,12 +100,16 @@ function buildContextBar(
   const segments: ContextSegment[] = [
     {
       id: "messages",
-      label: "Messages",
+      label: t("context.meter.messages"),
       tokens: current.history_tokens + current.latest_tokens,
     },
-    { id: "memory", label: "Memory", tokens: current.memory_tokens },
-    { id: "system", label: "System prompt", tokens: current.system_tokens },
-    { id: "tools", label: "Tools", tokens: current.tool_tokens },
+    { id: "memory", label: t("context.meter.memoryNext"), tokens: current.memory_tokens },
+    {
+      id: "system",
+      label: t("context.meter.systemPrompt"),
+      tokens: current.system_tokens,
+    },
+    { id: "tools", label: t("context.meter.tools"), tokens: current.tool_tokens },
   ].map((segment) => ({
     ...segment,
     percent: (segment.tokens / usable) * 100,
@@ -199,8 +208,12 @@ export default function ContextMeter({
   // context meter labels that segment separately (ADR-0035).
   const exact = context.token_source === "tiktoken" || context.token_source === "provider";
   const sourceNote = exact
-    ? `exact count${context.token_counter ? ` (${context.token_counter})` : ""}`
-    : "estimated count";
+    ? context.token_counter
+      ? t("context.meter.sourceExactWithCounter", {
+          counter: context.token_counter,
+        })
+      : t("context.meter.sourceExact")
+    : t("context.meter.sourceEstimated");
   const tabId = (position: number) => `context-tab-${context.channel_id}-${position}`;
   const panelId = `context-panel-${context.channel_id}`;
 
@@ -232,16 +245,29 @@ export default function ContextMeter({
       <button
         type="button"
         className={`context-meter context-${state}`}
-        aria-label="Conversation context usage"
+        aria-label={t("context.meter.ringAria")}
         aria-expanded={open}
         title={
           group
             ? percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in the fullest branch (${current.agent_name}) · ${sourceNote}`
-              : `${Math.round(percent)}% used in the fullest participant branch · ${sourceNote}`
+              ? t("context.meter.groupTitleUnknown", {
+                  tokens: formatTokens(worst.total_tokens),
+                  name: current.agent_name,
+                  source: sourceNote,
+                })
+              : t("context.meter.groupTitle", {
+                  percent: Math.round(percent),
+                  source: sourceNote,
+                })
             : percent === null
-              ? `${formatTokens(worst.total_tokens)} tokens in context · ${sourceNote}`
-              : `${Math.round(percent)}% of the usable context window · ${sourceNote}`
+              ? t("context.meter.singleTitleUnknown", {
+                  tokens: formatTokens(worst.total_tokens),
+                  source: sourceNote,
+                })
+              : t("context.meter.singleTitle", {
+                  percent: Math.round(percent),
+                  source: sourceNote,
+                })
         }
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
@@ -268,16 +294,20 @@ export default function ContextMeter({
         <div
           className="context-popover"
           role="dialog"
-          aria-label="Context usage"
+          aria-label={t("context.meter.popoverAria")}
         >
           <div className="context-popover-head">
-            <h3>Context window</h3>
+            <h3>{t("context.meter.windowTitle")}</h3>
             <span className="context-head-usage">
               {bar && current.percent_used !== null
-                ? `${formatTokens(bar.used)} / ${formatTokens(bar.usable)} (${Math.round(
-                    current.percent_used,
-                  )}%)`
-                : `${formatTokens(current.total_tokens)} tokens`}
+                ? t("context.meter.headUsage", {
+                    used: formatTokens(bar.used),
+                    usable: formatTokens(bar.usable),
+                    percent: Math.round(current.percent_used),
+                  })
+                : t("context.meter.headTokens", {
+                    tokens: formatTokens(current.total_tokens),
+                  })}
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -291,7 +321,7 @@ export default function ContextMeter({
           </div>
 
           {group ? (
-            <div className="context-tabs" role="tablist" aria-label="Participants">
+            <div className="context-tabs" role="tablist" aria-label={t("context.meter.participantsAria")}>
               {participants.map((participant, position) => (
                 <button
                   key={participant.agent_id}
@@ -307,7 +337,7 @@ export default function ContextMeter({
                   onClick={() => setActiveIndex(position)}
                   onKeyDown={(event) => handleTabKey(event, position)}
                 >
-                  {participant.agent_name || "Participant"}
+                  {participant.agent_name || t("context.meter.participantFallback")}
                 </button>
               ))}
             </div>
@@ -322,9 +352,10 @@ export default function ContextMeter({
               <div
                 className="context-bar"
                 role="img"
-                aria-label={`Context used: ${formatTokens(bar.used)} of ${formatTokens(
-                  bar.usable,
-                )} tokens`}
+                aria-label={t("context.meter.barAria", {
+                  used: formatTokens(bar.used),
+                  usable: formatTokens(bar.usable),
+                })}
               >
                 {bar.segments
                   .filter((segment) => segment.tokens > 0)
@@ -353,9 +384,9 @@ export default function ContextMeter({
             ) : (
               <div className="context-unknown">
                 <p className="context-ratio">
-                  {formatTokens(current.total_tokens)} tokens in context. The
-                  context window is unknown because this model has none set, so
-                  there is nothing to measure against.
+                  {t("context.meter.unknownText", {
+                    tokens: formatTokens(current.total_tokens),
+                  })}
                 </p>
                 <button
                   type="button"
@@ -365,17 +396,21 @@ export default function ContextMeter({
                     onOpenModelSettings();
                   }}
                 >
-                  Set the context window
+                  {t("context.meter.setWindow")}
                 </button>
               </div>
             )}
 
             {full ? (
               <div className="context-full-warning" role="alert">
-                <strong>Context full.</strong>{" "}
+                <strong>{t("context.meter.fullTitle")}</strong>{" "}
                 {group
-                  ? `${current.agent_name || "This participant"} is skipped until this branch is compacted or cleared.`
-                  : "Sending is blocked until you compact, clear, or start a new conversation."}
+                  ? t("context.meter.fullGroup", {
+                      name:
+                        current.agent_name ||
+                        t("context.meter.participantFallback"),
+                    })
+                  : t("context.meter.fullSingle")}
                 <div className="context-actions">
                   <button
                     type="button"
@@ -383,14 +418,14 @@ export default function ContextMeter({
                     disabled={busy}
                     onClick={() => onCompact(group ? current.agent_id : undefined)}
                   >
-                    Compact now
+                    {t("context.meter.compactNow")}
                   </button>
                   <button
                     type="button"
                     className="ghost-button"
                     onClick={onNewConversation}
                   >
-                    New conversation
+                    {t("context.meter.newConversation")}
                   </button>
                 </div>
               </div>
@@ -402,54 +437,64 @@ export default function ContextMeter({
               aria-expanded={showDetails}
               onClick={() => setShowDetails((shown) => !shown)}
             >
-              {showDetails ? "Hide detailed breakdown" : "See detailed breakdown"}
+              {showDetails
+                ? t("context.meter.hideDetails")
+                : t("context.meter.showDetails")}
             </button>
 
             {showDetails ? (
               <>
                 <dl className="context-breakdown">
                   <div>
-                    <dt>System prompt</dt>
+                    <dt>{t("context.meter.systemPrompt")}</dt>
                     <dd>{formatTokens(current.system_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>Tools</dt>
+                    <dt>{t("context.meter.tools")}</dt>
                     <dd>{formatTokens(current.tool_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>History</dt>
+                    <dt>{t("context.meter.history")}</dt>
                     <dd>{formatTokens(current.history_tokens)}</dd>
                   </div>
                   <div>
-                    <dt>Latest message</dt>
+                    <dt>{t("context.meter.latestMessage")}</dt>
                     <dd>{formatTokens(current.latest_tokens)}</dd>
                   </div>
                   <div>
                     <dt>
                       {exact
-                        ? "Memory (next turn, estimated)"
-                        : "Memory (next turn)"}
+                        ? t("context.meter.memoryNextEstimated")
+                        : t("context.meter.memoryNext")}
                     </dt>
                     <dd>{formatTokens(current.memory_tokens)}</dd>
                   </div>
                 </dl>
 
                 <div className="context-cache">
-                  <h4>Cache</h4>
+                  <h4>{t("context.meter.cacheTitle")}</h4>
                   <p>
-                    <span>{group ? "Latest run" : "Last turn"}</span>
+                    <span>
+                      {group
+                        ? t("context.meter.latestRun")
+                        : t("context.meter.lastTurn")}
+                    </span>
                     {cacheLabel(current.cache_last_run)}
                   </p>
                   <p>
-                    <span>{group ? "Conversation total" : "Conversation"}</span>
+                    <span>
+                      {group
+                        ? t("context.meter.conversationTotal")
+                        : t("context.meter.conversation")}
+                    </span>
                     {cacheLabel(current.cache_conversation)}
                   </p>
                 </div>
                             {group ? (
                               <div className="context-routing">
-                                <h4>Routing</h4>
+                                <h4>{t("context.meter.routingTitle")}</h4>
                                 <label className="context-default-responder">
-                                  <span>Who answers an unaddressed message</span>
+                                  <span>{t("context.meter.unaddressedQuestion")}</span>
                                   <select
                                     value={context.routing_mode}
                                     disabled={busy}
@@ -458,12 +503,14 @@ export default function ContextMeter({
                                     }
                                   >
                                     <option value="mention">
-                                      Default responder (or the model router)
+                                      {t("context.meter.routingMention")}
                                     </option>
                                     <option value="rotation">
-                                      Rotation — the next participant after the last speaker
+                                      {t("context.meter.routingRotation")}
                                     </option>
-                                    <option value="default">Default responder only</option>
+                                    <option value="default">
+                                      {t("context.meter.routingDefault")}
+                                    </option>
                                   </select>
                                 </label>
                                 {context.routing_mode === "mention" ? (
@@ -474,11 +521,11 @@ export default function ContextMeter({
                                       disabled={busy}
                                       onChange={(event) => onRouterChange(event.target.checked)}
                                     />
-                                    <span>Route unaddressed messages with the model</span>
+                                    <span>{t("context.meter.routeWithModel")}</span>
                                   </label>
                                 ) : null}
                                 <div className="context-mute">
-                                  <span>Mute</span>
+                                  <span>{t("context.meter.mute")}</span>
                                   <div className="context-mute-list">
                                     {participants.map((participant) => {
                                       const muted = context.muted_participants.includes(
@@ -506,8 +553,7 @@ export default function ContextMeter({
                                     })}
                                   </div>
                                   <p className="context-hint">
-                                    A muted participant stays in the roster and keeps the
-                                    history, but is never picked to answer.
+                                    {t("context.meter.muteHint")}
                                   </p>
                                 </div>
                                 <label className="context-toggle">
@@ -517,10 +563,10 @@ export default function ContextMeter({
                                     disabled={busy}
                                     onChange={(event) => onReplyCleanupChange(event.target.checked)}
                                   />
-                                  <span>Strip speaker labels and cross-talk from replies</span>
+                                  <span>{t("context.meter.stripLabels")}</span>
                                 </label>
                                 <label className="context-default-responder">
-                                  <span>Default responder</span>
+                                  <span>{t("context.meter.defaultResponder")}</span>
                                   <select
                                     value={context.default_responder ?? ""}
                                     disabled={busy}
@@ -532,7 +578,7 @@ export default function ContextMeter({
                                   >
                                     {context.default_responder === null ? (
                                       <option value="" disabled>
-                                        None (unaddressed messages stay silent)
+                                        {t("context.meter.noneSilent")}
                                       </option>
                                     ) : null}
                                     {participants.map((participant) => (
@@ -546,8 +592,7 @@ export default function ContextMeter({
                                   </select>
                                 </label>
                                 <p className="context-hint">
-                                  Participants are fixed at creation. Start a new conversation
-                                  for a different team.
+                                  {t("context.meter.participantsFixed")}
                                 </p>
                               </div>
                             ) : null}
@@ -560,15 +605,15 @@ export default function ContextMeter({
                                   disabled={busy}
                                   onChange={(event) => onAutoCompactChange(event.target.checked)}
                                 />
-                                <span>Compact automatically</span>
+                                <span>{t("context.meter.autoCompact")}</span>
                               </label>
                               <label className="context-threshold">
-                                <span>at</span>
+                                <span>{t("context.meter.at")}</span>
                                 <select
                                   value={context.compact_threshold}
                                   disabled={busy || !context.auto_compact}
                                   onChange={(event) => onThresholdChange(Number(event.target.value))}
-                                  aria-label="Automatic compaction threshold percent"
+                                  aria-label={t("context.meter.thresholdAria")}
                                 >
                                   {[60, 70, 80, 90].map((threshold) => (
                                     <option key={threshold} value={threshold}>
@@ -586,24 +631,30 @@ export default function ContextMeter({
 
                             <NotesEditor
                               channelId={context.channel_id}
-                              label="Conversation note"
-                              hint="Shared with every participant and injected before this branch."
+                              label={t("context.meter.conversationNote")}
+                              hint={t("context.meter.conversationNoteHint")}
                               onChanged={onMemoryChanged}
                             />
 
                             <p className="context-meta">
-                              {context.provider_id ? context.model : "Offline model"}
+                              {context.provider_id
+                                ? context.model
+                                : t("context.meter.offlineModel")}
                               {context.provider_name
                                 ? ` · ${context.provider_name}`
                                 : ""}{" "}
                               ·{" "}
                               {context.model_follows_default
-                                ? "follows default"
-                                : "pinned"}
+                                ? t("context.meter.followsDefault")
+                                : t("context.meter.pinned")}
                               {" · "}
-                              {current.active_entries} active
+                              {t("context.meter.activeEntries", {
+                                count: current.active_entries,
+                              })}
                               {current.excluded_entries > 0
-                                ? `, ${current.excluded_entries} excluded`
+                                ? t("context.meter.excludedEntries", {
+                                    count: current.excluded_entries,
+                                  })
                                 : ""}
                               {" · "}
                               {tokenSourceLabel(context)}
@@ -618,7 +669,7 @@ export default function ContextMeter({
                                   onInspect(current.agent_id);
                                 }}
                               >
-                                Inspect
+                                {t("context.meter.inspect")}
                               </button>
                               <button
                                 type="button"
@@ -626,7 +677,9 @@ export default function ContextMeter({
                                 disabled={busy}
                                 onClick={() => onClear(group ? current.agent_id : undefined)}
                               >
-                                {group ? "Clear this branch" : "Clear context"}
+                                {group
+                                  ? t("context.meter.clearBranch")
+                                  : t("context.meter.clearContext")}
                               </button>
                               {group ? (
                                 <button
@@ -635,7 +688,7 @@ export default function ContextMeter({
                                   disabled={busy}
                                   onClick={() => onClear()}
                                 >
-                                  Clear all
+                                  {t("context.meter.clearAll")}
                                 </button>
                               ) : null}
                               <button
@@ -643,7 +696,7 @@ export default function ContextMeter({
                                 className="ghost-button"
                                 onClick={onNewConversation}
                               >
-                                New conversation
+                                {t("context.meter.newConversation")}
                               </button>
                             </div>
               </>

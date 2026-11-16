@@ -2544,6 +2544,28 @@ pub fn set_auto_check_updates(state: State<'_, AppState>, enabled: bool) -> Resu
         .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
 }
 
+/// The stored interface locale preference, or `None` to follow the system.
+#[tauri::command]
+pub fn get_ui_locale(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(load_config(&state)?.ui_locale)
+}
+
+/// Persist the interface locale preference.
+///
+/// The backend stores the value without interpreting it; the frontend owns the
+/// locale registry and falls back to the system language for unknown values.
+#[tauri::command]
+pub fn set_ui_locale(state: State<'_, AppState>, locale: String) -> Result<(), String> {
+    let locale = locale.trim();
+    if locale.is_empty() || locale.len() > 35 {
+        return Err("Unsupported interface locale.".to_string());
+    }
+    let mut config = load_config(&state)?;
+    config.ui_locale = Some(locale.to_string());
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
+}
+
 /// Restart the app so an installed update takes effect.
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {

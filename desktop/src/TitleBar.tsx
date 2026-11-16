@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { useT } from "./i18n";
+
 type TitleBarProps = {
   leading: ReactNode;
   title?: string;
@@ -8,6 +10,7 @@ type TitleBarProps = {
 };
 
 export function TitleBar({ leading, title, actions }: TitleBarProps) {
+  const t = useT();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -39,8 +42,8 @@ export function TitleBar({ leading, title, actions }: TitleBarProps) {
         <button
           type="button"
           className="titlebar-button"
-          title="Minimize"
-          aria-label="Minimize"
+          title={t("titleBar.minimize")}
+          aria-label={t("titleBar.minimize")}
           onClick={() => win.minimize()}
         >
           <svg viewBox="0 0 12 12" aria-hidden="true">
@@ -50,8 +53,8 @@ export function TitleBar({ leading, title, actions }: TitleBarProps) {
         <button
           type="button"
           className="titlebar-button"
-          title={maximized ? "Restore" : "Maximize"}
-          aria-label={maximized ? "Restore" : "Maximize"}
+          title={maximized ? t("titleBar.restore") : t("titleBar.maximize")}
+          aria-label={maximized ? t("titleBar.restore") : t("titleBar.maximize")}
           onClick={() => win.toggleMaximize()}
         >
           {maximized ? (
@@ -68,8 +71,8 @@ export function TitleBar({ leading, title, actions }: TitleBarProps) {
         <button
           type="button"
           className="titlebar-button titlebar-close"
-          title="Close"
-          aria-label="Close"
+          title={t("titleBar.close")}
+          aria-label={t("titleBar.close")}
           onClick={() => win.close()}
         >
           <svg viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1">

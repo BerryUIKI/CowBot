@@ -1,4 +1,5 @@
 import Avatar from "./Avatar";
+import { t } from "./i18n/catalog";
 
 interface GroupAvatarProps {
   names: string[];
@@ -13,7 +14,7 @@ interface GroupAvatarProps {
  */
 export default function GroupAvatar({ names, size = "medium" }: GroupAvatarProps) {
   if (names.length === 0) {
-    return <Avatar name="Group" kind="channel" size={size} />;
+    return <Avatar name={t("app.chat.group")} kind="channel" size={size} />;
   }
   if (names.length === 1) {
     return <Avatar name={names[0]} kind="agent" size={size} />;

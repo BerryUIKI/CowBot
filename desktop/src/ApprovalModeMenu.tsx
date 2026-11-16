@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 
 import { approvalModes } from "./types";
 import type { ApprovalLevel, ApprovalMode } from "./types";
+import { t } from "./i18n/catalog";
 
 interface ApprovalModeMenuProps {
   value: ApprovalLevel;
@@ -24,9 +25,7 @@ export default function ApprovalModeMenu({
     // Bypass is warned about every time; the acknowledgment is never stored.
     if (
       mode.value === "trusted" &&
-      !window.confirm(
-        "Bypass permissions runs every tool call. Critical-risk calls follow the workspace policy in Settings → Approvals. Continue?",
-      )
+      !window.confirm(t("app.confirm.bypass"))
     ) {
       return;
     }
@@ -96,12 +95,12 @@ export default function ApprovalModeMenu({
         className="approval-mode-button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`Approval mode: ${current.label}`}
+        title={t("approval.modeTitle", { mode: t(current.labelKey) })}
         onClick={() => setOpen((current) => !current)}
         disabled={disabled}
       >
         <span className="approval-mode-dot" aria-hidden="true" />
-        {current.label}
+        {t(current.labelKey)}
       </button>
 
       {open ? (
@@ -109,10 +108,10 @@ export default function ApprovalModeMenu({
           ref={menuRef}
           className="approval-mode-popover"
           role="menu"
-          aria-label="Approval mode"
+          aria-label={t("approval.menuAria")}
           onKeyDown={handleMenuKeyDown}
         >
-          <div className="approval-mode-header">Mode</div>
+          <div className="approval-mode-header">{t("approval.menuHeader")}</div>
           {approvalModes.map((mode, index) => (
             <button
               key={mode.value}
@@ -131,11 +130,11 @@ export default function ApprovalModeMenu({
               </span>
               <span className="approval-mode-copy">
                 <span className="approval-mode-label">
-                  {mode.label}
+                  {t(mode.labelKey)}
                   <span className="approval-mode-shortcut">{index + 1}</span>
                 </span>
                 <span className="approval-mode-description">
-                  {mode.description}
+                  {t(mode.descriptionKey)}
                 </span>
               </span>
             </button>
