@@ -204,6 +204,9 @@ export function updateConversationSettings(
   routingMode?: RoutingMode,
   mutedParticipants?: string[],
   replyCleanup?: boolean,
+  providerId?: string | null,
+  model?: string,
+  modelFollowsDefault?: boolean,
 ): Promise<ConversationContext> {
   return invoke<ConversationContext>("update_conversation_settings", {
     channelId,
@@ -214,6 +217,9 @@ export function updateConversationSettings(
     routingMode,
     mutedParticipants,
     replyCleanup,
+    providerId,
+    model,
+    modelFollowsDefault,
   });
 }
 

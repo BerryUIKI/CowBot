@@ -216,6 +216,10 @@ export interface ConversationContext {
   agent_id: string;
   model: string;
   provider_id: string | null;
+  /// Display name of the provider, when one supplies the model.
+  provider_name: string | null;
+  /// Whether this conversation follows the default model (ADR-0049).
+  model_follows_default: boolean;
   system_tokens: number;
   tool_tokens: number;
   history_tokens: number;
