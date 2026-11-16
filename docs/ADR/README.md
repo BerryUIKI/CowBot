@@ -53,6 +53,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0047](0047-hosting-the-workspace-data-surfaces.md) | Serving memory, conversations, previews, snapshots, templates, and packages |
 | [0048](0048-default-model-and-connections.md) | A default model and the connections that supply one |
 | [0049](0049-conversation-model-scope.md) | A conversation follows the default model or pins its own |
+| [0050](0050-desktop-interface-localisation.md) | Desktop interface internationalisation and the account menu |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 
