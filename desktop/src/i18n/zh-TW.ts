@@ -409,7 +409,9 @@ export const zhTW: Catalog = {
     },
     "shell": {
       "dismiss": "略過",
-      "opening": "正在開啟工作區…"
+      "opening": "正在開啟工作區…",
+      "loadFailed": "CowBot 無法開啟此工作區。",
+      "retry": "重試"
     },
     "chat": {
       "group": "群組",
