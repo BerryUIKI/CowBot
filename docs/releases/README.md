@@ -5,6 +5,7 @@ the canonical distribution point; these files keep the notes in the repository.
 
 | Version | Theme |
 | --- | --- |
+| [0.1.10](0.1.10.md) | Self-hosted team mode, a default model with per-conversation scope, and a trilingual interface |
 | [0.1.9](0.1.9.md) | Slash commands, side questions, recorded prompt snapshots, and model-aware token counting |
 | [0.1.8](0.1.8.md) | Group conversations with routing, agent memory and shared notes, and the colored context indicator |
 | [0.1.7](0.1.7.md) | Approval parity, conversation context and token usage, and task worktrees with background cards |
