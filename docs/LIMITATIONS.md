@@ -1,7 +1,7 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.9 and the `dev` branch at the time of writing.
-**Last reviewed:** 2026-11-13.
+**Applies to:** CowBot 0.1.10 and the `dev` branch at the time of writing.
+**Last reviewed:** 2026-11-16.
 
 This page is the honest boundary of the product. It says what works, what does
 not, and which behaviours are deliberate choices that may surprise you. The
@@ -13,8 +13,9 @@ is stale — please open an issue.
 
 ## What works today
 
-CowBot 0.1.9 is a **local, single-user** desktop app and CLI. Everything runs on
-your machine against a SQLite database; no server is involved.
+CowBot 0.1.10 is a local-first **desktop app and CLI**. The default mode runs
+everything on your machine against a SQLite database; an optional self-hosted
+server shares a workspace with a small team over HTTP and WebSocket.
 
 | Area | What you can do |
 | --- | --- |
@@ -24,11 +25,13 @@ your machine against a SQLite database; no server is involved.
 | Tasks | Create a task, run a crew, watch assignments and tool calls, approve risky steps, cancel, and inspect history |
 | Worktrees | Register a local git project and run a task in its own worktree, with a branch, diff, and discard action |
 | Approvals | Risk-based policy, workspace rules, session decisions, Plan mode, and a Bypass Critical tri-state |
-| Models | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses, with endpoint model discovery and several models per provider |
+| Models | OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses, with endpoint model discovery, several models per provider, one default model separate from connections, and per-conversation model scope |
 | Audit | Normalized token usage with cache fields, sealed redacted prompt snapshots with a retention window, and a source-filtered audit view |
 | Composer | Sixteen `/commands` as desktop actions, and `/btw` for a side question that never enters the conversation |
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
+| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it |
+| Interface | English, Simplified Chinese, and Traditional Chinese, with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
 ## What does not work yet
@@ -53,10 +56,13 @@ tracked.
   and its context, but a turn still executes in the desktop's process with its
   model provider, so a team member without that provider configured cannot make
   an agent answer.
-- **No remote or multi-device access.** A workspace lives in one local database
-  file on one machine; there is no way to reach it from another device.
-- **No REST or WebSocket surface.** `cowbot-client` is the only API, and it is a
-  Rust library.
+- **Remote access is limited to the served surfaces.** The server exposes HTTP
+  and a workspace-scoped WebSocket, and `RemoteClient` implements the `Client`
+  trait, but there is no public API reference or SDK beyond that Rust client. A
+  local-mode workspace still lives in one SQLite file on one machine.
+- **No live-turn transport.** A remote client can read a conversation and its
+  context, but streaming a live turn over the network, cancelling it, running a
+  crew in-process, and preparing a worktree are not available remotely.
 
 ### Isolation and security
 

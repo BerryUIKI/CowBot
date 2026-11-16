@@ -721,8 +721,11 @@ The [limitations page](LIMITATIONS.md) is the full, current account of what
 works, what does not, and which behaviours are deliberate. This section is the
 short version for the version you are running.
 
-- Local/offline single-user mode only: no server, remote sessions, or
-  multi-user workspaces.
+- The desktop app remains local-first: it does not yet offer choosing a server
+  from Settings. The optional self-hosted server and `RemoteClient` are covered
+  in [SERVER.md](SERVER.md); worktrees, in-process crew execution, live-turn
+  cancellation, and process-local session decisions are not available in server
+  mode.
 - Channel answers are one turn per addressed agent: no threads as conversation
   scope, and no proactive agent replies to unmentioned messages in group
   channels.
