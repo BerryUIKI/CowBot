@@ -4576,8 +4576,10 @@ export default function App() {
         <Onboarding
           templates={templates}
           agents={agents}
+          databaseDir={onboarding?.databaseDir ?? ""}
           onAddAgents={instantiateTemplate}
           onComplete={handleCompleteOnboarding}
+          onOpenLanguage={() => setLanguageOpen(true)}
         />
       ) : null}
 

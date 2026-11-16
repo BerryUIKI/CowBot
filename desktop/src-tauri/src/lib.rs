@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod migration;
+mod startup;
 mod workspace_tools;
 
 use std::collections::HashSet;
@@ -36,6 +37,13 @@ pub struct AppState {
     pub config_path: PathBuf,
     /// Directory holding workspace databases, `config.json`, and `cowbot.db`.
     pub data_dir: PathBuf,
+    /// Folder chosen for workspace databases; the app data directory unless the
+    /// first-run guide picked another one.
+    pub database_dir: PathBuf,
+    /// Absolute path of the open workspace database.
+    pub database_path: PathBuf,
+    /// Workspace database name relative to `database_dir`.
+    pub active_database: String,
     /// Task ids with a crew currently executing.
     pub running: Arc<Mutex<HashSet<String>>>,
     /// Message ids with a channel turn currently executing.
@@ -112,109 +120,23 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // Keep one CowBot per machine: a second launch focuses the open window
+        // instead of opening a copy over the same workspace database.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
-            migration::migrate_legacy_database(&data_dir);
-
-            let config_path = config::config_path(&data_dir);
-            let loaded = config::load(&config_path);
-            let config_writable = loaded.is_ok();
-            let mut config = match loaded {
-                Ok(config) => config,
-                Err(error) => {
-                    eprintln!(
-                        "warning: failed to read {}: {error}; using built-in defaults",
-                        config_path.display()
-                    );
-                    config::AppConfig::default()
-                }
-            };
-            let resolved = config::resolve_active(&config);
-
-            let requested_database = config
-                .active_workspace_database
-                .clone()
-                .unwrap_or_else(|| config::DEFAULT_DATABASE.to_string());
-            let (active_database, db_path) =
-                match config::resolve_database_path(&data_dir, &requested_database) {
-                    Ok(path) if path.exists() || requested_database == config::DEFAULT_DATABASE => {
-                        (requested_database, path)
-                    }
-                    _ => (
-                        config::DEFAULT_DATABASE.to_string(),
-                        data_dir.join(config::DEFAULT_DATABASE),
-                    ),
-                };
-
-            let client = Arc::new(tauri::async_runtime::block_on(LocalClient::open(&db_path))?);
-            let session = tauri::async_runtime::block_on(client.session())?;
-
-            // Worktrees whose folders disappeared are reported as missing, and
-            // each registered project drops stale git worktree entries.
-            for project in &config.projects {
-                config::prune_project_worktrees(project);
-            }
-            if let Err(error) = tauri::async_runtime::block_on(client.reconcile_worktrees()) {
-                eprintln!("warning: failed to reconcile worktrees: {error}");
-            }
-
-            // Keep the switcher registry in sync with the database in use and
-            // drop entries whose files no longer exist.
-            config.workspaces.retain(|entry| {
-                entry.database == active_database
-                    || config::resolve_database_path(&data_dir, &entry.database)
-                        .map(|path| path.exists())
-                        .unwrap_or(false)
-            });
-            match config
-                .workspaces
-                .iter_mut()
-                .find(|entry| entry.database == active_database)
-            {
-                Some(entry) => entry.name = session.workspace.name.clone(),
-                None => config.workspaces.push(config::WorkspaceEntry {
-                    database: active_database.clone(),
-                    name: session.workspace.name.clone(),
-                }),
-            }
-            config.active_workspace_database = Some(active_database);
-            if config_writable {
-                config::save(&config_path, &config)?;
-            }
-
-            // Local mode spawns the forwarding task, so subscribe must run
-            // inside the runtime context.
-            let mut events = tauri::async_runtime::block_on(async { client.subscribe() });
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = events.recv().await {
-                    let _ = handle.emit("cowbot-event", &event);
-                }
-            });
-
-            let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
-            app.manage(AppState {
-                local_client: Some(client.clone()),
-                client: client as Arc<dyn Client>,
-                tools,
-                model: RwLock::new(ModelRuntime {
-                    llm: config::build_provider(&resolved),
-                    model: resolved.model,
-                    remote: matches!(resolved.kind, config::ProviderKind::Remote(_)),
-                }),
-                config_path,
-                data_dir,
-                running: Arc::new(Mutex::new(HashSet::new())),
-                replies: Arc::new(Mutex::new(HashSet::new())),
-            });
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
+            commands::get_startup_status,
+            commands::resolve_startup,
+            commands::quit_app,
+            commands::set_database_directory,
             commands::get_session,
             commands::update_user_profile,
             commands::list_channels,
@@ -315,6 +237,196 @@ pub fn run() {
             commands::parse_command,
             commands::ask_side_question,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running CowBot");
+        .build(tauri::generate_context!())
+        .expect("error while building CowBot");
+
+    // Resolve paths and inspect the database before the event loop starts. The
+    // window then shows a startup screen that asks before a one-way upgrade;
+    // `resolve_startup` finishes initialization once the user decides.
+    initialize(&app);
+
+    app.run(|_, _| {});
+}
+
+/// Resolve the paths startup needs and decide whether the database can open.
+fn initialize(app: &tauri::App) {
+    match prepare(app) {
+        Ok(state) => {
+            let ready = state.status().is_ready();
+            app.manage(state);
+            if ready {
+                if let Err(error) = tauri::async_runtime::block_on(finish(app.handle())) {
+                    mark_failed(app.handle(), &error);
+                }
+            }
+        }
+        Err(error) => {
+            app.manage(startup::StartupState::failed(error));
+        }
+    }
+}
+
+/// Resolve the data directory, configuration, and workspace database path.
+fn prepare(app: &tauri::App) -> Result<startup::StartupState, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let data_dir = config::resolve_data_dir(&app_data_dir);
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("failed to create {}: {error}", data_dir.display()))?;
+    if data_dir == app_data_dir {
+        migration::migrate_legacy_database(&data_dir);
+    }
+
+    let config_path = config::config_path(&data_dir);
+    let config = match config::load(&config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to read {}: {error}; using built-in defaults",
+                config_path.display()
+            );
+            config::AppConfig::default()
+        }
+    };
+
+    let database_dir = config::resolve_database_dir(&data_dir, &config);
+    std::fs::create_dir_all(&database_dir)
+        .map_err(|error| format!("failed to create {}: {error}", database_dir.display()))?;
+
+    let requested_database = config
+        .active_workspace_database
+        .clone()
+        .unwrap_or_else(|| config::DEFAULT_DATABASE.to_string());
+    let (database, db_path) =
+        match config::resolve_database_path(&database_dir, &requested_database) {
+            Ok(path) if path.exists() || requested_database == config::DEFAULT_DATABASE => {
+                (requested_database, path)
+            }
+            _ => (
+                config::DEFAULT_DATABASE.to_string(),
+                database_dir.join(config::DEFAULT_DATABASE),
+            ),
+        };
+
+    let status = tauri::async_runtime::block_on(startup::inspect(&db_path, &database_dir));
+    Ok(startup::StartupState::new(
+        data_dir,
+        database_dir,
+        database,
+        db_path,
+        config_path,
+        status,
+    ))
+}
+
+/// Open the local client and install the application state.
+///
+/// Idempotent: a second call after the state is installed does nothing.
+pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(());
+    }
+
+    let (data_dir, database_dir, database, db_path, config_path) = {
+        let state = app.state::<startup::StartupState>();
+        (
+            state.data_dir.clone(),
+            state.database_dir.clone(),
+            state.database.clone(),
+            state.db_path.clone(),
+            state.config_path.clone(),
+        )
+    };
+
+    let loaded = config::load(&config_path);
+    let config_writable = loaded.is_ok();
+    let mut config = match loaded {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to read {}: {error}; using built-in defaults",
+                config_path.display()
+            );
+            config::AppConfig::default()
+        }
+    };
+    let resolved = config::resolve_active(&config);
+
+    let client = LocalClient::open(&db_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let client = Arc::new(client);
+    let session = client.session().await.map_err(|error| error.to_string())?;
+
+    // Worktrees whose folders disappeared are reported as missing, and each
+    // registered project drops stale git worktree entries.
+    for project in &config.projects {
+        config::prune_project_worktrees(project);
+    }
+    if let Err(error) = client.reconcile_worktrees().await {
+        eprintln!("warning: failed to reconcile worktrees: {error}");
+    }
+
+    // Keep the switcher registry in sync with the database in use and drop
+    // entries whose files no longer exist.
+    config.workspaces.retain(|entry| {
+        entry.database == database
+            || config::resolve_database_path(&database_dir, &entry.database)
+                .map(|path| path.exists())
+                .unwrap_or(false)
+    });
+    match config
+        .workspaces
+        .iter_mut()
+        .find(|entry| entry.database == database)
+    {
+        Some(entry) => entry.name = session.workspace.name.clone(),
+        None => config.workspaces.push(config::WorkspaceEntry {
+            database: database.clone(),
+            name: session.workspace.name.clone(),
+        }),
+    }
+    config.active_workspace_database = Some(database.clone());
+    if config_writable {
+        config::save(&config_path, &config).map_err(|error| error.to_string())?;
+    }
+
+    // Local mode spawns the forwarding task, so subscribe must run inside the
+    // runtime context.
+    let mut events = client.subscribe();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            let _ = handle.emit("cowbot-event", &event);
+        }
+    });
+
+    let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
+    app.manage(AppState {
+        local_client: Some(client.clone()),
+        client: client as Arc<dyn Client>,
+        tools,
+        model: RwLock::new(ModelRuntime {
+            llm: config::build_provider(&resolved),
+            model: resolved.model,
+            remote: matches!(resolved.kind, config::ProviderKind::Remote(_)),
+        }),
+        config_path,
+        data_dir,
+        database_dir,
+        database_path: db_path,
+        active_database: database,
+        running: Arc::new(Mutex::new(HashSet::new())),
+        replies: Arc::new(Mutex::new(HashSet::new())),
+    });
+    Ok(())
+}
+
+/// Record a startup failure so the window can report it.
+pub(crate) fn mark_failed(app: &tauri::AppHandle, error: &str) {
+    let state = app.state::<startup::StartupState>();
+    let status = state.failure(error.to_string());
+    state.set_status(status);
 }

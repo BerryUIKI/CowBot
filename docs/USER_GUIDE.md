@@ -37,12 +37,18 @@ update code.
 
 The three-step setup guide covers:
 
-1. **Welcome** — CowBot is local-first; data stays on this machine.
+1. **Welcome** — CowBot is local-first; data stays on this machine. The
+   **Database folder** row shows where the workspace database and its backups
+   live, and **Change…** moves them to another folder (CowBot restarts into a
+   new workspace there). The language button in the top-right switches the
+   interface without leaving setup.
 2. **Model** — connect a model provider, or skip and use the offline mock model.
 3. **Team** — add a starter team from a built-in template.
 
 You can skip setup at any point. Everything is available later in **Settings**
 (the gear at the right of your name in the sidebar).
+
+CowBot runs one window at a time: launching it again focuses the open window.
 
 ## Connect a model
 
@@ -597,6 +603,34 @@ current settings, while a snapshot is the request that was actually sent.
 - Uninstalling the app does not delete your data; remove the app data directory
   manually if you want a clean install.
 
+### Database schema versions
+
+The workspace database has its own schema version, separate from the app
+version. **Settings → About** shows both as **Version** and **Database schema**.
+
+- **Upgrading.** When a CowBot update needs a newer schema, the window shows a
+  startup screen naming the current and new schema versions before anything is
+  changed. Choose **Upgrade** to migrate directly, **Back up and upgrade** to
+  write `cowbot.db.backup-<from>-<timestamp>` beside the database first, or
+  **Quit CowBot** to leave it untouched.
+- **Downgrades are not supported.** An older CowBot cannot open a database that
+  a newer one upgraded. If you install an older version, CowBot refuses to start
+  and offers to restore a compatible backup or to start with an empty workspace.
+  Nothing is deleted: the database it refuses is kept as
+  `cowbot.db.replaced-<timestamp>`.
+- **Restoring a backup.** The startup screen lists copies named
+  `cowbot.db.backup-*` beside the database and `cowbot.db` inside `backup-*/`
+  folders under the database folder. Only copies this CowBot can open are
+  listed.
+- **Development builds are separate.** `pnpm run tauri dev` keeps its workspace
+  and configuration under `dev/` inside the app data directory, so trying an
+  unreleased build never upgrades the database an installed release uses. Set
+  `COWBOT_DATA_DIR` to point a build at another directory on purpose.
+
+The `cowbot` CLI applies pending migrations without asking; it is an operator
+tool. It still refuses a database from a newer build, with a message naming both
+schema versions.
+
 ## Updates
 
 CowBot 0.1.2 and later can check for and install new versions. Release builds
@@ -751,6 +785,10 @@ short version for the version you are running.
   local runtimes. Memory budgets and the next turn's memory block remain
   estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Database migrations are forward-only. A database upgraded by a newer CowBot
+  cannot be opened by an older one; see [Database schema
+  versions](#database-schema-versions) for the confirmation, backup, and
+  recovery options.
 - Interface languages are English, Simplified Chinese, and Traditional Chinese.
   Service diagnostics, agent profiles, template content, and stored audit
   reasons are not translated, and right-to-left layouts are not implemented.

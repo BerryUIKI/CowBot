@@ -39,7 +39,7 @@ pub use cowbot_service::{
     AgentUpdate, ConversationPreview, MemoryFilter, MemorySave, MemorySettingsUpdate, MemoryUpdate,
     NewMemory, NoteSave, RecalledMemory, TaskRunPreview,
 };
-pub use local::LocalClient;
+pub use local::{database_schema, latest_database_schema_version, DatabaseSchema, LocalClient};
 pub use remote::RemoteClient;
 
 /// User identity as seen by the client.

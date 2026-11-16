@@ -13,6 +13,7 @@ import {
 import type { FetchedModel } from "./api";
 import { errorMessage } from "./errors";
 import { t, type TranslationKey } from "./i18n/catalog";
+import SelectMenu from "./SelectMenu";
 import type {
   ModelMetadata,
   ModelProvider,
@@ -428,6 +429,16 @@ export default function ModelProviderSettings({
     ? modelKey(activeProvider.id, activeProvider.model)
     : "offline";
   const readyProviders = providers.filter((provider) => provider.models.length > 0);
+  const defaultOptions = [
+    { value: "offline", label: t("models.default.offline") },
+    ...readyProviders.flatMap((provider) =>
+      provider.models.map((model) => ({
+        value: modelKey(provider.id, model),
+        label: model,
+        group: provider.name,
+      })),
+    ),
+  ];
 
   function applySettings(next: ModelSettings, message: string) {
     setModelSettings(next);
@@ -579,23 +590,14 @@ export default function ModelProviderSettings({
           </span>
         </div>
         <div className="settings-default-row">
-          <select
-            aria-label={t("models.default.aria")}
+          <SelectMenu
+            className="settings-default-select"
+            ariaLabel={t("models.default.aria")}
             value={activeValue}
-            onChange={(event) => void handleDefaultChange(event.target.value)}
+            options={defaultOptions}
             disabled={busy !== null}
-          >
-            <option value="offline">{t("models.default.offline")}</option>
-            {readyProviders.map((provider) => (
-              <optgroup key={provider.id} label={provider.name}>
-                {provider.models.map((model) => (
-                  <option key={model} value={modelKey(provider.id, model)}>
-                    {model}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+            onChange={(value) => void handleDefaultChange(value)}
+          />
           <button
             type="button"
             className="ghost-button"
@@ -1107,26 +1109,29 @@ function ConnectionEditor({
             </button>
           </div>
           {fetched.length > 0 ? (
-            <select
-              aria-label={t("models.editor.fetchedAria")}
-              value={fetched.some((model) => model.id === draft.model) ? draft.model : ""}
-              onChange={(event) =>
+            <SelectMenu
+              ariaLabel={t("models.editor.fetchedAria")}
+              value={
+                fetched.some((model) => model.id === draft.model)
+                  ? draft.model
+                  : ""
+              }
+              options={[
+                { value: "", label: t("models.editor.selectFetched") },
+                ...fetched.map((model) => ({
+                  value: model.id,
+                  label: model.contextWindow
+                    ? `${model.id} · ${compactTokens(model.contextWindow)}`
+                    : model.id,
+                })),
+              ]}
+              onChange={(value) =>
                 update({
-                  model: event.target.value,
-                  models: mergeModels(draft.models, [event.target.value]),
+                  model: value,
+                  models: mergeModels(draft.models, [value]),
                 })
               }
-            >
-              <option value="">{t("models.editor.selectFetched")}</option>
-              {fetched.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                  {model.contextWindow
-                    ? ` · ${compactTokens(model.contextWindow)}`
-                    : ""}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
           <span className="settings-hint">
             {t("models.editor.modelHint")}
@@ -1169,22 +1174,21 @@ function ConnectionEditor({
 
       <details className="settings-advanced">
         <summary>{t("models.editor.advanced")}</summary>
-        <label className="field">
+        <div className="field">
           <span>{t("models.editor.protocol")}</span>
-          <select
+          <SelectMenu
+            ariaLabel={t("models.editor.protocol")}
             value={draft.protocol}
-            onChange={(event) =>
-              update({ protocol: event.target.value as ProviderProtocol })
-            }
+            options={protocolOptions.map((option) => ({
+              value: option.id,
+              label: t(option.labelKey),
+            }))}
             disabled={busy !== null}
-          >
-            {protocolOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {t(option.labelKey)}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(value) =>
+              update({ protocol: value as ProviderProtocol })
+            }
+          />
+        </div>
         <p className="settings-hint">{protocolDescription(draft.protocol)}</p>
       </details>
 

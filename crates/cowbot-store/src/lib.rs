@@ -10,4 +10,5 @@ mod migrate;
 mod repos;
 mod store;
 
+pub use migrate::{database_version, latest_version};
 pub use store::Store;

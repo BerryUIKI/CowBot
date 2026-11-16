@@ -140,3 +140,29 @@ different languages.
   protocol data from `cowbot-core`; only summaries and desktop-side hints are
   localized. Localizing usage would change the command syntax shared with the
   CLI and server.
+
+## Planned locales
+
+The next interface languages follow Claude's language picker, plus the Chinese
+pair that already ships. In picker order:
+
+| Locale | Native name | English name |
+| --- | --- | --- |
+| `en` | English (United States) | English (United States) — shipped |
+| `zh-CN` | 简体中文（中国） | Chinese (Simplified, China) — shipped |
+| `zh-TW` | 繁體中文（台灣） | Chinese (Traditional, Taiwan) — shipped |
+| `fr` | Français (France) | French (France) |
+| `de` | Deutsch (Deutschland) | German (Germany) |
+| `hi` | हिन्दी (भारत) | Hindi (India) |
+| `id` | Indonesia (Indonesia) | Indonesian (Indonesia) |
+| `it` | Italiano (Italia) | Italian (Italy) |
+| `ja` | 日本語（日本） | Japanese (Japan) |
+| `ko` | 한국어(대한민국) | Korean (South Korea) |
+| `pt-BR` | Português (Brasil) | Portuguese (Brazil) |
+| `es-419` | Español (Latinoamérica) | Spanish (Latin America) |
+| `es-ES` | Español (España) | Spanish (Spain) |
+
+Each addition is one catalogue file, one registry entry, and the startup strings
+in `desktop/src-tauri/src/startup.rs` (ADR-0051). Spanish needs the same regional
+split Claude ships; every locale above is left-to-right, so the RTL pass stays
+deferred until one is requested.

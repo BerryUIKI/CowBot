@@ -20,6 +20,7 @@
 //! Anything else is reported as a storage error with recovery steps. Migration
 //! files and the recorded migration history are never rewritten.
 
+use std::path::Path;
 use std::str::FromStr;
 
 use cowbot_core::error::{CowError, CowResult};
@@ -34,8 +35,81 @@ const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 
 /// Apply all embedded migrations, repairing line-ending checksum variants.
 pub(crate) async fn run(pool: &SqlitePool) -> CowResult<()> {
-    repair_compatible_checksums(pool).await?;
+    let Some(applied) = applied_migrations(pool).await? else {
+        return MIGRATOR.run(pool).await.map_err(storage_error);
+    };
+    reject_newer_database(&applied)?;
+    repair_compatible_checksums(pool, &applied).await?;
     MIGRATOR.run(pool).await.map_err(storage_error)
+}
+
+/// The newest schema version this build provides.
+pub fn latest_version() -> i64 {
+    MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or_default()
+}
+
+/// The newest schema version recorded in a database file.
+///
+/// The file is read without being created, migrated, or otherwise changed, so
+/// a caller can decide whether to open it first. `None` means a new database:
+/// the file does not exist or records no migration yet.
+pub async fn database_version(path: impl AsRef<Path>) -> CowResult<Option<i64>> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let pool = inspect_pool(path).await?;
+    let version = applied_migrations(&pool)
+        .await
+        .map(|applied| applied.and_then(|applied| applied.iter().map(|m| m.version).max()));
+    pool.close().await;
+    version
+}
+
+/// Open an existing database for inspection without writing to it.
+///
+/// SQLite refuses a read-only connection to a WAL database whose `-shm`
+/// sidecar is not readable, so a database left behind by a crash falls back to
+/// a read-write connection. Either way only `_sqlx_migrations` is queried.
+async fn inspect_pool(path: &Path) -> CowResult<SqlitePool> {
+    let read_only = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true);
+    match SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(read_only)
+        .await
+    {
+        Ok(pool) => Ok(pool),
+        Err(_) => {
+            let read_write = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false);
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(read_write)
+                .await
+                .map_err(storage_error)
+        }
+    }
+}
+
+/// Refuse a database that a newer build has already migrated.
+fn reject_newer_database(applied: &[AppliedMigration]) -> CowResult<()> {
+    let Some(newest) = applied.iter().map(|migration| migration.version).max() else {
+        return Ok(());
+    };
+    let supported = latest_version();
+    if newest > supported {
+        return Err(newer_database_error(newest, supported));
+    }
+    Ok(())
 }
 
 struct AppliedMigration {
@@ -44,22 +118,22 @@ struct AppliedMigration {
     success: bool,
 }
 
-async fn repair_compatible_checksums(pool: &SqlitePool) -> CowResult<()> {
-    let Some(applied) = applied_migrations(pool).await? else {
-        return Ok(());
-    };
+async fn repair_compatible_checksums(
+    pool: &SqlitePool,
+    applied: &[AppliedMigration],
+) -> CowResult<()> {
     if applied.is_empty() {
         return Ok(());
     }
 
     let mut repairs: Vec<(i64, Vec<u8>)> = Vec::new();
-    for recorded in &applied {
+    for recorded in applied {
         let Some(migration) = MIGRATOR
             .iter()
             .find(|migration| migration.version == recorded.version)
         else {
-            // The database was created by a newer build. Let sqlx report the
-            // missing migration instead of repairing around it.
+            // A database newer than this build was already rejected. A gap in
+            // the embedded set is left for sqlx to report.
             return Ok(());
         };
 
@@ -229,6 +303,19 @@ async fn schema_objects(pool: &SqlitePool) -> CowResult<Vec<SchemaObject>> {
             })
         })
         .collect()
+}
+
+fn newer_database_error(applied: i64, supported: i64) -> CowError {
+    CowError::Storage(format!(
+        "this database has schema version {applied}, which is newer than this build provides \
+         (schema version {supported}). It was most likely opened by a newer CowBot. CowBot left \
+         the database unchanged.\n\
+         Recovery steps:\n\
+         1. Install a CowBot version that provides schema version {applied} or later, or open a \
+            different workspace.\n\
+         2. Back up the database file and any -wal and -shm sidecars before changing anything.\n\
+         3. Do not open this database with an older build."
+    ))
 }
 
 fn migration_content_error(recorded: &AppliedMigration, migration: &Migration) -> CowError {
