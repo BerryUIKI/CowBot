@@ -230,6 +230,7 @@ export const zhTW: Catalog = {
       "title": "關於 CowBot",
       "hint": "桌面版版本與更新。CowBot 會從 GitHub Releases 檢查穩定版本。",
       "version": "版本",
+      "databaseSchema": "資料庫結構版本",
       "channel": "更新通道",
       "stable": "穩定版 · GitHub Releases",
       "lastChecked": "上次檢查",

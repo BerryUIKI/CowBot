@@ -236,6 +236,7 @@ export const zhCN: Catalog = {
       title: "关于 CowBot",
       hint: "桌面版版本与更新。CowBot 会从 GitHub Releases 检查稳定版本。",
       version: "版本",
+      databaseSchema: "数据库结构版本",
       channel: "更新通道",
       stable: "稳定版 · GitHub Releases",
       lastChecked: "上次检查",

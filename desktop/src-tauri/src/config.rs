@@ -6,6 +6,7 @@
 //! back to the frontend; the UI only learns whether a provider has a stored key.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::io::Write;
@@ -29,6 +30,12 @@ pub const DEFAULT_DATABASE: &str = "cowbot.db";
 
 /// Directory holding imported workspace databases under the app data directory.
 pub const WORKSPACES_DIR: &str = "workspaces";
+
+/// Environment variable that moves the desktop data directory.
+pub const DATA_DIR_ENV: &str = "COWBOT_DATA_DIR";
+
+/// Directory a debug build uses inside the app data directory.
+pub const DEV_DATA_DIR: &str = "dev";
 
 /// One workspace database registered in the desktop switcher.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +246,40 @@ pub fn resolve_database_path(data_dir: &Path, database: &str) -> Result<PathBuf,
         );
     }
     Ok(data_dir.join(relative))
+}
+
+/// Resolve the directory that holds `config.json` and the workspace databases.
+///
+/// `COWBOT_DATA_DIR` wins when it holds a non-empty value; a relative value is
+/// resolved under the app data directory. A debug build, which is what
+/// `tauri dev` and `cargo run` produce, uses a `dev` subdirectory, so an
+/// unreleased build never shares a database with an installed release.
+pub fn resolve_data_dir(app_data: &Path) -> PathBuf {
+    resolve_data_dir_with(
+        app_data,
+        cfg!(debug_assertions),
+        std::env::var_os(DATA_DIR_ENV),
+    )
+}
+
+fn resolve_data_dir_with(
+    app_data: &Path,
+    debug_build: bool,
+    override_value: Option<OsString>,
+) -> PathBuf {
+    if let Some(value) = override_value.filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(value);
+        return if path.is_absolute() {
+            path
+        } else {
+            app_data.join(path)
+        };
+    }
+    if debug_build {
+        app_data.join(DEV_DATA_DIR)
+    } else {
+        app_data.to_path_buf()
+    }
 }
 
 /// Load the configuration, treating a missing file as the default.
@@ -807,6 +848,36 @@ mod tests {
         assert!(resolve_database_path(root, "..").is_err());
         assert!(resolve_database_path(root, "../escape.db").is_err());
         assert!(resolve_database_path(root, "/absolute.db").is_err());
+    }
+
+    #[test]
+    fn debug_builds_keep_their_data_in_a_dev_subdirectory() {
+        let root = Path::new("app-data");
+
+        assert_eq!(
+            resolve_data_dir_with(root, true, None),
+            root.join(DEV_DATA_DIR)
+        );
+        assert_eq!(resolve_data_dir_with(root, false, None), root);
+    }
+
+    #[test]
+    fn the_data_dir_override_wins_and_relative_values_join_the_app_data() {
+        let root = Path::new("app-data");
+
+        assert_eq!(
+            resolve_data_dir_with(root, true, Some(OsString::from("/scratch/cowbot"))),
+            PathBuf::from("/scratch/cowbot")
+        );
+        assert_eq!(
+            resolve_data_dir_with(root, false, Some(OsString::from("scratch"))),
+            root.join("scratch")
+        );
+        // An empty value means "not set", so the build default still applies.
+        assert_eq!(
+            resolve_data_dir_with(root, true, Some(OsString::new())),
+            root.join(DEV_DATA_DIR)
+        );
     }
 
     #[test]

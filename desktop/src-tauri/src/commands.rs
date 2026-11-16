@@ -2524,6 +2524,8 @@ pub fn complete_onboarding(state: State<'_, AppState>) -> Result<OnboardingState
 pub struct AppInfo {
     pub version: String,
     pub auto_check_updates: bool,
+    /// Schema version of the workspace database this build provides.
+    pub database_schema: i64,
 }
 
 #[tauri::command]
@@ -2532,6 +2534,7 @@ pub fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInf
     Ok(AppInfo {
         version: app.package_info().version.to_string(),
         auto_check_updates,
+        database_schema: cowbot_client::latest_database_schema_version(),
     })
 }
 

@@ -247,6 +247,7 @@ export const en = {
       title: "About CowBot",
       hint: "Desktop version and updates. CowBot checks GitHub Releases for stable versions.",
       version: "Version",
+      databaseSchema: "Database schema",
       channel: "Update channel",
       stable: "Stable · GitHub Releases",
       lastChecked: "Last checked",

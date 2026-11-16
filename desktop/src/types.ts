@@ -440,6 +440,8 @@ export interface TaskOverviewEntry {
 export interface AppInfo {
   version: string;
   autoCheckUpdates: boolean;
+  /** Schema version of the workspace database this build provides. */
+  databaseSchema: number;
 }
 
 export interface CommandArgInfo {

@@ -16,6 +16,8 @@ export type UpdatePhase =
 export interface UpdateState {
   phase: UpdatePhase;
   currentVersion: string | null;
+  /** Schema version of the workspace database this build provides. */
+  currentDatabaseSchema: number | null;
   version: string | null;
   date: string | null;
   downloaded: number;
@@ -38,6 +40,7 @@ export interface Updater {
 const initialState: UpdateState = {
   phase: "idle",
   currentVersion: null,
+  currentDatabaseSchema: null,
   version: null,
   date: null,
   downloaded: 0,
@@ -128,7 +131,11 @@ export function useUpdater(): Updater {
     getAppInfo()
       .then((info) => {
         if (cancelled) return;
-        setState((current) => ({ ...current, currentVersion: info.version }));
+        setState((current) => ({
+          ...current,
+          currentVersion: info.version,
+          currentDatabaseSchema: info.databaseSchema,
+        }));
         setAutoCheckState(info.autoCheckUpdates);
         if (info.autoCheckUpdates && !autoCheckStarted.current) {
           autoCheckStarted.current = true;
