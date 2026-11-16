@@ -150,10 +150,13 @@ expect.
 - **Workspace packages never carry device-local state.** Prompt snapshots, LLM
   usage, group turn rows, and model providers stay on the device that produced
   them.
-- **A schema upgrade is one-way.** CowBot warns first and copies the database
-  before migrating, but the upgraded file cannot be opened by an older build.
-  Recovery restores a backup or starts an empty workspace; it never deletes the
-  database it replaces.
+- **A schema upgrade is one-way.** CowBot warns on a startup screen and offers
+  either a direct upgrade or a copy first, but the upgraded file cannot be
+  opened by an older build. Recovery restores a backup or starts an empty
+  workspace; it never deletes the database it replaces.
+- **Only one CowBot window runs at a time.** Launching the app again focuses the
+  open window instead of starting a second copy, including a development build
+  while an installed release is running.
 - **Builds are unsigned.** macOS may ask you to allow CowBot again after an
   update, and Windows may show a SmartScreen prompt. See
   [ADR-0014](ADR/0014-desktop-release-builds.md).

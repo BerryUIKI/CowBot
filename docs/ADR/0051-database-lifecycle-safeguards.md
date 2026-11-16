@@ -58,41 +58,57 @@ condition (a gap in a fork), and is still left for sqlx to report.
 caller can plan before opening the database, and re-exports the newest version
 for the About section.
 
-### 3. The desktop asks before a one-way upgrade
+### 3. The window asks before a one-way upgrade
 
-`startup::open_local_database` runs before `LocalClient::open` and reads the
-schema first:
+`initialize` resolves the paths and inspects the schema before the event loop
+starts, but it opens the client only when the database needs no decision. The
+window then shows a startup screen rendered by the React app:
 
-- **Newer than the build.** A warning explains that the database belongs to a
-  newer CowBot. The user can restore the newest compatible backup, start with an
-  empty workspace, or quit.
-- **Pending migrations.** A warning names the current and target schema
+- **Pending migrations.** The screen names the current and target schema
   versions and states that an older CowBot cannot open the upgraded database.
-  Only after the user confirms does CowBot copy the database and its sidecars to
-  `<db>.backup-<from>-<timestamp>` and continue.
-- **Any other open failure.** The same recovery dialog appears with the error
-  text.
+  The user chooses **Upgrade** (migrate directly), **Back up and upgrade**
+  (copy the database and its sidecars to `<db>.backup-<from>-<timestamp>`
+  first), or **Quit CowBot**.
+- **Newer than the build.** The screen lists the compatible backups; the user
+  restores one, starts with an empty workspace, or quits.
+- **Any other open failure.** The screen shows the error with the same recovery
+  choices.
 
 Recovery never deletes a file. A replaced database is moved to
-`<db>.rejected-<timestamp>` beside the original. Backups are discovered beside
-the database (`<db>.backup-*`) and in `backup-*/` folders under the data
-directory; only one whose recorded version is not newer than the build is
-offered, so the conditional rollback cannot restore another unusable database.
+`<db>.replaced-<timestamp>` beside the original. Backups are discovered beside
+the database (`<db>.backup-*`) and in `backup-*/` folders under the database
+folder; only one whose recorded version is not newer than the build is offered,
+so the conditional rollback cannot restore another unusable database.
 
-### 4. The dialog is native, and startup strings are localized separately
+### 4. The startup screen is part of the app
 
-Startup runs on the main thread before the event loop can drive the Tauri dialog
-plugin, so the dialogs come from `rfd` synchronously. Their few strings live in
-the desktop crate and follow `ui_locale`, falling back to the system language.
-The React catalogues from ADR-0050 are not reachable before the client opens, so
-these strings are intentionally a second, small set.
+The window is created before initialization, so the React app can render the
+startup screen with the ordinary title bar, the trilingual catalogues from
+ADR-0050, and the app's styles. The commands `get_startup_status` and
+`resolve_startup` carry the decision; `resolve_startup` installs the application
+state once the database opens. No native dialog is involved, so the screen
+matches the rest of the interface and needs no second set of strings.
 
 ### 5. The schema version is separate from the app version
 
-The dialogs and Settings → About speak of a database **schema version** (the
-migration number), never the app version. `get_app_info` reports it as
+The startup screen and Settings → About speak of a database **schema version**
+(the migration number), never the app version. `get_app_info` reports it as
 `databaseSchema`, so a bug report can name the schema and the app version
 independently.
+
+### 6. The first-run guide can move the database folder
+
+`AppConfig` gains `database_dir`. The welcome step shows the current folder and
+opens a folder picker; choosing one writes the absolute path, clears the active
+workspace, and restarts into a `cowbot.db` in that folder. A value that is not
+absolute is ignored, so a hand-edited configuration cannot move databases to a
+relative path. The folder is also where backup discovery looks.
+
+### 7. One instance per machine
+
+`tauri-plugin-single-instance` makes a second launch exit and focus the open
+window, so two processes cannot open the same workspace database. The plugin is
+registered first, as it requires.
 
 ## Alternatives considered
 
@@ -103,9 +119,9 @@ independently.
   data directory, but every developer and every command would have to remember
   it. The automatic debug directory needs no discipline; `COWBOT_DATA_DIR`
   remains for deliberate sharing.
-- **A React dialog before opening the client.** Would reuse the localized
-  catalogues, but every Tauri command would have to tolerate an unopened client
-  and the app would start its UI before deciding whether it may run. Deferred.
+- **Native message dialogs (`rfd`).** Rejected: they cannot use the app's
+  catalogues or styles, and a synchronous TaskDialog called from Tauri's
+  run-event callback returned its first button without showing in practice.
 - **Consent in `LocalClient::open`.** Would cover the CLI too, but breaks every
   test and embedded caller and changes a transport-neutral API. The CLI is an
   operator tool and keeps migrating automatically; it still receives the store's
@@ -114,23 +130,30 @@ independently.
   nothing and keeps the decision reversible.
 - **Never offering a backup during recovery.** Would leave a dead end when the
   user has no backup of their own; discovery plus a schema check is a few lines.
+- **Always copying the database before an upgrade.** Costs disk space and time
+  on large workspaces; the confirmation offers it as a choice instead.
 
 ## Consequences
 
 - `tauri dev` starts with its own workspace and provider configuration; the
   first development launch after this change needs onboarding again. Set
   `COWBOT_DATA_DIR` to share an installed workspace on purpose.
-- Every schema upgrade shows one confirmation and leaves one backup copy. A user
-  who declines exits cleanly instead of migrating silently.
-- Startup dialogs exist in English, Simplified Chinese, and Traditional Chinese;
-  another interface language needs the same strings in
-  `desktop/src-tauri/src/startup.rs` as well as the React catalogue.
-- A backup kept outside the data directory is not discovered; copy it in or
+- Every schema upgrade shows one screen; the user chooses whether to keep a
+  backup copy. A user who declines exits cleanly instead of migrating silently.
+- The startup screen uses the same trilingual catalogues as the rest of the app,
+  so a new interface language needs no separate strings.
+- The welcome step can move the workspace databases to another folder and
+  restarts the app to apply it. An existing workspace is not moved; the new
+  folder starts with its own `cowbot.db`.
+- A second launch focuses the running window instead of opening a second copy,
+  including a debug build while an installed release runs, because both use the
+  same bundle identifier.
+- A backup kept outside the database folder is not discovered; copy it in or
   rename it to `<db>.backup-*` first.
 - The desktop still refuses a database whose newest *recorded* migration is
   newer, even if the user would accept data loss; starting fresh is the offered
   way forward.
 - Coverage: `crates/cowbot-store/tests/migrations.rs` covers the newer-database
   refusal and read-only version inspection; `desktop/src-tauri/src/startup.rs`
-  covers backup discovery, copying, moving aside, restoring, and unique names;
-  `config.rs` covers data-directory resolution.
+  covers backup discovery, copying, moving aside, and unique names;
+  `config.rs` covers data-directory and database-folder resolution.

@@ -124,9 +124,12 @@ build somewhere else; the directory is created on demand. Installed release
 builds keep using `app_data_dir()` itself.
 
 Before opening the database the shell compares its schema version with the
-build's. A one-way upgrade asks first and keeps
-`cowbot.db.backup-<from>-<timestamp>` beside the database; a database from a
-newer build is refused with restore-or-fresh-start choices (ADR-0051).
+build's and shows a startup screen in the app. Pending migrations offer
+**Upgrade**, **Back up and upgrade** (which writes
+`cowbot.db.backup-<from>-<timestamp>`), or **Quit**; a database from a newer
+build offers a compatible backup, an empty workspace, or Quit (ADR-0051). The
+first-run guide can move the workspace databases to another folder, and a
+second launch focuses the open window instead of starting another copy.
 
 ## Build
 
