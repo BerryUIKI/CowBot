@@ -597,6 +597,34 @@ current settings, while a snapshot is the request that was actually sent.
 - Uninstalling the app does not delete your data; remove the app data directory
   manually if you want a clean install.
 
+### Database schema versions
+
+The workspace database has its own schema version, separate from the app
+version. **Settings → About** shows both as **Version** and **Database schema**.
+
+- **Upgrading.** When a CowBot update needs a newer schema, CowBot warns before
+  touching the database, naming the current and new schema versions, and
+  applies the upgrade only after you confirm. It first copies the database and
+  its `-wal`/`-shm` sidecars to `cowbot.db.backup-<from>-<timestamp>` beside the
+  original, so that copy can be put back to go down a version.
+- **Downgrades are not supported.** An older CowBot cannot open a database that
+  a newer one upgraded. If you install an older version, CowBot refuses to start
+  and offers to restore a compatible backup or to start with an empty workspace.
+  Nothing is deleted: the database it refuses is kept as
+  `cowbot.db.rejected-<timestamp>`.
+- **Restoring a backup.** The recovery dialog finds copies named
+  `cowbot.db.backup-*` beside the database and `cowbot.db` inside `backup-*/`
+  folders under the app data directory. A copy is offered only when this CowBot
+  can open it.
+- **Development builds are separate.** `pnpm run tauri dev` keeps its workspace
+  and configuration under `dev/` inside the app data directory, so trying an
+  unreleased build never upgrades the database an installed release uses. Set
+  `COWBOT_DATA_DIR` to point a build at another directory on purpose.
+
+The `cowbot` CLI applies pending migrations without asking; it is an operator
+tool. It still refuses a database from a newer build, with a message naming both
+schema versions.
+
 ## Updates
 
 CowBot 0.1.2 and later can check for and install new versions. Release builds
@@ -751,6 +779,10 @@ short version for the version you are running.
   local runtimes. Memory budgets and the next turn's memory block remain
   estimates. Provider-reported usage is authoritative once a call returns.
 - The subprocess sandbox is not OS-level isolation.
+- Database migrations are forward-only. A database upgraded by a newer CowBot
+  cannot be opened by an older one; see [Database schema
+  versions](#database-schema-versions) for the confirmation, backup, and
+  recovery options.
 - Interface languages are English, Simplified Chinese, and Traditional Chinese.
   Service diagnostics, agent profiles, template content, and stored audit
   reasons are not translated, and right-to-left layouts are not implemented.

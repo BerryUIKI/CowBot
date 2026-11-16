@@ -114,6 +114,20 @@ pnpm run tauri dev
 The dev server runs on `http://localhost:1420`; the Tauri window opens once the
 backend compiles.
 
+### Data directory during development
+
+A debug build keeps its workspace and `config.json` under `app_data_dir()/dev`,
+separate from an installed release, so `pnpm run tauri dev` can apply new
+migrations without making the installed app unopenable. Set `COWBOT_DATA_DIR`
+(an absolute path, or a path relative to the app data directory) to point a
+build somewhere else; the directory is created on demand. Installed release
+builds keep using `app_data_dir()` itself.
+
+Before opening the database the shell compares its schema version with the
+build's. A one-way upgrade asks first and keeps
+`cowbot.db.backup-<from>-<timestamp>` beside the database; a database from a
+newer build is refused with restore-or-fresh-start choices (ADR-0051).
+
 ## Build
 
 ```bash
