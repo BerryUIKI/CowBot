@@ -3550,6 +3550,10 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
+          <UpdateBanner
+            updater={updater}
+            tasksRunning={runningTasks.size > 0 || pendingReply !== null}
+          />
           <div className="profile">
             <button
               type="button"
@@ -3633,8 +3637,6 @@ export default function App() {
       </aside>
 
       <main className="main" inert={onboardingOpen}>
-        <UpdateBanner updater={updater} tasksRunning={runningTasks.size > 0 || pendingReply !== null} />
-
         {error ? (
           <div className="error-banner" role="alert">
             <span>{error}</span>

@@ -32,9 +32,9 @@ export function TitleBar({ leading, title, actions }: TitleBarProps) {
   const win = getCurrentWindow();
 
   return (
-    <div className="titlebar">
+    <div className="titlebar" data-tauri-drag-region="deep">
       <div className="titlebar-leading">{leading}</div>
-      <div className="titlebar-center" data-tauri-drag-region>
+      <div className="titlebar-center">
         {title ? <span className="titlebar-title">{title}</span> : null}
       </div>
       <div className="titlebar-actions">{actions}</div>
