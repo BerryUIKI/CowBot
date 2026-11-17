@@ -8,8 +8,9 @@ interface UpdateBannerProps {
 }
 
 /**
- * Launch-time update prompt. It only appears after a successful check or an
- * installation attempt; manual check results live in Settings.
+ * Sidebar update prompt. It sits above the account row and only appears after
+ * a launch-time check finds a new version or an installation attempt reports
+ * its state; manual check results live in Settings.
  */
 export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProps) {
   const t = useT();
@@ -23,37 +24,54 @@ export default function UpdateBanner({ updater, tasksRunning }: UpdateBannerProp
 
   if (!visible) return null;
 
+  const title =
+    state.phase === "ready"
+      ? t("update.installed", { version: state.version ?? "" })
+      : t("update.available", { version: state.version ?? "" });
+
   return (
-    <div className="update-banner" role="status">
-      <div className="update-banner-body">
-        <span className="update-banner-title">
-          {state.phase === "ready"
-            ? t("update.installed", { version: state.version ?? "" })
-            : t("update.available", { version: state.version ?? "" })}
+    <div className="update-card" role="status">
+      <div className="update-card-head">
+        <span className="update-card-icon" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.7"
+          >
+            <path d="M12 4v10" />
+            <path d="m8 10 4 4 4-4" />
+            <path d="M5 19h14" />
+          </svg>
         </span>
+        <div className="update-card-text">
+          <span className="update-card-title">{title}</span>
 
-        {state.phase === "available" ? (
-          <span className="update-banner-hint">
-            {tasksRunning
-              ? t("update.finishTasks")
-              : t("update.downloadNow")}
-          </span>
-        ) : null}
+          {state.phase === "available" ? (
+            <span className="update-card-hint">
+              {tasksRunning ? t("update.finishTasks") : t("update.downloadNow")}
+            </span>
+          ) : null}
 
-        {state.phase === "downloading" ? (
-          <UpdateProgress downloaded={state.downloaded} total={state.total} />
-        ) : null}
+          {state.phase === "downloading" ? (
+            <UpdateProgress
+              downloaded={state.downloaded}
+              total={state.total}
+              className="update-card-progress"
+            />
+          ) : null}
 
-        {state.phase === "ready" ? (
-          <span className="update-banner-hint">{t("update.restartHint")}</span>
-        ) : null}
+          {state.phase === "ready" ? (
+            <span className="update-card-hint">{t("update.restartHint")}</span>
+          ) : null}
 
-        {state.phase === "error" && state.error ? (
-          <span className="update-banner-hint is-error">{state.error}</span>
-        ) : null}
+          {state.phase === "error" && state.error ? (
+            <span className="update-card-hint is-error">{state.error}</span>
+          ) : null}
+        </div>
       </div>
 
-      <div className="update-banner-actions">
+      <div className="update-card-actions">
         {state.phase === "available" ? (
           <button
             type="button"
