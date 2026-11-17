@@ -67,7 +67,7 @@ The following templates are compiled into the binary and are read-only:
 | --- | --- | --- |
 | `builtin-software-team` | team | Planner, coder, and reviewer workflow |
 | `builtin-research-team` | team | Planner, researcher, and writer workflow |
-| `builtin-general-assistant` | agent | Flexible single agent for everyday work |
+| `builtin-general-assistant` | agent | CowBot, the primary assistant created by default in an empty desktop workspace |
 
 Users can copy a built-in template, modify it under a new ID, and save it as a user template.
 

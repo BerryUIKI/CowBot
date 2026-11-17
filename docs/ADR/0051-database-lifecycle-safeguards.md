@@ -83,7 +83,7 @@ so the conditional rollback cannot restore another unusable database.
 ### 4. The startup screen is part of the app
 
 The window is created before initialization, so the React app can render the
-startup screen with the ordinary title bar, the trilingual catalogues from
+startup screen with the ordinary title bar, the interface catalogues from
 ADR-0050, and the app's styles. The commands `get_startup_status` and
 `resolve_startup` carry the decision; `resolve_startup` installs the application
 state once the database opens. No native dialog is involved, so the screen
@@ -149,7 +149,7 @@ the two builds never share one.
   `COWBOT_DATA_DIR` to share an installed workspace on purpose.
 - Every schema upgrade shows one screen; the user chooses whether to keep a
   backup copy. A user who declines exits cleanly instead of migrating silently.
-- The startup screen uses the same trilingual catalogues as the rest of the app,
+- The startup screen uses the same interface catalogues as the rest of the app,
   so a new interface language needs no separate strings.
 - The welcome step can move the workspace databases to another folder and
   restarts the app to apply it. An existing workspace is not moved; the new

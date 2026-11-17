@@ -2692,6 +2692,21 @@ pub fn set_ui_locale(state: State<'_, AppState>, locale: String) -> Result<(), S
         .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
 }
 
+/// Whether agent names show a `bot` tag in the interface.
+#[tauri::command]
+pub fn get_show_agent_bot_tags(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(load_config(&state)?.show_agent_bot_tags)
+}
+
+/// Persist whether agent names show a `bot` tag in the interface.
+#[tauri::command]
+pub fn set_show_agent_bot_tags(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut config = load_config(&state)?;
+    config.show_agent_bot_tags = enabled;
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
+}
+
 /// Restart the app so an installed update takes effect.
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {

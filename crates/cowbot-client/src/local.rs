@@ -376,6 +376,23 @@ impl LocalClient {
         self.channels.list_channels(workspace_id).await
     }
 
+    /// Create the built-in primary assistant in an empty workspace.
+    ///
+    /// Returns the created agents — empty when the workspace already has any
+    /// agent — and provisions a direct conversation for each. The default keeps
+    /// a new workspace usable without visiting the template list; it never
+    /// recreates an assistant after the user has built their own team.
+    pub async fn ensure_main_agent(&self) -> CowResult<Vec<AgentProfile>> {
+        let workspace_id = &self.session.workspace.id;
+        let added = self.templates.ensure_main_agent(workspace_id).await?;
+        if !added.is_empty() {
+            self.channels
+                .ensure_agent_channels(workspace_id, &added)
+                .await?;
+        }
+        Ok(added)
+    }
+
     /// Answer a channel message on behalf of every agent it mentions.
     ///
     /// The caller posts the message first; this method routes it through the
@@ -1360,6 +1377,22 @@ mod tests {
 
         client.delete_channel(&channel.id).await.unwrap();
         assert!(client.list_channels().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_main_agent_creates_cowbot_with_a_direct_conversation() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+
+        let added = client.ensure_main_agent().await.unwrap();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].name, "CowBot");
+
+        let channels = client.list_channels().await.unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].agent_id.as_ref(), Some(&added[0].id));
+
+        assert!(client.ensure_main_agent().await.unwrap().is_empty());
+        assert_eq!(client.list_agents().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

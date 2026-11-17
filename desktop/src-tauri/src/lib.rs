@@ -234,6 +234,8 @@ pub fn run() {
             commands::set_auto_check_updates,
             commands::get_ui_locale,
             commands::set_ui_locale,
+            commands::get_show_agent_bot_tags,
+            commands::set_show_agent_bot_tags,
             commands::restart_app,
             commands::list_workspaces,
             commands::switch_workspace,
@@ -370,6 +372,13 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let client = Arc::new(client);
     let session = client.session().await.map_err(|error| error.to_string())?;
+
+    // A fresh workspace starts with the built-in primary assistant so the user
+    // can talk to it without visiting Settings → Team first. A workspace that
+    // already has agents is left exactly as it is.
+    if let Err(error) = client.ensure_main_agent().await {
+        eprintln!("warning: failed to create the default main agent: {error}");
+    }
 
     // Worktrees whose folders disappeared are reported as missing, and each
     // registered project drops stale git worktree entries.

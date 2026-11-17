@@ -32,12 +32,18 @@ fenced `html` blocks open as sandboxed HTML artifacts with a Preview/Code
 toggle, where inline scripts run but network access, external images, forms,
 and the app itself stay out of reach (ADR-0027).
 
-The starter template is **Main Assistant** (agent `main`), which can create
-channels, instantiate specialist teams, and queue tasks for other agents via
-desktop workspace tools; those actions go through the normal approval policy and
-their arguments and risk appear on the approval card (ADR-0028). Agents can be
-edited from Settings → Team or the conversation context menu (name, role,
-tools); names are unique and the direct conversation follows a rename.
+A new workspace automatically contains the starter template's **Main
+Assistant**, created as **CowBot**. It can create channels, instantiate
+specialist teams, and queue tasks for other agents via desktop workspace tools; those actions go through the normal approval policy and
+their arguments and risk appear on the approval card (ADR-0028). Its first empty
+conversation offers a one-time naming card. Agents can be edited from Settings →
+Team or the conversation context menu (name, role, tools); names are unique and
+the direct conversation follows a rename.
+
+Settings → General also has an **Agent tags** switch that adds a small translated
+`bot` tag beside agent names in chats and agent lists. It is stored per device
+and off by default; the tag is presentation only and never enters a name, a
+mention, or a prompt (ADR-0052).
 
 Model providers are OpenAI Chat Completions, Anthropic Messages, or OpenAI
 Responses endpoints kept in `config.json` under the same app-data directory as
@@ -55,7 +61,9 @@ sent back to the frontend. Environment variables do not configure the desktop
 
 ## Language and account menu
 
-The interface ships in English, Simplified Chinese, and Traditional Chinese.
+The interface ships in thirteen languages: English, Simplified and Traditional
+Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian
+Portuguese, Latin American Spanish, and European Spanish.
 The bottom-left row shows the user and workspace name and opens an account
 menu: Settings, Language, Model configuration, Workspace settings, View
 changelog, and Learn more. Language opens a Claude-style picker grid; the choice
