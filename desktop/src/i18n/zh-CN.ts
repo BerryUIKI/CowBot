@@ -13,6 +13,14 @@ export const zhCN: Catalog = {
     chooseTitle: "选择你的语言",
     saveError: "无法保存语言偏好：{error}",
   },
+  mainAgent: {
+    nameTitle: "为你的助手起个名字",
+    nameBody:
+      "你的主要智能体初始名称为 {name}。请选择你希望在聊天和提及中看到的名字。",
+    nameLabel: "助手名称",
+    saveName: "保存名称",
+    keepName: "保留 {name}",
+  },
   profile: {
     menuAria: "账户菜单",
     openMenu: "打开账户菜单",
@@ -105,6 +113,10 @@ export const zhCN: Catalog = {
     general: {
       title: "通用",
       hint: "此设备的界面偏好。",
+      botTagsTitle: "智能体标签",
+      botTagsHint:
+        "在智能体名称旁添加一个小巧的“机器人”标签。当队友和智能体处于同一会话时很有用；默认关闭。",
+      botTagsToggle: "在智能体名称旁显示“机器人”",
     },
     models: {
       title: "模型",
@@ -280,6 +292,7 @@ export const zhCN: Catalog = {
       unassigned: "未分配",
       fallback: "智能体 {id}",
       offlineModel: "离线模型",
+      botTag: "机器人",
     },
     notice: {
       slashUnavailable:

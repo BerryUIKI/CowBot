@@ -31,7 +31,7 @@ server shares a workspace with a small team over HTTP and WebSocket.
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
 | Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it |
-| Interface | English, Simplified Chinese, and Traditional Chinese, with a language picker, a device-local preference, and an account menu |
+| Interface | Thirteen languages (English, Simplified and Traditional Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese, Latin American and European Spanish), with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
 ## What does not work yet
@@ -117,8 +117,10 @@ tracked.
   copy, and refuses a newer database with recovery choices instead of starting.
   The CLI upgrades without asking. Development builds use their own `dev` data
   directory so they cannot upgrade an installed workspace.
-- **Interface localisation covers the desktop chrome.** English, Simplified
-  Chinese, and Traditional Chinese are shipped. Service diagnostics, agent
+- **Interface localisation covers the desktop chrome.** Thirteen interface
+  languages are shipped: English, Simplified and Traditional Chinese, French,
+  German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese,
+  Latin American Spanish, and European Spanish. Service diagnostics, agent
   profiles, template content, stored audit reasons, and the CLI remain in
   English; right-to-left layouts and plural categories beyond one/other are not
   implemented.

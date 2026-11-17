@@ -14,6 +14,13 @@ export const zhTW: Catalog = {
     "chooseTitle": "選擇你的語言",
     "saveError": "無法儲存語言偏好：{error}"
   },
+  "mainAgent": {
+    "nameTitle": "為你的主要代理命名",
+    "nameBody": "你的主要代理初始名稱為 {name}。請選擇你希望在聊天和提及中看到的名稱。",
+    "nameLabel": "主要代理名稱",
+    "saveName": "儲存名稱",
+    "keepName": "保留 {name}"
+  },
   "profile": {
     "menuAria": "帳戶選單",
     "openMenu": "開啟帳戶選單",
@@ -103,7 +110,10 @@ export const zhTW: Catalog = {
     },
     "general": {
       "title": "通用",
-      "hint": "此裝置的介面偏好。"
+      "hint": "此裝置的介面偏好。",
+      "botTagsTitle": "代理標籤",
+      "botTagsHint": "在代理名稱旁加上小型“機器人”標籤。當隊友和代理共用同一個對話時很有用；預設關閉。",
+      "botTagsToggle": "在代理名稱旁顯示“機器人”"
     },
     "models": {
       "title": "模型",
@@ -273,7 +283,8 @@ export const zhTW: Catalog = {
     "agent": {
       "unassigned": "未指派",
       "fallback": "代理 {id}",
-      "offlineModel": "離線模型"
+      "offlineModel": "離線模型",
+      "botTag": "機器人"
     },
     "notice": {
       "slashUnavailable": "斜槓命令不可用；以 / 開頭的草稿將作為普通訊息傳送。{detail}",
