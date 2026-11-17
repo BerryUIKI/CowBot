@@ -277,6 +277,12 @@ button {
   min-height: 0;
   margin: 0 -4px;
   padding: 0 4px;
+  /* The sidebar is a fixed column with no resize handle, so it must never pan
+     sideways. `overflow-y: auto` alone computes `overflow-x: auto` too by the
+     CSS Overflow rules, which turned the column into a horizontal scroller
+     whenever a descendant was wider than it. Hidden keeps the vertical scroll
+     and makes a stray wide descendant clip instead of widening the column. */
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -490,6 +496,10 @@ button {
   margin: 2px 4px 6px 12px;
   padding-left: 10px;
   border-left: 2px solid var(--rule);
+  /* Cards hold nowrap titles and a fixed-width branch chip, so the track must
+     be allowed to be narrower than their min-content width. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .background-card {
@@ -497,6 +507,7 @@ button {
   align-items: flex-start;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   padding: 8px 9px;
   border: 1px solid var(--rule);
   border-radius: 8px;
@@ -545,11 +556,20 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   color: var(--paper-faint);
   font-size: 10px;
 }
 
+.background-card-meta > :last-child {
+  /* Elapsed time stays readable; the branch chip gives up width first. */
+  flex: none;
+  white-space: nowrap;
+}
+
 .background-card-branch {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 160px;
   overflow: hidden;
   padding: 1px 6px;
@@ -4971,6 +4991,9 @@ button {
 }
 
 .participant-picker {
+  /* A fieldset defaults to `min-width: min-content`, so an agent name with a
+     long unbreakable word widened the whole picker past the sidebar column. */
+  min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
@@ -4994,6 +5017,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
   max-height: 220px;
   margin: 0;
   padding: 0;
@@ -5005,6 +5029,7 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .participant-option {
@@ -5012,6 +5037,7 @@ button {
   flex: 1;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--rule);
   border-radius: 7px;
@@ -5041,6 +5067,7 @@ button {
 
 .participant-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
