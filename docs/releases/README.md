@@ -5,6 +5,7 @@ the canonical distribution point; these files keep the notes in the repository.
 
 | Version | Theme |
 | --- | --- |
+| [0.1.13](0.1.13.md) | Update prompts in the sidebar, a draggable title bar, and a white line app icon |
 | [0.1.12](0.1.12.md) | Startup fixes: one instance per build, and a retry when the workspace cannot be loaded |
 | [0.1.11](0.1.11.md) | Database lifecycle safeguards, setup polish, and one instance per machine |
 | [0.1.10](0.1.10.md) | Self-hosted team mode, a default model with per-conversation scope, and a trilingual interface |
