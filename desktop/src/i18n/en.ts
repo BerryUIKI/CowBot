@@ -17,6 +17,14 @@ export const en = {
     chooseTitle: "Choose your language",
     saveError: "Could not save the language preference: {error}",
   },
+  mainAgent: {
+    nameTitle: "Give your assistant a name",
+    nameBody:
+      "Your main agent starts as {name}. Choose the name you want to see in chats and mentions.",
+    nameLabel: "Assistant name",
+    saveName: "Save name",
+    keepName: "Keep {name}",
+  },
   profile: {
     menuAria: "Account menu",
     openMenu: "Open account menu",
@@ -113,6 +121,10 @@ export const en = {
     general: {
       title: "General",
       hint: "Interface preferences for this device.",
+      botTagsTitle: "Agent tags",
+      botTagsHint:
+        "Add a small “bot” tag beside agent names. Useful when teammates and agents share a conversation; off by default.",
+      botTagsToggle: "Show “bot” beside agent names",
     },
     models: {
       title: "Models",
@@ -291,6 +303,7 @@ export const en = {
       unassigned: "Unassigned",
       fallback: "Agent {id}",
       offlineModel: "Offline model",
+      botTag: "bot",
     },
     notice: {
       slashUnavailable:

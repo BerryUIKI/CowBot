@@ -53,6 +53,6 @@ pub use remember::{RememberTool, REMEMBER_TOOL_NAME};
 pub use scheduler::{AssignmentScheduler, ConversationTurnRequest, CrewRunOptions};
 pub use session_decisions::{SessionDecisionEntry, SessionDecisions};
 pub use task_service::TaskService;
-pub use templates::{builtin_templates, TemplateService};
+pub use templates::{builtin_templates, TemplateService, MAIN_AGENT_TEMPLATE_ID};
 pub use turns::{stopped_text, TurnCompletion, TurnRunner, TurnSink, TurnSpec, STOPPED_MARKER};
 pub use worktrees::{slug_for, WorktreeService};

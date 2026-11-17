@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import BotTag from "./BotTag";
 import ModelProviderSettings from "./ModelProviderSettings";
 import MemorySettings from "./MemorySettings";
 import { PromptSnapshotAuditPanel } from "./PromptSnapshotViewer";
@@ -45,6 +46,7 @@ import type {
   WorkspaceSummary,
 } from "./types";
 import type { Updater } from "./updater";
+import { useUiPreferences } from "./uiPreferences";
 
 interface SettingsViewProps {
   session: ClientSession | null;
@@ -141,6 +143,8 @@ export default function SettingsView({
   onOpenLanguage,
 }: SettingsViewProps) {
   const { t, locale } = useI18n();
+  const { showAgentBotTags, setShowAgentBotTags } = useUiPreferences();
+  const [botTagError, setBotTagError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -537,6 +541,34 @@ export default function SettingsView({
                   {localeDefinitions[locale].shortName}
                 </button>
               </div>
+              <div className="settings-language">
+                <div>
+                  <span className="settings-card-title">
+                    {t("settings.general.botTagsTitle")}
+                  </span>
+                  <p className="settings-hint">
+                    {t("settings.general.botTagsHint")}
+                  </p>
+                </div>
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={showAgentBotTags}
+                    onChange={(event) => {
+                      setBotTagError(null);
+                      setShowAgentBotTags(event.target.checked).catch((error) =>
+                        setBotTagError(errorMessage(error)),
+                      );
+                    }}
+                  />
+                  {t("settings.general.botTagsToggle")}
+                </label>
+              </div>
+              {botTagError ? (
+                <p className="settings-status is-error" role="alert">
+                  {botTagError}
+                </p>
+              ) : null}
             </section>
           ) : null}
 
@@ -628,7 +660,10 @@ export default function SettingsView({
                             {agentInitials(agent.name)}
                           </span>
                           <div>
-                            <span className="settings-card-title">{agent.name}</span>
+                            <span className="settings-card-title">
+                              {agent.name}
+                              <BotTag />
+                            </span>
                             <p className="settings-card-subtitle">{agent.role}</p>
                           </div>
                           <button

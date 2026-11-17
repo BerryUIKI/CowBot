@@ -2010,6 +2010,22 @@ button {
   font-weight: 600;
 }
 
+/* `bot` tag that follows agent names when enabled in Settings → General. */
+.agent-bot-tag {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  color: var(--paper-faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .chat-bubble {
   padding: 10px 14px;
   border-radius: 16px;
@@ -2281,6 +2297,28 @@ button {
 
 .chat-empty .empty-title {
   margin-top: 10px;
+}
+
+/* First-conversation prompt for naming the built-in assistant. */
+.agent-naming {
+  width: min(420px, 100%);
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--ink-panel);
+  text-align: left;
+}
+
+.agent-naming-title {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.agent-naming .form-actions {
+  margin-top: 12px;
 }
 
 .typing-dots {
@@ -6335,7 +6373,18 @@ button {
 
 /* Language picker (Claude-style grid). */
 .language-modal {
+  display: flex;
+  flex-direction: column;
   width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+}
+
+.language-modal .modal-head {
+  flex: none;
+}
+
+.language-modal .modal-body {
+  overflow-y: auto;
 }
 
 .language-grid {

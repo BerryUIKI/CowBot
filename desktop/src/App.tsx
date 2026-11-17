@@ -7,8 +7,10 @@ import type {
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import ApprovalCard from "./ApprovalCard";
+import AgentNamingPrompt from "./AgentNamingPrompt";
 import ApprovalModeMenu from "./ApprovalModeMenu";
 import Avatar from "./Avatar";
+import BotTag from "./BotTag";
 import { TitleBar } from "./TitleBar";
 import BackgroundTaskCard from "./BackgroundTaskCard";
 import GroupAvatar from "./GroupAvatar";
@@ -487,6 +489,16 @@ export default function App() {
     return agentId ? agents.find((agent) => agent.id === agentId) ?? null : null;
   }, [agents, conversationContext, selectedChannel]);
 
+  /// The built-in assistant is created as CowBot; while its direct conversation
+  /// is still empty and the default name is unchanged, the chat offers a naming
+  /// card. Renaming removes the condition, so the prompt never returns.
+  const namingAgent =
+    selectedChannel?.kind === "direct" &&
+    selectedAgent &&
+    selectedAgent.name === "CowBot"
+      ? selectedAgent
+      : null;
+
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
@@ -786,7 +798,9 @@ export default function App() {
       .map((id) => agents.find((agent) => agent.id === id) ?? null)
       .filter((agent): agent is AgentProfile => agent !== null);
     const preferred =
-      selected.find((agent) => agent.name.toLowerCase() === "main") ?? selected[0];
+      selected.find((agent) =>
+        ["main", "cowbot"].includes(agent.name.toLowerCase()),
+      ) ?? selected[0];
     setConversationDefaultResponder(preferred?.id ?? "");
   }, [agents, conversationDefaultResponder, conversationIds]);
 
@@ -3162,6 +3176,7 @@ export default function App() {
                                 <span className="contact-name">
                                   {row.channel.pinned ? <PinMark /> : null}
                                   {name}
+                                  {isAgent ? <BotTag /> : null}
                                 </span>
                                 <time className="contact-time">
                                   {preview ? formatListTime(preview.created_at) : ""}
@@ -3389,6 +3404,7 @@ export default function App() {
                                 />
                                 <span className="participant-name">
                                   {agent.name}
+                                  <BotTag />
                                 </span>
                                 {selected ? (
                                   <span className="participant-order">
@@ -3691,7 +3707,10 @@ export default function App() {
                       {selectedChannel.kind === "conversation" ? (
                         selectedChannel.name
                       ) : selectedAgent ? (
-                        selectedAgent.name
+                        <>
+                          {selectedAgent.name}
+                          <BotTag />
+                        </>
                       ) : (
                         <>
                           <span className="channel-hash" aria-hidden="true">
@@ -3718,7 +3737,12 @@ export default function App() {
                               },
                             )
                           : selectedAgent
-                            ? `${selectedAgent.name} · ${selectedAgent.role}`
+                            ? (
+                                <>
+                                  {selectedAgent.name}
+                                  <BotTag /> · {selectedAgent.role}
+                                </>
+                              )
                             : t("app.chat.privateConversation")
                         : selectedAgent
                           ? selectedAgent.role
@@ -3741,6 +3765,7 @@ export default function App() {
                               size="small"
                             />
                             {participant.agent_name}
+                            <BotTag />
                             {participant.agent_id ===
                             conversationContext?.default_responder ? (
                               <span className="chip-default">
@@ -3825,6 +3850,16 @@ export default function App() {
                               name: selectedChannel.name,
                             })}
                     </p>
+                    {namingAgent ? (
+                      <AgentNamingPrompt
+                        agent={namingAgent}
+                        workspaceId={session?.workspace.id ?? ""}
+                        onNamed={async () => {
+                          await refreshAgents();
+                          await refreshChannels();
+                        }}
+                      />
+                    ) : null}
                   </div>
                 ) : (
                   <ol className="chat-messages">
@@ -3856,6 +3891,7 @@ export default function App() {
                               {message.sender.type === "User" ? null : (
                                 <span className="chat-sender">
                                   {senderLabel(message, session, agents)}
+                                  <BotTag />
                                 </span>
                               )}
                               <div
@@ -3919,6 +3955,7 @@ export default function App() {
                           <div className="chat-approval-body">
                             <span className="chat-sender">
                               {agent?.name ?? t("app.chat.approval")}
+                              {agent ? <BotTag /> : null}
                             </span>
                             <ApprovalCard
                               approval={approval}
@@ -3950,7 +3987,10 @@ export default function App() {
                         <li className="chat-row chat-row-agent" key={`typing-${agent.id}`}>
                           <Avatar name={agent.name} kind="agent" size="small" />
                           <div className="chat-bubble-wrap">
-                            <span className="chat-sender">{agent.name}</span>
+                            <span className="chat-sender">
+                              {agent.name}
+                              <BotTag />
+                            </span>
                             <div className="chat-bubble chat-bubble-agent">
                               <span className="typing-dots" aria-label={t("app.chat.working")}>
                                 <span />
@@ -3970,7 +4010,10 @@ export default function App() {
                         <li className="chat-row chat-row-agent" key={`stream-${turn.id}`}>
                           <Avatar name={name} kind="agent" size="small" />
                           <div className="chat-bubble-wrap">
-                            <span className="chat-sender">{name}</span>
+                            <span className="chat-sender">
+                              {name}
+                              <BotTag />
+                            </span>
                             <div className="chat-bubble chat-bubble-agent chat-bubble-streaming">
                               {turn.reasoning ? (
                                 <details className="stream-reasoning">

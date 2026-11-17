@@ -231,7 +231,15 @@ export default function Onboarding({
               ) : (
                 <ul className="settings-list onboarding-templates">
                   {templates.map((template) => {
-                    const added = addedTemplateIds.has(template.id);
+                    const added =
+                      addedTemplateIds.has(template.id) ||
+                      template.agents.some((templateAgent) =>
+                        agents.some(
+                          (agent) =>
+                            agent.name.toLowerCase() ===
+                            templateAgent.name.toLowerCase(),
+                        ),
+                      );
                     return (
                       <li key={template.id} className="settings-card">
                         <div className="settings-card-head">

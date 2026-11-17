@@ -162,13 +162,16 @@ The account menu contains **Settings**, **Language**, **Model configuration**,
 **Workspace settings**, **View changelog**, and **Learn more**. The last two open
 the project's GitHub releases page and repository.
 
-**Language** opens a picker with English, 简体中文, and 繁體中文. Each option is
-shown in its own script with its English name underneath, and the active one is
-checked. The choice applies immediately, controls date and time formatting, and
-is stored per device in `config.json`. On first launch the interface follows the
-operating system language. Interface copy is translated; diagnostic messages
-from the local service, agent profiles, templates, and stored audit reasons
-remain in English. Agent replies follow the language you write in. See
+**Language** opens a picker with English, 简体中文, 繁體中文, Français, Deutsch,
+हिन्दी, Indonesia, Italiano, 日本語, 한국어, Português (Brasil), Español
+(Latinoamérica), and Español (España). Each option is shown in its own script
+with its English name underneath, and the active one is checked. The choice
+applies immediately, controls date and time formatting, and is stored per
+device in `config.json`. On first launch the interface follows the first
+supported language in the operating system's preference list. Interface copy is
+translated; diagnostic messages from the local service, agent profiles,
+templates, and stored audit reasons remain in English. Agent replies follow the
+language you write in. See
 [ADR-0050](ADR/0050-desktop-interface-localisation.md).
 
 Tasks live in the right inspector. The **Tasks** button in the sidebar header
@@ -224,16 +227,24 @@ are never included in `.cowpkg` packages.
 ## Team
 
 **Settings → Team** lists the built-in templates and the agents in the
-workspace. The **Main Assistant** is the primary agent for a one-person
-company: agent `main` plans work, can create channels, start specialist teams,
-and queue tasks for other agents. **Add agents** instantiates every agent in a
-template with its role, goal, and tool access. The 0.1.x app creates agents
-from templates; a standalone agent editor is not part of this release.
+workspace. A new workspace already contains the **Main Assistant**, created as
+**CowBot**: the primary agent for a one-person company plans work, can create
+channels, start specialist teams, and queue tasks for other agents.
+The first time you open its empty conversation, a card offers to give it another
+name; **Keep CowBot** leaves the default and the card does not return. You can
+rename it at any time from Settings → Team or the conversation's context menu.
+**Add agents** instantiates every agent in a template with its role, goal, and
+tool access. The template is shown as already added when its agents exist.
 
 - **Edit an agent** with **Edit** in Settings → Team or **Edit agent…** in an
   agent conversation's context menu. You can change its name, role, and tool
   selection. Names must be unique; the agent's conversation follows the new
   name.
+- **Agent tags.** **Settings → General** has an **Agent tags** switch that adds a
+  small `bot` tag beside agent names in the sidebar, the chat header, participant
+  chips, message senders, approvals, and Settings → Team. It is off by default
+  and stored per device. The tag is presentation only: it never changes an
+  agent's name, a mention, an assignee, or a prompt.
 - To turn an existing Assistant into the main assistant, open **Edit**, set the
   name to `main`, choose a role such as `Primary Assistant`, and enable the
   workspace tools (`create_channel`, `create_task`, `instantiate_team`,
@@ -789,9 +800,11 @@ short version for the version you are running.
   cannot be opened by an older one; see [Database schema
   versions](#database-schema-versions) for the confirmation, backup, and
   recovery options.
-- Interface languages are English, Simplified Chinese, and Traditional Chinese.
-  Service diagnostics, agent profiles, template content, and stored audit
-  reasons are not translated, and right-to-left layouts are not implemented.
+- Interface languages are English, Simplified and Traditional Chinese, French,
+  German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese,
+  Latin American Spanish, and European Spanish. Service diagnostics, agent
+  profiles, template content, and stored audit reasons are not translated, and
+  right-to-left layouts are not implemented.
 - Slash commands are executed by the desktop only. The `cowbot` CLI uses the
   same catalogue and parser but does not yet run commands, command history is
   not kept, and `/model` cannot switch to a model on an inactive provider.

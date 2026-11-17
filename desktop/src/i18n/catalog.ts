@@ -1,4 +1,14 @@
+import { de } from "./de";
 import { en, type Catalog } from "./en";
+import { es419 } from "./es-419";
+import { esES } from "./es-ES";
+import { fr } from "./fr";
+import { hi } from "./hi";
+import { id } from "./id";
+import { it } from "./it";
+import { ja } from "./ja";
+import { ko } from "./ko";
+import { ptBR } from "./pt-BR";
 import { zhCN } from "./zh-CN";
 import { zhTW } from "./zh-TW";
 
@@ -10,7 +20,20 @@ import { zhTW } from "./zh-TW";
  * the provider. `i18n/index.tsx` adds the React context and persistence.
  */
 
-export type Locale = "en" | "zh-CN" | "zh-TW";
+export type Locale =
+  | "en"
+  | "zh-CN"
+  | "zh-TW"
+  | "fr"
+  | "de"
+  | "hi"
+  | "id"
+  | "it"
+  | "ja"
+  | "ko"
+  | "pt-BR"
+  | "es-419"
+  | "es-ES";
 export type LocalePreference = "system" | Locale;
 
 export interface LocaleDefinition {
@@ -47,6 +70,76 @@ export const localeDefinitions: Record<Locale, LocaleDefinition> = {
     intl: "zh-TW",
     catalog: zhTW,
   },
+  fr: {
+    nativeName: "Français (France)",
+    englishName: "French (France)",
+    shortName: "Français",
+    intl: "fr",
+    catalog: fr,
+  },
+  de: {
+    nativeName: "Deutsch (Deutschland)",
+    englishName: "German (Germany)",
+    shortName: "Deutsch",
+    intl: "de",
+    catalog: de,
+  },
+  hi: {
+    nativeName: "हिन्दी (भारत)",
+    englishName: "Hindi (India)",
+    shortName: "हिन्दी",
+    intl: "hi",
+    catalog: hi,
+  },
+  id: {
+    nativeName: "Indonesia (Indonesia)",
+    englishName: "Indonesian (Indonesia)",
+    shortName: "Indonesia",
+    intl: "id",
+    catalog: id,
+  },
+  it: {
+    nativeName: "Italiano (Italia)",
+    englishName: "Italian (Italy)",
+    shortName: "Italiano",
+    intl: "it",
+    catalog: it,
+  },
+  ja: {
+    nativeName: "日本語（日本）",
+    englishName: "Japanese (Japan)",
+    shortName: "日本語",
+    intl: "ja",
+    catalog: ja,
+  },
+  ko: {
+    nativeName: "한국어(대한민국)",
+    englishName: "Korean (South Korea)",
+    shortName: "한국어",
+    intl: "ko",
+    catalog: ko,
+  },
+  "pt-BR": {
+    nativeName: "Português (Brasil)",
+    englishName: "Portuguese (Brazil)",
+    shortName: "Português",
+    intl: "pt-BR",
+    catalog: ptBR,
+  },
+  "es-419": {
+    nativeName: "Español (Latinoamérica)",
+    englishName: "Spanish (Latin America)",
+    shortName: "Español (Latinoamérica)",
+    intl: "es-419",
+    catalog: es419,
+  },
+  "es-ES": {
+    nativeName: "Español (España)",
+    englishName: "Spanish (Spain)",
+    shortName: "Español (España)",
+    intl: "es-ES",
+    catalog: esES,
+  },
 };
 
 export const supportedLocales = Object.keys(localeDefinitions) as Locale[];
@@ -74,6 +167,41 @@ export function normalizeLocalePreference(value: unknown): LocalePreference {
   return isLocale(value) ? value : "system";
 }
 
+/** Locales that differ only by region and share one base language tag. */
+const baseLocales: Record<string, Locale> = {
+  en: "en",
+  fr: "fr",
+  de: "de",
+  hi: "hi",
+  id: "id",
+  // Legacy ISO 639 code for Indonesian, still reported by older WebViews.
+  in: "id",
+  it: "it",
+  ja: "ja",
+  ko: "ko",
+  pt: "pt-BR",
+};
+
+/** Map one BCP 47 tag to a shipped locale, or `null` when none matches. */
+function matchLocale(tag: string): Locale | null {
+  const lower = tag.toLowerCase();
+  const base = lower.split("-")[0];
+  if (base === "zh") {
+    return lower.includes("hant") ||
+      lower.includes("-tw") ||
+      lower.includes("-hk") ||
+      lower.includes("-mo")
+      ? "zh-TW"
+      : "zh-CN";
+  }
+  if (base === "es") {
+    // Only Spain splits from the Latin American catalogue, which is the
+    // fallback for every other Spanish region and for a bare `es` tag.
+    return lower.startsWith("es-es") ? "es-ES" : "es-419";
+  }
+  return baseLocales[base] ?? null;
+}
+
 /** The locale to use when the preference follows the operating system. */
 export function systemLocale(): Locale {
   if (typeof navigator === "undefined") return "en";
@@ -81,17 +209,11 @@ export function systemLocale(): Locale {
     navigator.languages && navigator.languages.length > 0
       ? navigator.languages
       : [navigator.language];
-  const chinese = languages.find((language) =>
-    language.toLowerCase().startsWith("zh"),
-  );
-  if (!chinese) return "en";
-  const tag = chinese.toLowerCase();
-  return tag.includes("hant") ||
-    tag.includes("-tw") ||
-    tag.includes("-hk") ||
-    tag.includes("-mo")
-    ? "zh-TW"
-    : "zh-CN";
+  for (const language of languages) {
+    const match = matchLocale(language);
+    if (match) return match;
+  }
+  return "en";
 }
 
 export function resolveLocale(preference: LocalePreference): Locale {

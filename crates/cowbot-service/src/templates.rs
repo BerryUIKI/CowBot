@@ -9,6 +9,9 @@ const RESEARCH_TEAM: &str = include_str!("../templates/builtin/research-team.cow
 const GENERAL_ASSISTANT: &str =
     include_str!("../templates/builtin/general-assistant.cowtemplate.json");
 
+/// Template that provides the built-in primary assistant.
+pub const MAIN_AGENT_TEMPLATE_ID: &str = "builtin-general-assistant";
+
 /// Load and validate the templates compiled into the binary.
 pub fn builtin_templates() -> CowResult<Vec<TemplateDocument>> {
     let sources = [
@@ -140,5 +143,22 @@ impl TemplateService {
             profiles.push(profile);
         }
         Ok(profiles)
+    }
+
+    /// Create the built-in primary assistant in an empty workspace.
+    ///
+    /// A workspace with any agent is left alone: the default exists so a new
+    /// workspace is usable immediately, not to resurrect an assistant the user
+    /// replaced with their own team. Repeated calls are no-ops because the
+    /// first one adds an agent.
+    pub async fn ensure_main_agent(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<Vec<AgentProfile>> {
+        if !self.store.list_agents(workspace_id).await?.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.instantiate_agents(workspace_id, MAIN_AGENT_TEMPLATE_ID)
+            .await
     }
 }

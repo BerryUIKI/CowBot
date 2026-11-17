@@ -11,10 +11,11 @@
 
 Every string in the desktop frontend was written directly in JSX, in English.
 The product now needs an interface the user can read in their own language and
-that the assistant can work with: English, Simplified Chinese, and Traditional
-Chinese. The request also asked for the language switcher to follow Claude's
-language picker and for the bottom-left user area to follow Claude's account
-menu.
+that the assistant can work with. The first release shipped English, Simplified
+Chinese, and Traditional Chinese; the picker has since grown to every language
+in Claude's picker plus that Chinese pair. The request also asked for the
+language switcher to follow Claude's language picker and for the bottom-left
+user area to follow Claude's account menu.
 
 Localisation is not just translation. The app must keep key parity across
 catalogues, remember the preference on the device, format dates with the chosen
@@ -29,10 +30,11 @@ server clients that have no locale preference.
 
 `desktop/src/i18n/en.ts` is the source catalogue. It is a nested object of
 strings, and `Catalog = typeof en` gives every other catalogue a structural
-type. `zh-CN.ts` and `zh-TW.ts` are declared as `Catalog`, so the TypeScript
-build fails when a key is missing, misspelled, or extra. There is no runtime
-fallback to a half-translated catalogue; English remains the final fallback only
-for defensive lookups.
+type. Every translated catalogue (`zh-CN.ts`, `zh-TW.ts`, `fr.ts`, `ja.ts`, and
+the rest) is declared as `Catalog`, so the TypeScript build fails when a key is
+missing, misspelled, or extra. There is no runtime fallback to a
+half-translated catalogue; English remains the final fallback only for
+defensive lookups.
 
 Keys are grouped by feature and named after the control, not the English
 wording (`sidebar.searchPlaceholder`, `settings.approvals.rulesTitle`). A
@@ -45,11 +47,16 @@ free of React and Tauri imports.
 ### 2. The shipped locales are a registry, not a switch statement
 
 `localeDefinitions` maps each locale to its native name, English name, short
-label, BCP 47 tag, and catalogue. English, Simplified Chinese, and Traditional
-Chinese are shipped. Adding a locale is a new file plus one registry entry; the
-type checker proves the catalogue is complete. `system` resolves the operating
-system language, treating `Hant`, `TW`, `HK`, and `MO` tags as Traditional
-Chinese and every other Chinese tag as Simplified Chinese.
+label, BCP 47 tag, and catalogue. Thirteen locales are shipped, in the order the
+picker shows them: English, Simplified Chinese, Traditional Chinese, French,
+German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese,
+Latin American Spanish, and European Spanish. Adding a locale is a new file plus
+one registry entry; the type checker proves the catalogue is complete. `system`
+walks `navigator.languages` in preference order and resolves the first tag it
+recognises: `Hant`, `TW`, `HK`, and `MO` map to Traditional Chinese and every
+other Chinese tag to Simplified Chinese; `pt` maps to Brazilian Portuguese;
+`es-ES` maps to European Spanish and every other Spanish tag — including a bare
+`es` — to Latin American Spanish. An unrecognised list falls back to English.
 
 Traditional Chinese was seeded from the Simplified catalogue with OpenCC
 (`cn` → `twp`) and then reviewed against Taiwan software terminology (for
@@ -61,11 +68,11 @@ the bundle has no conversion dependency and translators can edit it directly.
 
 `AppConfig` gains `ui_locale: Option<String>`, and the Tauri commands
 `get_ui_locale` and `set_ui_locale` read and write it. The frontend normalises
-the value to `system`, `en`, `zh-CN`, or `zh-TW`; an unknown value follows the
-system. The provider also caches the preference in localStorage so the first
-paint after a restart already uses the right language, then reconciles with the
-configuration file. The preference is per device and never enters a workspace
-package, the server, or an agent prompt.
+the value to `system` or one of the shipped locale tags; an unknown value
+follows the system. The provider also caches the preference in localStorage so
+the first paint after a restart already uses the right language, then
+reconciles with the configuration file. The preference is per device and never
+enters a workspace package, the server, or an agent prompt.
 
 ### 4. The picker follows Claude's language dialog
 
@@ -124,8 +131,8 @@ different languages.
 
 ## Consequences
 
-- A new UI string requires one English key and three translations; without all
-  four the build fails.
+- A new UI string requires one English key and twelve translations; without all
+  thirteen the build fails.
 - All catalogues are bundled eagerly. At this size the cost is small, and it
   keeps the first paint synchronous; lazy loading can be added behind the same
   `t` API later.
@@ -141,16 +148,16 @@ different languages.
   localized. Localizing usage would change the command syntax shared with the
   CLI and server.
 
-## Planned locales
+## Shipped locales
 
-The next interface languages follow Claude's language picker, plus the Chinese
-pair that already ships. In picker order:
+The interface follows Claude's language picker, plus the Chinese pair. In
+picker order:
 
 | Locale | Native name | English name |
 | --- | --- | --- |
-| `en` | English (United States) | English (United States) — shipped |
-| `zh-CN` | 简体中文（中国） | Chinese (Simplified, China) — shipped |
-| `zh-TW` | 繁體中文（台灣） | Chinese (Traditional, Taiwan) — shipped |
+| `en` | English (United States) | English (United States) |
+| `zh-CN` | 简体中文（中国） | Chinese (Simplified, China) |
+| `zh-TW` | 繁體中文（台灣） | Chinese (Traditional, Taiwan) |
 | `fr` | Français (France) | French (France) |
 | `de` | Deutsch (Deutschland) | German (Germany) |
 | `hi` | हिन्दी (भारत) | Hindi (India) |
@@ -162,7 +169,16 @@ pair that already ships. In picker order:
 | `es-419` | Español (Latinoamérica) | Spanish (Latin America) |
 | `es-ES` | Español (España) | Spanish (Spain) |
 
-Each addition is one catalogue file, one registry entry, and the startup strings
-in `desktop/src-tauri/src/startup.rs` (ADR-0051). Spanish needs the same regional
-split Claude ships; every locale above is left-to-right, so the RTL pass stays
-deferred until one is requested.
+Each addition is one catalogue file plus one registry entry. Spanish keeps the
+same regional split Claude ships, and Portuguese is Brazilian only. Every locale
+above is left-to-right, so the RTL pass stays deferred until one is requested.
+
+## Update (2026-11-17): the ten remaining picker languages
+
+French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian
+Portuguese, Latin American Spanish, and European Spanish were added together.
+Each catalogue was translated directly from `en.ts` and reviewed for key parity,
+placeholder parity, terminology, and UI register before landing; the typed
+catalogue remains the guarantee. `systemLocale` now walks the operating
+system's language list in preference order instead of only recognising Chinese,
+so a device whose first choice is French opens in French rather than English.
