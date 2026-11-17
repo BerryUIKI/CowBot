@@ -2027,9 +2027,10 @@ fn cache_summary(totals: &UsageTotals) -> CacheUsageSummary {
 /// Resolve the participant that answers an unaddressed group message.
 ///
 /// A stored responder that is no longer a participant falls back to the
-/// participant named `main` (the built-in Main Assistant), then to the first
-/// participant in order. The boolean reports that fallback happened so the
-/// turn can explain it. An unset responder stays silent.
+/// built-in primary assistant — the legacy agent named `main` or the default
+/// named `CowBot` — then to the first participant in order. The boolean reports
+/// that fallback happened so the turn can explain it.
+/// An unset responder stays silent.
 /// The agent who wrote the last assistant entry any participant can see.
 ///
 /// The rotation starts after this speaker. Direct branches diverge after a
@@ -2089,7 +2090,9 @@ pub(crate) fn resolve_default_responder<'a>(
     }
     let fallback = participants
         .iter()
-        .find(|agent| agent.name.eq_ignore_ascii_case("main"))
+        .find(|agent| {
+            agent.name.eq_ignore_ascii_case("main") || agent.name.eq_ignore_ascii_case("cowbot")
+        })
         .or_else(|| participants.first());
     (fallback, fallback.is_some())
 }

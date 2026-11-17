@@ -65,6 +65,57 @@ async fn builtin_templates_are_valid() {
 }
 
 #[tokio::test]
+async fn ensure_main_agent_provisions_the_default_only_once() {
+    let store = test_store().await;
+    let context = bootstrap_local(&store).await.unwrap();
+    let service = TemplateService::new(store.clone(), context.workspace.id.clone());
+
+    let created = service
+        .ensure_main_agent(&context.workspace.id)
+        .await
+        .unwrap();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].name, "CowBot");
+    assert!(!created[0].tools.is_empty());
+
+    let again = service
+        .ensure_main_agent(&context.workspace.id)
+        .await
+        .unwrap();
+    assert!(again.is_empty());
+    assert_eq!(
+        store
+            .list_agents(&context.workspace.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ensure_main_agent_leaves_a_non_empty_workspace_alone() {
+    let store = test_store().await;
+    let context = bootstrap_local(&store).await.unwrap();
+    let service = TemplateService::new(store.clone(), context.workspace.id.clone());
+    let specialist =
+        cowbot_core::agent::AgentProfile::new("Specialist", "Researcher", "Research", "Careful");
+    store
+        .upsert_agent(&context.workspace.id, &specialist)
+        .await
+        .unwrap();
+
+    let created = service
+        .ensure_main_agent(&context.workspace.id)
+        .await
+        .unwrap();
+    assert!(created.is_empty());
+    let agents = store.list_agents(&context.workspace.id).await.unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].id, specialist.id);
+}
+
+#[tokio::test]
 async fn template_crud_import_export_roundtrip() {
     let store = test_store().await;
     let context = bootstrap_local(&store).await.unwrap();

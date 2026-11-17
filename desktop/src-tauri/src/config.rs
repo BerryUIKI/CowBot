@@ -149,6 +149,12 @@ pub struct AppConfig {
     /// those files follow the operating system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<String>,
+    /// Whether agent names show a `bot` tag in the interface.
+    ///
+    /// Device-local presentation only: agent names are workspace data, while
+    /// this switch changes how they are labelled on this machine.
+    #[serde(default)]
+    pub show_agent_bot_tags: bool,
     /// Absolute folder that holds the workspace databases.
     ///
     /// Missing means the app data directory. The first-run guide offers a
@@ -183,6 +189,7 @@ impl Default for AppConfig {
             onboarding_completed: false,
             auto_check_updates: true,
             ui_locale: None,
+            show_agent_bot_tags: false,
             database_dir: None,
             active_workspace_database: None,
             workspaces: Vec::new(),
@@ -801,6 +808,22 @@ mod tests {
     }
 
     #[test]
+    fn agent_bot_tags_default_to_off_and_are_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(&path, r#"{"version":1,"providers":[]}"#).unwrap();
+        assert!(!load(&path).unwrap().show_agent_bot_tags);
+
+        let config = AppConfig {
+            show_agent_bot_tags: true,
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert!(load(&path).unwrap().show_agent_bot_tags);
+    }
+
+    #[test]
     fn save_and_load_roundtrip() {
         let root = tempfile::tempdir().unwrap();
         let path = config_path(root.path());
@@ -810,6 +833,7 @@ mod tests {
             onboarding_completed: true,
             auto_check_updates: true,
             ui_locale: None,
+            show_agent_bot_tags: false,
             database_dir: None,
             active_workspace_database: Some("workspaces/one.db".to_string()),
             workspaces: vec![WorkspaceEntry {

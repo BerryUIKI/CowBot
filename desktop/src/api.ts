@@ -711,6 +711,15 @@ export function getUiLocale(): Promise<string | null> {
   return invoke<string | null>("get_ui_locale");
 }
 
+/** Whether agent names show a `bot` tag in the interface. */
+export function getShowAgentBotTags(): Promise<boolean> {
+  return invoke<boolean>("get_show_agent_bot_tags");
+}
+
+export function setShowAgentBotTags(enabled: boolean): Promise<void> {
+  return invoke<void>("set_show_agent_bot_tags", { enabled });
+}
+
 export function setUiLocale(locale: string): Promise<void> {
   return invoke<void>("set_ui_locale", { locale });
 }
