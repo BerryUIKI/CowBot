@@ -7,6 +7,7 @@ import BotTag from "./BotTag";
 import ModelProviderSettings from "./ModelProviderSettings";
 import MemorySettings from "./MemorySettings";
 import { PromptSnapshotAuditPanel } from "./PromptSnapshotViewer";
+import ServerSettings from "./ServerSettings";
 import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
@@ -76,6 +77,7 @@ export type SettingsSection =
   | "audit"
   | "projects"
   | "workspace"
+  | "server"
   | "about";
 
 export const settingsSections: {
@@ -90,6 +92,7 @@ export const settingsSections: {
   { id: "audit", labelKey: "settings.nav.audit" },
   { id: "projects", labelKey: "settings.nav.projects" },
   { id: "workspace", labelKey: "settings.nav.workspace" },
+  { id: "server", labelKey: "settings.nav.server" },
   { id: "about", labelKey: "settings.nav.about" },
 ];
 
@@ -1233,6 +1236,8 @@ export default function SettingsView({
               </section>
             </>
           ) : null}
+
+          {section === "server" ? <ServerSettings /> : null}
 
           {section === "about" ? (
             <section className="settings-section" aria-labelledby="settings-about">

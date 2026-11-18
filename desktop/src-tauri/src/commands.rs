@@ -115,12 +115,22 @@ pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, S
 
 /// Return every channel, provisioning a direct conversation for each agent
 /// that does not have one yet.
+///
+/// Provisioning is a local-runtime write; a server workspace already has its
+/// conversations, so it simply lists what exists.
 #[tauri::command]
 pub async fn ensure_agent_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
-    local(&state)?
-        .ensure_agent_channels()
-        .await
-        .map_err(|error| error.to_string())
+    match state.local_client.as_deref() {
+        Some(client) => client
+            .ensure_agent_channels()
+            .await
+            .map_err(|error| error.to_string()),
+        None => state
+            .client
+            .list_channels()
+            .await
+            .map_err(|error| error.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -828,7 +838,96 @@ fn overview_detail(assignment: &Assignment) -> Option<String> {
     }
 }
 
+/// Assignments of a run, including its crew tasks.
+///
+/// The local runtime answers from one query that follows `run_group`; a server
+/// workspace combines its assignments route with the tasks it lists, so the
+/// background panel shows the same groups in both modes.
+async fn run_assignments(state: &AppState, run_id: &TaskId) -> Result<Vec<Assignment>, String> {
+    if let Some(client) = state.local_client.as_deref() {
+        return client
+            .list_run_assignments(run_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let mut assignments = state
+        .client
+        .list_assignments(run_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let tasks = state
+        .client
+        .list_tasks()
+        .await
+        .map_err(|error| error.to_string())?;
+    for task in tasks
+        .iter()
+        .filter(|task| task.run_group.as_ref() == Some(run_id))
+    {
+        assignments.extend(
+            state
+                .client
+                .list_assignments(&task.id)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(assignments)
+}
+
+/// The newest tool call in a run, from any task in its group.
+async fn latest_run_tool_call(
+    state: &AppState,
+    run_id: &TaskId,
+) -> Result<Option<ToolCallRecord>, String> {
+    if let Some(client) = state.local_client.as_deref() {
+        return client
+            .latest_tool_call_for_task(run_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    // A server route exists per run, so walk the group's runs and keep the
+    // newest call.
+    let mut members = vec![run_id.clone()];
+    if let Ok(tasks) = state.client.list_tasks().await {
+        members.extend(
+            tasks
+                .into_iter()
+                .filter(|task| task.run_group.as_ref() == Some(run_id))
+                .map(|task| task.id),
+        );
+    }
+    let mut latest: Option<ToolCallRecord> = None;
+    for member in members {
+        for run in state
+            .client
+            .list_runs(&member)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            for call in state
+                .client
+                .list_tool_calls(&run.id)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                if latest
+                    .as_ref()
+                    .map(|current| call.created_at > current.created_at)
+                    .unwrap_or(true)
+                {
+                    latest = Some(call);
+                }
+            }
+        }
+    }
+    Ok(latest)
+}
+
 /// One summary entry per run group for sidebar cards and the background panel.
+///
+/// A server workspace has no worktrees on this machine, so the cards it shows
+/// carry assignments only. The rest is computed the same way in both modes.
 #[tauri::command]
 pub async fn list_task_overview(
     state: State<'_, AppState>,
@@ -838,13 +937,16 @@ pub async fn list_task_overview(
         .list_tasks()
         .await
         .map_err(|error| error.to_string())?;
-    let worktree_by_task: HashMap<String, TaskWorktree> = local(&state)?
-        .list_worktrees()
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|worktree| (worktree.task_id.0.clone(), worktree))
-        .collect();
+    let worktree_by_task: HashMap<String, TaskWorktree> = match state.local_client.as_deref() {
+        Some(client) => client
+            .list_worktrees()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|worktree| (worktree.task_id.0.clone(), worktree))
+            .collect(),
+        None => HashMap::new(),
+    };
 
     let mut groups: HashMap<String, Vec<Task>> = HashMap::new();
     for task in tasks {
@@ -859,10 +961,7 @@ pub async fn list_task_overview(
     let mut entries = Vec::new();
     for (run_id, group_tasks) in groups {
         let worktree = worktree_by_task.get(&run_id).cloned();
-        let assignments = local(&state)?
-            .list_run_assignments(&TaskId::new(run_id.clone()))
-            .await
-            .map_err(|error| error.to_string())?;
+        let assignments = run_assignments(&state, &TaskId::new(run_id.clone())).await?;
         if assignments.is_empty() && worktree.is_none() {
             continue;
         }
@@ -900,10 +999,7 @@ pub async fn list_task_overview(
             .filter(|assignment| assignment.status.is_terminal())
             .count() as u32;
         let total = assignments.len() as u32;
-        let latest_tool_call = local(&state)?
-            .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
-            .await
-            .map_err(|error| error.to_string())?;
+        let latest_tool_call = latest_run_tool_call(&state, &TaskId::new(run_id.clone())).await?;
         let title = if owner.title.trim().is_empty() {
             owner.description.clone()
         } else {

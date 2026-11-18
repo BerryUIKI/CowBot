@@ -428,6 +428,32 @@ export interface WorkspaceSummary {
   available: boolean;
 }
 
+/**
+ * Where this device's data comes from, as Settings → Workspace shows it.
+ *
+ * The session token is never part of this: the view learns only which account
+ * and workspace are connected.
+ */
+export interface ServerSettings {
+  /** `local` or `server`: which backend the app opened. */
+  mode: "local" | "server";
+  base_url: string | null;
+  email: string | null;
+  workspace_id: string | null;
+  workspace_name: string | null;
+}
+
+/** One workspace the signed-in server account can enter. */
+export interface ServerWorkspace {
+  id: string;
+  name: string;
+}
+
+/** What a sign-in reachable without saving the configuration reports. */
+export interface ServerProbe {
+  workspaces: ServerWorkspace[];
+}
+
 export interface Project {
   id: string;
   name: string;
