@@ -136,6 +136,22 @@ them narrows their tokens immediately. Revoke with
 each workspace event as JSON. A client that falls behind receives
 `{"type":"Resync"}` and should reload the affected view.
 
+## Connecting the desktop
+
+Enter the server's HTTPS origin in **Settings → Server** in the desktop app,
+sign in with an account in this deployment, and choose a workspace. CowBot
+stores the session on that device, so a restart resumes it without asking for
+the password, and the event stream reconnects on its own after a network drop.
+A session the server revokes — a password change ends every session, and
+`POST /api/v1/auth/sign-out` ends one — shows up as a request to sign in again.
+The section also offers switching between the account's workspaces, returning to
+the device's local workspace, and disconnecting. See
+[ADR-0053](ADR/0053-desktop-server-mode.md).
+
+Agent turns still execute in the desktop's process with that machine's model
+provider; the server hosts the data and the collaboration surface, not the
+scheduler.
+
 ## Workspace data: memory, conversations, templates, packages
 
 Milestone 2.5 serves the rest of the workspace. Every route resolves the
