@@ -246,6 +246,7 @@ pub async fn post_message(
             if let Some(usable) = view.usable_tokens {
                 let projected = view.total_tokens.saturating_add(pending);
                 let threshold_reached = settings.auto_compact
+                    && state.local_client.is_some()
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
