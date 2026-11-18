@@ -5,6 +5,13 @@
 //! the `Client` trait that are inherently local (worktrees, local compaction,
 //! in-process crew execution) return a clear error rather than pretending to
 //! work; the desktop hides them in server mode.
+//!
+//! A client can be rebuilt from a stored token ([`RemoteClient::resume`]) so a
+//! desktop restart does not ask for the password again, and its event socket
+//! reconnects with backoff, announcing each recovery as a notice so a screen
+//! that missed events reloads instead of going quietly stale (ADR-0053).
+
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cowbot_core::agent::{AgentId, AgentProfile};
@@ -18,7 +25,7 @@ use cowbot_core::conversation::{
     ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
-use cowbot_core::event::Event;
+use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::{Workspace, WorkspaceId};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -37,8 +44,14 @@ use tokio::sync::mpsc;
 use crate::{
     AgentUpdate, Client, ClientSession, ClientUser, ConversationPreview, EventStream, MemoryFilter,
     MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
-    NewTask, NoteSave, RecalledMemory, SessionDecisionView, TaskRunPreview,
+    NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView, TaskRunPreview,
 };
+
+/// First wait before the event socket reconnects after a drop.
+const RECONNECT_INITIAL: Duration = Duration::from_secs(2);
+
+/// Longest wait between reconnect attempts.
+const RECONNECT_MAX: Duration = Duration::from_secs(60);
 
 /// A client bound to one server session.
 pub struct RemoteClient {
@@ -57,6 +70,13 @@ impl std::fmt::Debug for RemoteClient {
             .field("workspace", &self.workspace.id)
             .finish()
     }
+}
+
+/// The answer to `/api/v1/me`, used when resuming a stored session.
+#[derive(Debug, serde::Deserialize)]
+struct MeResponse {
+    user: ServerUser,
+    workspaces: Vec<ServerWorkspace>,
 }
 
 /// Sign-in answer from the server.
@@ -81,7 +101,122 @@ struct ServerWorkspace {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl ServerWorkspace {
+    fn into_remote(self) -> RemoteWorkspace {
+        RemoteWorkspace {
+            id: self.id,
+            name: self.name,
+        }
+    }
+
+    fn into_workspace(self) -> Workspace {
+        Workspace {
+            id: WorkspaceId(self.id),
+            name: self.name,
+            created_at: self.created_at,
+        }
+    }
+}
+
 impl RemoteClient {
+    /// Rebuild a client from a token a previous run received.
+    ///
+    /// The token is not verified here; the first request is, and a token the
+    /// server has forgotten fails with [`CowError::Config`] naming the expired
+    /// session. `/api/v1/me` supplies the user and workspace list, so a saved
+    /// session survives a desktop restart without asking for the password
+    /// again (ADR-0053).
+    pub async fn resume(
+        base_url: &str,
+        token: &str,
+        workspace_id: Option<&str>,
+    ) -> CowResult<Self> {
+        let base = base_url.trim_end_matches('/').to_string();
+        let http = HttpClient::builder().build().map_err(|error| {
+            CowError::Config(format!("the HTTP client could not start: {error}"))
+        })?;
+        let response = http
+            .get(format!("{base}/api/v1/me"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(map_error(status, &body));
+        }
+        let me: MeResponse = serde_json::from_value(body)
+            .map_err(|error| CowError::Config(format!("unexpected session response: {error}")))?;
+        let chosen = match workspace_id {
+            Some(id) => me
+                .workspaces
+                .into_iter()
+                .find(|workspace| workspace.id == id)
+                .ok_or_else(|| {
+                    CowError::Config("that workspace is not available to this account".into())
+                })?,
+            None => me.workspaces.into_iter().next().ok_or_else(|| {
+                CowError::Config("this account does not belong to a workspace".into())
+            })?,
+        };
+        Ok(Self {
+            http,
+            base,
+            token: token.to_string(),
+            workspace: chosen.into_workspace(),
+            user: ClientUser {
+                id: cowbot_core::identity::UserId(me.user.id),
+                name: me.user.name,
+                email: me.user.email,
+            },
+        })
+    }
+
+    /// The server address this client speaks to.
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
+    /// The bearer token this client authenticated with.
+    ///
+    /// The desktop stores it so a restart can resume the session, so it must
+    /// never cross a boundary that is not already trusted with credentials.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// The workspace this client is bound to.
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace.id.0
+    }
+
+    /// The workspaces this account can enter, for a server-mode picker.
+    ///
+    /// Unlike [`RemoteClient::workspaces`], this uses the session the client
+    /// already holds instead of signing in again.
+    pub async fn account_workspaces(&self) -> CowResult<Vec<RemoteWorkspace>> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/me"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(map_error(status, &body));
+        }
+        let me: MeResponse = serde_json::from_value(body)
+            .map_err(|error| CowError::Config(format!("unexpected session response: {error}")))?;
+        Ok(me
+            .workspaces
+            .into_iter()
+            .map(ServerWorkspace::into_remote)
+            .collect())
+    }
+
     /// Sign in and bind to a workspace.
     ///
     /// When `workspace_id` is `None` the first workspace the user belongs to is
@@ -272,6 +407,81 @@ fn local_only(what: &str) -> CowError {
     ))
 }
 
+/// Turn an HTTP base URL into the WebSocket origin the stream lives on.
+fn socket_base(base: &str) -> String {
+    if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        base.to_string()
+    }
+}
+
+/// Forward one connected socket into `sender`.
+///
+/// Returns `false` when the receiver is gone (the UI stopped listening) and
+/// `true` when the socket dropped and the caller should reconnect.
+async fn pump_socket(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    sender: &mpsc::Sender<Event>,
+) -> bool {
+    use futures::StreamExt;
+    while let Some(Ok(message)) = socket.next().await {
+        let Ok(text) = message.into_text() else {
+            continue;
+        };
+        let event = match serde_json::from_str::<Event>(&text) {
+            Ok(event) => event,
+            Err(_) => {
+                // A `Resync` notice says the subscriber fell behind. Surface it
+                // as a system notice so a screen reloads instead of going
+                // quietly stale.
+                if let Ok(notice) = serde_json::from_str::<Value>(&text) {
+                    if notice.get("type").and_then(|t| t.as_str()) == Some("Resync") {
+                        let skipped = notice.get("skipped").and_then(|s| s.as_u64()).unwrap_or(0);
+                        tracing::warn!(skipped, "the live stream fell behind");
+                        let event = Event::new(EventPayload::SystemNotice {
+                            message: format!(
+                                "The live stream fell behind and skipped {skipped} events; reload to catch up."
+                            ),
+                        });
+                        if sender.send(event).await.is_err() {
+                            return false;
+                        }
+                    }
+                }
+                continue;
+            }
+        };
+        if sender.send(event).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether the session behind `token` was rejected rather than the server
+/// merely being unreachable.
+///
+/// A reconnect loop that keeps retrying a revoked token looks like a broken
+/// server, so the first failure the server answers for itself is classified
+/// here. Only `401` counts: a `5xx` or a timeout is worth retrying.
+async fn session_rejected(http: &HttpClient, base: &str, token: &str) -> bool {
+    let Ok(response) = http
+        .get(format!("{base}/api/v1/me"))
+        .bearer_auth(token)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    else {
+        return false;
+    };
+    response.status() == StatusCode::UNAUTHORIZED
+}
+
 #[async_trait]
 impl Client for RemoteClient {
     async fn session(&self) -> CowResult<ClientSession> {
@@ -293,49 +503,58 @@ impl Client for RemoteClient {
     fn subscribe(&self) -> EventStream {
         // The socket runs on a background task; the receiver is handed back
         // immediately, so a caller that never reads does not block the socket.
+        // A dropped connection is retried with backoff and announced, so a
+        // desktop that lost the network reloads when the stream returns
+        // instead of listening to a socket that will never speak again.
         let (sender, receiver) = mpsc::channel(256);
-        let url = format!(
-            "{}/api/v1/workspaces/{}/stream?token={}",
-            self.base
-                .replace("https://", "wss://")
-                .replace("http://", "ws://"),
-            self.workspace.id.0,
-            self.token
-        );
+        let http = self.http.clone();
+        let base = self.base.clone();
+        let token = self.token.clone();
+        let workspace = self.workspace.id.0.clone();
         tokio::spawn(async move {
-            let Ok((mut socket, _)) = tokio_tungstenite::connect_async(url).await else {
-                return;
-            };
-            use futures::StreamExt;
-            while let Some(Ok(message)) = socket.next().await {
-                let Ok(text) = message.into_text() else {
-                    continue;
-                };
-                let Ok(event) = serde_json::from_str::<Event>(&text) else {
-                    // A `Resync` notice says the subscriber fell behind. Surface
-                    // it as a system notice so a screen reloads instead of
-                    // going quietly stale.
-                    if let Ok(notice) = serde_json::from_str::<Value>(&text) {
-                        if notice.get("type").and_then(|t| t.as_str()) == Some("Resync") {
-                            let skipped =
-                                notice.get("skipped").and_then(|s| s.as_u64()).unwrap_or(0);
-                            tracing::warn!(skipped, "the live stream fell behind");
-                            let event =
-                                Event::new(cowbot_core::event::EventPayload::SystemNotice {
-                                    message: format!(
-                                        "The live stream fell behind and skipped {skipped} events; reload to catch up."
-                                    ),
-                                });
-                            if sender.send(event).await.is_err() {
-                                break;
-                            }
+            let mut delay = RECONNECT_INITIAL;
+            let mut connected = false;
+            loop {
+                let url = format!(
+                    "{}/api/v1/workspaces/{workspace}/stream?token={token}",
+                    socket_base(&base)
+                );
+                match tokio_tungstenite::connect_async(&url).await {
+                    Ok((mut socket, _)) => {
+                        if connected
+                            && sender
+                                .send(Event::new(EventPayload::StreamResumed))
+                                .await
+                                .is_err()
+                        {
+                            break;
+                        }
+                        connected = true;
+                        delay = RECONNECT_INITIAL;
+                        tracing::debug!("the server event stream is connected");
+                        if !pump_socket(&mut socket, &sender).await {
+                            break;
+                        }
+                        tracing::debug!("the server event stream dropped");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the server event stream could not connect");
+                        if session_rejected(&http, &base, &token).await {
+                            // Retrying cannot fix a forgotten session; say so
+                            // once and stop rather than reconnecting forever.
+                            let notice = Event::new(EventPayload::SystemNotice {
+                                message:
+                                    "Your server session is no longer valid. Sign in again in \
+                                          Settings → Server."
+                                        .to_string(),
+                            });
+                            let _ = sender.send(notice).await;
+                            break;
                         }
                     }
-                    continue;
-                };
-                if sender.send(event).await.is_err() {
-                    break;
                 }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(RECONNECT_MAX);
             }
         });
         EventStream::new(receiver)

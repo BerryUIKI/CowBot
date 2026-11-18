@@ -7,6 +7,7 @@ import BotTag from "./BotTag";
 import ModelProviderSettings from "./ModelProviderSettings";
 import MemorySettings from "./MemorySettings";
 import { PromptSnapshotAuditPanel } from "./PromptSnapshotViewer";
+import ServerSettings from "./ServerSettings";
 import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
 import { formatDateTime } from "./format";
@@ -58,6 +59,8 @@ interface SettingsViewProps {
   tasksRunning: boolean;
   section: SettingsSection;
   projects: Project[];
+  /** False in server mode, where local worktrees and packages do not apply. */
+  localRuntime: boolean;
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
@@ -76,6 +79,7 @@ export type SettingsSection =
   | "audit"
   | "projects"
   | "workspace"
+  | "server"
   | "about";
 
 export const settingsSections: {
@@ -90,6 +94,7 @@ export const settingsSections: {
   { id: "audit", labelKey: "settings.nav.audit" },
   { id: "projects", labelKey: "settings.nav.projects" },
   { id: "workspace", labelKey: "settings.nav.workspace" },
+  { id: "server", labelKey: "settings.nav.server" },
   { id: "about", labelKey: "settings.nav.about" },
 ];
 
@@ -134,6 +139,7 @@ export default function SettingsView({
   tasksRunning,
   section,
   projects,
+  localRuntime,
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
@@ -195,6 +201,12 @@ export default function SettingsView({
     if (section !== "approvals") return;
     let cancelled = false;
     setSessionError(null);
+    // Session decisions are per process, so a server workspace has none and
+    // the client refuses the call by design.
+    if (!localRuntime) {
+      setSessionDecisions([]);
+      return;
+    }
     getSessionDecisions()
       .then((entries) => {
         if (!cancelled) setSessionDecisions(entries);
@@ -205,7 +217,7 @@ export default function SettingsView({
     return () => {
       cancelled = true;
     };
-  }, [section]);
+  }, [section, localRuntime]);
 
   useEffect(() => {
     if (section !== "approvals") return;
@@ -712,7 +724,11 @@ export default function SettingsView({
                   {sessionError}
                 </p>
               ) : null}
-              {sessionDecisions.length === 0 ? (
+              {!localRuntime ? (
+                <p className="settings-hint">
+                  {t("settings.server.sessionDecisionsHint")}
+                </p>
+              ) : sessionDecisions.length === 0 ? (
                 <p className="settings-empty">
                   {t("settings.approvals.noSessionDecisions")}
                 </p>
@@ -731,18 +747,20 @@ export default function SettingsView({
                 </ul>
               )}
 
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={handleClearSessionDecisions}
-                  disabled={sessionBusy || sessionDecisions.length === 0}
-                >
-                  {sessionBusy
-                    ? t("settings.approvals.resetting")
-                    : t("settings.approvals.reset")}
-                </button>
-              </div>
+              {localRuntime ? (
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={handleClearSessionDecisions}
+                    disabled={sessionBusy || sessionDecisions.length === 0}
+                  >
+                    {sessionBusy
+                      ? t("settings.approvals.resetting")
+                      : t("settings.approvals.reset")}
+                  </button>
+                </div>
+              ) : null}
 
               <div className="settings-section-head settings-subsection">
                 <h3>{t("settings.approvals.bypassTitle")}</h3>
@@ -962,16 +980,18 @@ export default function SettingsView({
               </div>
 
               <div className="form-actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void handleAddProject()}
-                  disabled={busy === "add-project"}
-                >
-                  {busy === "add-project"
-                    ? t("settings.projects.adding")
-                    : t("settings.projects.addFolder")}
-                </button>
+                {localRuntime ? (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void handleAddProject()}
+                    disabled={busy === "add-project"}
+                  >
+                    {busy === "add-project"
+                      ? t("settings.projects.adding")
+                      : t("settings.projects.addFolder")}
+                  </button>
+                ) : null}
               </div>
 
               {projects.length === 0 ? (
@@ -1098,7 +1118,7 @@ export default function SettingsView({
                       </button>
                     </div>
                   </form>
-                ) : (
+                ) : localRuntime ? (
                   <div className="form-actions">
                     <button
                       type="button"
@@ -1108,9 +1128,14 @@ export default function SettingsView({
                       {t("settings.workspace.editProfile")}
                     </button>
                   </div>
+                ) : (
+                  // The server has no profile-edit route yet, so the account
+                  // name is read-only here rather than failing on save.
+                  <p className="settings-hint">{t("settings.server.profileHint")}</p>
                 )}
               </section>
 
+              {localRuntime ? (
               <section
                 className="settings-section"
                 aria-labelledby="settings-local-workspaces"
@@ -1231,8 +1256,11 @@ export default function SettingsView({
                   </button>
                 </div>
               </section>
+              ) : null}
             </>
           ) : null}
+
+          {section === "server" ? <ServerSettings /> : null}
 
           {section === "about" ? (
             <section className="settings-section" aria-labelledby="settings-about">

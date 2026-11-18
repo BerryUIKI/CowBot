@@ -67,6 +67,7 @@ import {
   discardTaskWorktree,
   ensureAgentChannels,
   getConversationContext,
+  getAppInfo,
   getOnboardingState,
   getSession,
   getTaskWorktree,
@@ -412,6 +413,9 @@ export default function App() {
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [taskProject, setTaskProject] = useState("");
   const [taskBaseBranch, setTaskBaseBranch] = useState("");
+  /** `server` hides the actions that need this machine (ADR-0053). */
+  const [backend, setBackend] = useState<"local" | "server">("local");
+  const localRuntime = backend === "local";
   const [projectBranches, setProjectBranches] = useState<ProjectBranches | null>(null);
   const [projectBranchesBusy, setProjectBranchesBusy] = useState(false);
   const [channelApproval, setChannelApproval] = useState<ApprovalLevel>("ask");
@@ -693,6 +697,7 @@ export default function App() {
           nextProjects,
           nextOverview,
           nextSummaries,
+          nextAppInfo,
         ] = await Promise.all([
           getSession(),
           ensureAgentChannels(),
@@ -704,8 +709,10 @@ export default function App() {
           listProjects(),
           listTaskOverview(),
           listConversationSummaries(),
+          getAppInfo(),
         ]);
         if (cancelled) return;
+        setBackend(nextAppInfo.backend);
         setSession(nextSession);
         applyChannels(nextChannels);
         setTasks(nextTasks);
@@ -1019,6 +1026,24 @@ export default function App() {
       }
       if (type === "ApprovalRequested" || type === "ApprovalDecided") {
         refreshApprovals().catch((err) => setError(errorMessage(err)));
+      }
+      if (type === "StreamResumed") {
+        // The server socket was reconnecting (ADR-0053): whatever happened in
+        // between was not delivered, so reload everything this screen keeps
+        // live rather than trusting a stale timeline.
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+        refreshAgents().catch((err) => setError(errorMessage(err)));
+        refreshTasks().catch((err) => setError(errorMessage(err)));
+        refreshApprovals().catch((err) => setError(errorMessage(err)));
+        refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
+        scheduleOverviewRefresh();
+        setContextVersion((version) => version + 1);
+      }
+      if (type === "SystemNotice") {
+        // The server writes these when a live stream falls behind or a session
+        // is no longer valid; both are worth showing without a reload.
+        const notice = event.payload.payload as { message?: string } | undefined;
+        if (notice?.message) setNotice(notice.message);
       }
     })
       .then((stop) => {
@@ -3031,6 +3056,7 @@ export default function App() {
       approvingPlan={busy === "approve-plan"}
       onToggleArchive={() => void handleToggleArchive(selectedTask)}
       archiveBusy={busy === "archive-task"}
+      localRuntime={localRuntime}
       onBack={() => setSelectedTaskId(null)}
     />
   ) : (
@@ -4062,14 +4088,16 @@ export default function App() {
                     {t("app.chat.contextFull")}
                   </span>
                   <div className="context-full-actions">
-                    <button
-                      type="button"
-                      className="primary-button"
-                      disabled={contextBusy}
-                      onClick={() => void compactChannel(selectedChannel)}
-                    >
-                      {t("app.chat.compact")}
-                    </button>
+                    {localRuntime ? (
+                      <button
+                        type="button"
+                        className="primary-button"
+                        disabled={contextBusy}
+                        onClick={() => void compactChannel(selectedChannel)}
+                      >
+                        {t("app.chat.compact")}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="ghost-button"
@@ -4368,6 +4396,7 @@ export default function App() {
                       setView("settings");
                     }}
                     onInspect={inspectConversationContext}
+                    localRuntime={localRuntime}
                   />
                 ) : null}
               </div>
@@ -4479,7 +4508,7 @@ export default function App() {
                       />
                     </div>
                   </div>
-                  {availableProjects.length > 0 ? (
+                  {localRuntime && availableProjects.length > 0 ? (
                     <section
                       className="task-worktree"
                       aria-label={t("app.taskForm.worktreeAria")}
@@ -4603,6 +4632,7 @@ export default function App() {
             tasksRunning={runningTasks.size > 0 || pendingReply !== null}
             section={settingsSection}
             projects={projects}
+            localRuntime={localRuntime}
             onSelectTemplate={setTemplateId}
             onAddAgents={handleAddAgents}
             onEditAgent={openEditAgentDialog}

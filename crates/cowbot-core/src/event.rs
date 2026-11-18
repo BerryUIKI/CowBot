@@ -91,6 +91,12 @@ pub enum EventPayload {
     },
     /// System broadcast notice
     SystemNotice { message: String },
+    /// A reconnecting event stream came back after a drop (ADR-0053).
+    ///
+    /// Events published while the socket was down were not delivered, so a
+    /// client that keeps live state must reload instead of assuming it is
+    /// current. It carries no payload because the gap is the whole message.
+    StreamResumed,
 }
 
 /// An envelope wrapping an EventPayload with metadata.

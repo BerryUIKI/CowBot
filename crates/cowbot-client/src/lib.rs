@@ -60,6 +60,13 @@ pub struct ClientSession {
     pub workspace: Workspace,
 }
 
+/// A workspace a remote account can enter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemoteWorkspace {
+    pub id: String,
+    pub name: String,
+}
+
 /// One remembered session approval decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SessionDecisionView {
@@ -176,6 +183,10 @@ impl EventStream {
     }
 
     /// Wait for the next event. Returns `None` once the stream is closed.
+    ///
+    /// A remote stream that reconnects keeps the same `EventStream`; a
+    /// connection drop surfaces as a notice rather than ending it, so a caller
+    /// written for local mode does not stop listening in server mode.
     pub async fn recv(&mut self) -> Option<Event> {
         self.receiver.recv().await
     }

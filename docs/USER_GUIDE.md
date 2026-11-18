@@ -146,6 +146,39 @@ The default database is `cowbot.db`; imported or created workspaces live under
 `workspaces/`. Deleting a database file removes that workspace from the switcher
 on the next start.
 
+### Connect to a CowBot server
+
+A workspace can also be hosted by `cowbot-server` instead of living on this
+machine. **Settings → Server** connects the app to one.
+
+- **Sign in** — enter the server address (the HTTPS origin of your deployment,
+  for example `https://team.example.com`), your email, and your password.
+  CowBot signs in and lists the workspaces your account can enter; choose one
+  and press **Connect**. Nothing is saved until you do.
+- **Switch workspace** — once connected, the section lists your account's other
+  workspaces. Switching restarts CowBot into the chosen one; you do not need
+  the password again.
+- **Test connection** — asks the server whether the saved session is still
+  valid and reports the answer in place.
+- **Open the local workspace** — returns to this machine's workspace and keeps
+  the saved server session, so reconnecting later does not ask for a password.
+- **Disconnect and forget the session** — returns to the local workspace and
+  deletes the saved session. You will have to sign in again to reconnect.
+
+Every one of these restarts CowBot; finish running tasks first. The session is
+stored on this device in `config.json`, beside model API keys, and is never
+returned to the interface.
+
+In server mode the controls that need this machine are hidden rather than
+failing: running a task, project worktrees and repositories, local workspace
+creation and switching, package export and import, context compaction, and the
+profile editor. Agent turns still run in the desktop's process with your own
+model provider, so a member without a configured provider cannot make an agent
+answer. If the server cannot be reached at startup, CowBot names the address and
+offers to retry or open the local workspace instead. A dropped connection
+reconnects on its own and the screen reloads what it missed. See
+[ADR-0053](ADR/0053-desktop-server-mode.md).
+
 ## Navigation
 
 Chat is the main surface. The left sidebar holds one **Chats** list — agent
@@ -160,7 +193,8 @@ available both there and from the gear beside it.
 
 The account menu contains **Settings**, **Language**, **Model configuration**,
 **Workspace settings**, **View changelog**, and **Learn more**. The last two open
-the project's GitHub releases page and repository.
+the project's GitHub releases page and repository. Server connection lives under
+**Settings → Server**, next to **Workspace**.
 
 **Language** opens a picker with English, 简体中文, 繁體中文, Français, Deutsch,
 हिन्दी, Indonesia, Italiano, 日本語, 한국어, Português (Brasil), Español
@@ -766,11 +800,10 @@ The [limitations page](LIMITATIONS.md) is the full, current account of what
 works, what does not, and which behaviours are deliberate. This section is the
 short version for the version you are running.
 
-- The desktop app remains local-first: it does not yet offer choosing a server
-  from Settings. The optional self-hosted server and `RemoteClient` are covered
-  in [SERVER.md](SERVER.md); worktrees, in-process crew execution, live-turn
-  cancellation, and process-local session decisions are not available in server
-  mode.
+- The desktop can open a workspace on a self-hosted server from **Settings →
+  Server**, but the server itself is covered in [SERVER.md](SERVER.md) and worktrees,
+  in-process crew execution, live-turn cancellation, context compaction, and
+  process-local session decisions are not available in server mode.
 - Channel answers are one turn per addressed agent: no threads as conversation
   scope, and no proactive agent replies to unmentioned messages in group
   channels.
