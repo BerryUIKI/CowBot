@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cowbot_client::{Client, LocalClient};
+use cowbot_client::{Client, LocalClient, RemoteClient};
 use cowbot_llm::LlmProvider;
 use cowbot_tools::{
     CodeExecutionTool, ReadFileTool, SubprocessSandbox, ToolRegistry, WriteFileTool,
@@ -30,6 +30,12 @@ pub struct AppState {
     /// The same client when it is local, for file, worktree, and crew
     /// operations that only the in-process runtime can do.
     pub local_client: Option<Arc<LocalClient>>,
+    /// The server client when this device opened a server workspace
+    /// (ADR-0053), so the settings view can read the account's workspaces and
+    /// report what changed.
+    pub server_client: Option<Arc<RemoteClient>>,
+    /// Where this device's data comes from.
+    pub backend: config::BackendMode,
     pub tools: ToolRegistry,
     /// Active model provider; replaced when the user switches providers.
     pub model: RwLock<ModelRuntime>,
@@ -334,9 +340,14 @@ fn prepare(app: &tauri::App) -> Result<startup::StartupState, String> {
     ))
 }
 
-/// Open the local client and install the application state.
+/// Open the client for this device's backend and install the application
+/// state.
 ///
 /// Idempotent: a second call after the state is installed does nothing.
+/// A local workspace opens its database here; a server workspace resumes its
+/// saved session. The startup screen inspects a database before this runs, and
+/// in server mode there is no local database to inspect, so a failure to reach
+/// the server is reported on the startup screen rather than guessed at.
 pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
     if app.try_state::<AppState>().is_some() {
         return Ok(());
@@ -367,6 +378,60 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
     };
     let resolved = config::resolve_active(&config);
 
+    // Worktrees belong to the local runtime, so they are reconciled before the
+    // backend is chosen; a server workspace leaves this machine's checkouts
+    // exactly as they are.
+    for project in &config.projects {
+        config::prune_project_worktrees(project);
+    }
+
+    if let Some(connection) = config.active_server().cloned() {
+        let resume = RemoteClient::resume(
+            &connection.base_url,
+            &connection.token,
+            Some(&connection.workspace_id),
+        )
+        .await
+        .map_err(|error| format!("the server workspace could not be opened: {error}"))?;
+        let client = Arc::new(resume);
+        let session = client.session().await.map_err(|error| error.to_string())?;
+        // The saved session may have been renamed on the server.
+        if let Some(saved) = config.server.as_mut() {
+            saved.workspace_name = session.workspace.name.clone();
+            saved.email = session.user.email.clone();
+        }
+        if config_writable {
+            config::save(&config_path, &config).map_err(|error| error.to_string())?;
+        }
+
+        let tools = AppState::rooted_tools(
+            &data_dir,
+            config_path.clone(),
+            client.clone() as Arc<dyn Client>,
+        );
+        install_events(app, client.clone() as Arc<dyn Client>);
+        app.manage(AppState {
+            client: client.clone() as Arc<dyn Client>,
+            local_client: None,
+            server_client: Some(client),
+            backend: config::BackendMode::Server,
+            tools,
+            model: RwLock::new(ModelRuntime {
+                llm: config::build_provider(&resolved),
+                model: resolved.model,
+                remote: matches!(resolved.kind, config::ProviderKind::Remote(_)),
+            }),
+            config_path,
+            data_dir,
+            database_dir,
+            database_path: db_path,
+            active_database: database,
+            running: Arc::new(Mutex::new(HashSet::new())),
+            replies: Arc::new(Mutex::new(HashSet::new())),
+        });
+        return Ok(());
+    }
+
     let client = LocalClient::open(&db_path)
         .await
         .map_err(|error| error.to_string())?;
@@ -382,9 +447,6 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
 
     // Worktrees whose folders disappeared are reported as missing, and each
     // registered project drops stale git worktree entries.
-    for project in &config.projects {
-        config::prune_project_worktrees(project);
-    }
     if let Err(error) = client.reconcile_worktrees().await {
         eprintln!("warning: failed to reconcile worktrees: {error}");
     }
@@ -413,20 +475,14 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
         config::save(&config_path, &config).map_err(|error| error.to_string())?;
     }
 
-    // Local mode spawns the forwarding task, so subscribe must run inside the
-    // runtime context.
-    let mut events = client.subscribe();
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = events.recv().await {
-            let _ = handle.emit("cowbot-event", &event);
-        }
-    });
-
     let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
+
+    install_events(app, client.clone() as Arc<dyn Client>);
     app.manage(AppState {
+        client: client.clone() as Arc<dyn Client>,
         local_client: Some(client.clone()),
-        client: client as Arc<dyn Client>,
+        server_client: None,
+        backend: config::BackendMode::Local,
         tools,
         model: RwLock::new(ModelRuntime {
             llm: config::build_provider(&resolved),
@@ -442,6 +498,20 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
         replies: Arc::new(Mutex::new(HashSet::new())),
     });
     Ok(())
+}
+
+/// Forward a client's live events to the window.
+///
+/// Both transports spawn their own forwarding task in `subscribe`, so this
+/// runs inside the runtime context and lasts as long as the client does.
+fn install_events(app: &tauri::AppHandle, client: Arc<dyn Client>) {
+    let mut events = client.subscribe();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            let _ = handle.emit("cowbot-event", &event);
+        }
+    });
 }
 
 /// Record a startup failure so the window can report it.
