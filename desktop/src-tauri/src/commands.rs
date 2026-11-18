@@ -2740,6 +2740,213 @@ fn ensure_no_running_tasks(state: &AppState) -> Result<(), String> {
     }
 }
 
+/// A server connection as the settings view sees it.
+///
+/// The token never crosses this boundary; the view only learns which account
+/// and workspace are connected, so a screenshot or a log of the settings page
+/// cannot leak a session.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerView {
+    /// `local` or `server`: which backend this device opens.
+    pub mode: String,
+    /// Absolute origin of the saved connection, when one exists.
+    pub base_url: Option<String>,
+    /// Account that signed in, when one did.
+    pub email: Option<String>,
+    /// Workspace this device is bound to on that server.
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+}
+
+fn server_view(config: &config::AppConfig) -> ServerView {
+    ServerView {
+        mode: match config.backend {
+            config::BackendMode::Local => "local".to_string(),
+            config::BackendMode::Server => "server".to_string(),
+        },
+        base_url: config.server.as_ref().map(|saved| saved.base_url.clone()),
+        email: config.server.as_ref().map(|saved| saved.email.clone()),
+        workspace_id: config
+            .server
+            .as_ref()
+            .map(|saved| saved.workspace_id.clone()),
+        workspace_name: config
+            .server
+            .as_ref()
+            .map(|saved| saved.workspace_name.clone()),
+    }
+}
+
+#[tauri::command]
+pub fn get_server_settings(state: State<'_, AppState>) -> Result<ServerView, String> {
+    Ok(server_view(&load_config(&state)?))
+}
+
+/// One workspace the signed-in account can enter, for the sign-in picker.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerWorkspaceView {
+    pub id: String,
+    pub name: String,
+}
+
+/// The account and workspaces a sign-in would open, before anything is saved.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerProbe {
+    pub workspaces: Vec<ServerWorkspaceView>,
+}
+
+/// Reach a server and sign in without changing where this device points.
+///
+/// Used by the settings form to list the account's workspaces before the user
+/// chooses one, and by "Test connection" when a session is already saved. It
+/// never writes the configuration, so a failed attempt leaves the open
+/// workspace exactly as it was.
+#[tauri::command]
+pub async fn probe_server(
+    base_url: String,
+    email: String,
+    password: String,
+) -> Result<ServerProbe, String> {
+    let base_url = config::normalize_base_url(&base_url)?;
+    if email.trim().is_empty() || password.is_empty() {
+        return Err("Enter the email and password for the server account.".to_string());
+    }
+    let client = cowbot_client::RemoteClient::sign_in(&base_url, email.trim(), &password, None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let workspaces = client
+        .account_workspaces()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ServerProbe {
+        workspaces: workspaces
+            .into_iter()
+            .map(|workspace| ServerWorkspaceView {
+                id: workspace.id,
+                name: workspace.name,
+            })
+            .collect(),
+    })
+}
+
+/// Sign in to a server, save the connection, and restart into it.
+#[tauri::command]
+pub async fn connect_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    base_url: String,
+    email: String,
+    password: String,
+    workspace_id: String,
+) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let base_url = config::normalize_base_url(&base_url)?;
+    if email.trim().is_empty() || password.is_empty() {
+        return Err("Enter the email and password for the server account.".to_string());
+    }
+    if workspace_id.trim().is_empty() {
+        return Err("Choose a workspace to open.".to_string());
+    }
+
+    // Sign in first: a server that refuses the account must not leave the
+    // device pointed at a workspace it cannot open.
+    let client = cowbot_client::RemoteClient::sign_in(
+        &base_url,
+        email.trim(),
+        &password,
+        Some(workspace_id.trim()),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let session = client.session().await.map_err(|error| error.to_string())?;
+
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Server;
+    config.server = Some(config::ServerConnection {
+        base_url,
+        email: session.user.email.clone(),
+        workspace_id: session.workspace.id.0.clone(),
+        workspace_name: session.workspace.name.clone(),
+        token: client.token().to_string(),
+    });
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))?;
+    app.restart();
+}
+
+/// One of the account's server workspaces, for switching without signing in
+/// again.
+#[tauri::command]
+pub async fn list_server_workspaces(
+    state: State<'_, AppState>,
+) -> Result<Vec<ServerWorkspaceView>, String> {
+    let Some(client) = state.server_client.clone() else {
+        return Err("This device is not connected to a server.".to_string());
+    };
+    let workspaces = client
+        .account_workspaces()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(workspaces
+        .into_iter()
+        .map(|workspace| ServerWorkspaceView {
+            id: workspace.id,
+            name: workspace.name,
+        })
+        .collect())
+}
+
+/// Open a different workspace on the saved server account.
+#[tauri::command]
+pub async fn switch_server_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    let Some(saved) = config.server.as_mut() else {
+        return Err("This device is not connected to a server.".to_string());
+    };
+    if saved.workspace_id == workspace_id {
+        return Err("That workspace is already open.".to_string());
+    }
+    // Confirm the account may still enter it, and learn its current name.
+    let client =
+        cowbot_client::RemoteClient::resume(&saved.base_url, &saved.token, Some(&workspace_id))
+            .await
+            .map_err(|error| error.to_string())?;
+    let session = client.session().await.map_err(|error| error.to_string())?;
+    saved.workspace_id = session.workspace.id.0.clone();
+    saved.workspace_name = session.workspace.name.clone();
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
+}
+
+/// Stop using a server and restart into the local workspace.
+///
+/// The saved connection is kept, so switching back does not ask for the
+/// password again; only `disconnect_server` forgets it.
+#[tauri::command]
+pub fn use_local_backend(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Local;
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
+}
+
+/// Forget the saved session and restart into the local workspace.
+#[tauri::command]
+pub fn disconnect_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Local;
+    config.server = None;
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
+}
+
 #[tauri::command]
 pub fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<WorkspaceView>, String> {
     let config = load_config(&state)?;
