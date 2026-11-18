@@ -296,6 +296,8 @@ export const it: Catalog = {
       sessionExpired: "La sessione salvata non è più valida. Accedi di nuovo per riconnetterti.",
       localOnlyHint: "In modalità server i turni usano la configurazione del server; worktree, esecuzione della crew nel processo e compattazione del contesto richiedono il runtime locale e qui sono nascosti.",
       savedHint: "Una connessione è salvata ma non in uso. Connetti per riaprirla.",
+      profileHint:
+        "Nome ed email provengono dall'account del server. Il server non offre ancora la modifica del profilo.",
     },
     about: {
       title: "Informazioni su CowBot",

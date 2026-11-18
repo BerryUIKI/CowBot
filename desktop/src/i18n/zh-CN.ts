@@ -281,6 +281,8 @@ export const zhCN: Catalog = {
       sessionExpired: "已保存的会话已失效。请重新登录以重新连接。",
       localOnlyHint: "服务器模式下，智能体回合使用服务器的配置运行；工作树、进程内团队执行和上下文压缩需要本地运行时，因此在此隐藏。",
       savedHint: "已保存连接但未在使用。连接后即可重新打开。",
+      profileHint:
+        "姓名和邮箱来自服务器账户。服务器暂不支持修改资料。",
     },
     about: {
       title: "关于 CowBot",

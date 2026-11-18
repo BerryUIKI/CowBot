@@ -295,6 +295,8 @@ export const de: Catalog = {
       sessionExpired: "Die gespeicherte Sitzung ist nicht mehr gültig. Melde dich erneut an.",
       localOnlyHint: "Im Servermodus laufen Agenten-Turns mit der Konfiguration des Servers; Worktrees, Crew-Ausführung im Prozess und Kontextkompaktierung brauchen die lokale Laufzeit und werden hier ausgeblendet.",
       savedHint: "Eine Verbindung ist gespeichert, aber nicht in Gebrauch. Verbinde, um sie wieder zu öffnen.",
+      profileHint:
+        "Name und E-Mail stammen vom Serverkonto. Der Server bietet noch keine Profilbearbeitung.",
     },
     about: {
       title: "Über CowBot",

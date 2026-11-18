@@ -59,6 +59,8 @@ interface SettingsViewProps {
   tasksRunning: boolean;
   section: SettingsSection;
   projects: Project[];
+  /** False in server mode, where local worktrees and packages do not apply. */
+  localRuntime: boolean;
   onSelectTemplate: (templateId: string) => void;
   onAddAgents: () => void;
   onEditAgent: (agent: AgentProfile) => void;
@@ -137,6 +139,7 @@ export default function SettingsView({
   tasksRunning,
   section,
   projects,
+  localRuntime,
   onSelectTemplate,
   onAddAgents,
   onEditAgent,
@@ -965,16 +968,18 @@ export default function SettingsView({
               </div>
 
               <div className="form-actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void handleAddProject()}
-                  disabled={busy === "add-project"}
-                >
-                  {busy === "add-project"
-                    ? t("settings.projects.adding")
-                    : t("settings.projects.addFolder")}
-                </button>
+                {localRuntime ? (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void handleAddProject()}
+                    disabled={busy === "add-project"}
+                  >
+                    {busy === "add-project"
+                      ? t("settings.projects.adding")
+                      : t("settings.projects.addFolder")}
+                  </button>
+                ) : null}
               </div>
 
               {projects.length === 0 ? (
@@ -1101,7 +1106,7 @@ export default function SettingsView({
                       </button>
                     </div>
                   </form>
-                ) : (
+                ) : localRuntime ? (
                   <div className="form-actions">
                     <button
                       type="button"
@@ -1111,9 +1116,14 @@ export default function SettingsView({
                       {t("settings.workspace.editProfile")}
                     </button>
                   </div>
+                ) : (
+                  // The server has no profile-edit route yet, so the account
+                  // name is read-only here rather than failing on save.
+                  <p className="settings-hint">{t("settings.server.profileHint")}</p>
                 )}
               </section>
 
+              {localRuntime ? (
               <section
                 className="settings-section"
                 aria-labelledby="settings-local-workspaces"
@@ -1234,6 +1244,7 @@ export default function SettingsView({
                   </button>
                 </div>
               </section>
+              ) : null}
             </>
           ) : null}
 

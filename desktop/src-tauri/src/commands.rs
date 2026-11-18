@@ -718,7 +718,13 @@ pub async fn get_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Option<TaskWorktree>, String> {
-    local(&state)?
+    // A server workspace has no worktree on this machine. Reading one is a
+    // detail refresh the task view always performs, so it answers "none"
+    // rather than failing the whole panel.
+    let Some(client) = state.local_client.as_deref() else {
+        return Ok(None);
+    };
+    client
         .task_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -2737,7 +2743,7 @@ pub fn complete_onboarding(state: State<'_, AppState>) -> Result<OnboardingState
     Ok(onboarding_state(&config, &state))
 }
 
-/// Build version and update-check preference shown in the About settings section.
+/// Build version, update-check preference, and backend shown in Settings.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -2745,6 +2751,9 @@ pub struct AppInfo {
     pub auto_check_updates: bool,
     /// Schema version of the workspace database this build provides.
     pub database_schema: i64,
+    /// `local` or `server`: which backend this device opened. Operations that
+    /// need this machine hide themselves when it is `server` (ADR-0053).
+    pub backend: String,
 }
 
 #[tauri::command]
@@ -2754,6 +2763,7 @@ pub fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInf
         version: app.package_info().version.to_string(),
         auto_check_updates,
         database_schema: cowbot_client::latest_database_schema_version(),
+        backend: backend_name(state.backend).to_string(),
     })
 }
 
@@ -2856,10 +2866,7 @@ pub struct ServerView {
 
 fn server_view(config: &config::AppConfig) -> ServerView {
     ServerView {
-        mode: match config.backend {
-            config::BackendMode::Local => "local".to_string(),
-            config::BackendMode::Server => "server".to_string(),
-        },
+        mode: backend_name(config.backend).to_string(),
         base_url: config.server.as_ref().map(|saved| saved.base_url.clone()),
         email: config.server.as_ref().map(|saved| saved.email.clone()),
         workspace_id: config
@@ -2870,6 +2877,14 @@ fn server_view(config: &config::AppConfig) -> ServerView {
             .server
             .as_ref()
             .map(|saved| saved.workspace_name.clone()),
+    }
+}
+
+/// The stored name of a backend mode, as the frontend sees it.
+fn backend_name(backend: config::BackendMode) -> &'static str {
+    match backend {
+        config::BackendMode::Local => "local",
+        config::BackendMode::Server => "server",
     }
 }
 

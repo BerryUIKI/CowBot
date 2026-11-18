@@ -291,6 +291,8 @@ export const ptBR: Catalog = {
       sessionExpired: "A sessão salva não é mais válida. Entre novamente para reconectar.",
       localOnlyHint: "No modo servidor os turnos do agente usam a configuração do servidor; worktrees, execução da equipe no processo e compactação de contexto precisam do runtime local e ficam ocultos aqui.",
       savedHint: "Há uma conexão salva sem uso. Conecte para abri-la novamente.",
+      profileHint:
+        "Seu nome e e-mail vêm da conta do servidor. O servidor ainda não oferece edição de perfil.",
     },
     about: {
       title: "Sobre o CowBot",

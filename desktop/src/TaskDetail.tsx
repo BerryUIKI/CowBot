@@ -50,6 +50,8 @@ interface TaskDetailProps {
   approvingPlan: boolean;
   onToggleArchive: () => void;
   archiveBusy: boolean;
+  /** False in server mode, where a crew cannot run in this process. */
+  localRuntime: boolean;
   onBack?: () => void;
 }
 
@@ -138,6 +140,7 @@ export default function TaskDetail({
   approvingPlan,
   onToggleArchive,
   archiveBusy,
+  localRuntime,
   onBack,
 }: TaskDetailProps) {
   const kind = taskStatusKind(task.status);
@@ -249,7 +252,9 @@ export default function TaskDetail({
           </div>
         </div>
         <div className="task-actions">
-          {canRun || running ? (
+          {/* Running a crew needs this machine's model provider and tools;
+              a server workspace hides the action rather than failing it. */}
+          {localRuntime && (canRun || running) ? (
             <button
               type="button"
               className="primary-button"

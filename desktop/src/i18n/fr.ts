@@ -294,6 +294,8 @@ export const fr: Catalog = {
       sessionExpired: "La session enregistrée n'est plus valide. Reconnectez-vous pour reprendre.",
       localOnlyHint: "En mode serveur, les tours d'agent utilisent la configuration du serveur ; les worktrees, l'exécution d'équipe en processus et la compaction du contexte nécessitent l'environnement local et sont masqués ici.",
       savedHint: "Une connexion est enregistrée mais inutilisée. Connectez-vous pour la rouvrir.",
+      profileHint:
+        "Votre nom et votre e-mail proviennent du compte serveur. Le serveur ne propose pas encore de modification du profil.",
     },
     about: {
       title: "À propos de CowBot",

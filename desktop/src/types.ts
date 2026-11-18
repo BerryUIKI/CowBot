@@ -507,6 +507,8 @@ export interface AppInfo {
   autoCheckUpdates: boolean;
   /** Schema version of the workspace database this build provides. */
   databaseSchema: number;
+  /** `local` or `server`: which backend this device opened. */
+  backend: "local" | "server";
 }
 
 export interface CommandArgInfo {

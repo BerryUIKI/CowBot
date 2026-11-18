@@ -290,6 +290,8 @@ export const esES: Catalog = {
       sessionExpired: "La sesión guardada ya no es válida. Inicia sesión de nuevo para reconectarte.",
       localOnlyHint: "En modo servidor los turnos se ejecutan con la configuración del servidor; los worktrees, la ejecución de la tripulación en proceso y la compactación de contexto necesitan el entorno local y se ocultan aquí.",
       savedHint: "Hay una conexión guardada sin usar. Conéctate para abrirla de nuevo.",
+      profileHint:
+        "Tu nombre y correo vienen de la cuenta del servidor. El servidor aún no ofrece edición de perfil.",
     },
     about: {
       title: "Acerca de CowBot",

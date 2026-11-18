@@ -297,6 +297,8 @@ export const en = {
         "Server mode runs agent turns with the server's configuration; worktrees, in-process crew execution, and context compaction need the local runtime and are hidden here.",
       savedHint:
         "A connection is saved but not in use. Connect to open it again.",
+      profileHint:
+        "Your name and email come from the server account. The server has no profile-edit route yet.",
     },
     about: {
       title: "About CowBot",

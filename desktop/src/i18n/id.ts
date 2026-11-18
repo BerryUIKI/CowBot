@@ -289,6 +289,8 @@ export const id: Catalog = {
       sessionExpired: "Sesi tersimpan sudah tidak valid. Masuk lagi untuk menyambung ulang.",
       localOnlyHint: "Dalam mode server, giliran agen berjalan dengan konfigurasi server; worktree, eksekusi kru dalam proses, dan pemadatan konteks membutuhkan runtime lokal dan disembunyikan di sini.",
       savedHint: "Ada koneksi tersimpan yang tidak dipakai. Hubungkan untuk membukanya lagi.",
+      profileHint:
+        "Nama dan email Anda berasal dari akun server. Server belum menyediakan penyuntingan profil.",
     },
     about: {
       title: "Tentang CowBot",
