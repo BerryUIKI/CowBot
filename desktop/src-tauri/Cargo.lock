@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-agent"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "cowbot-bus",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-bus"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "cowbot-core",
  "parking_lot",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-client"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-core"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-desktop"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "cowbot-agent",
@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-llm"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "cowbot-core",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-package"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "cowbot-core",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-service"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-store"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "cowbot-core",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-tools"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "async-trait",
  "cowbot-core",

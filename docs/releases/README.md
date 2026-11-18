@@ -5,6 +5,7 @@ the canonical distribution point; these files keep the notes in the repository.
 
 | Version | Theme |
 | --- | --- |
+| [0.1.16](0.1.16.md) | The desktop connects to a CowBot server: server mode, saved sessions, and reconnection |
 | [0.1.15](0.1.15.md) | A sidebar that stays put: no horizontal panning, and content truncates |
 | [0.1.14](0.1.14.md) | Thirteen interface languages, a default CowBot agent, and optional bot tags |
 | [0.1.13](0.1.13.md) | Update prompts in the sidebar, a draggable title bar, and a white line app icon |
