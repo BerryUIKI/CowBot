@@ -196,6 +196,9 @@ impl Scope {
             EventPayload::AgentUpdated(_)
             | EventPayload::AgentThought { .. }
             | EventPayload::SystemNotice { .. } => false,
+            // A reconnecting client is told by its own socket; the server never
+            // publishes this on the bus.
+            EventPayload::StreamResumed => false,
         }
     }
 

@@ -21,9 +21,57 @@ const PASSWORD: &str = "remote-client-password";
 struct Server {
     base: String,
     store: Store,
+    state: AppState,
     workspace_id: String,
     agent_id: AgentId,
-    _shutdown: tokio::sync::oneshot::Sender<()>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Server {
+    /// Stop serving without giving up the database or the bus.
+    fn stop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+
+    /// Serve the same state again on the same address.
+    ///
+    /// The replacement must answer on the same port, because that is the only
+    /// address the already-subscribed client knows. A just-closed listener can
+    /// hold the port for a moment on Windows, so the bind is retried briefly.
+    async fn start_again(&mut self) {
+        let address = self.base_address();
+        let mut listener = None;
+        for _ in 0..100 {
+            match tokio::net::TcpListener::bind(&address).await {
+                Ok(bound) => {
+                    listener = Some(bound);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            }
+        }
+        let listener = listener.expect("rebind");
+        let state = self.state.clone();
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        self.shutdown = Some(shutdown);
+        tokio::spawn(async move {
+            let _ = cowbot_server::router::serve_with_shutdown(listener, state, async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+        });
+        // Give the replacement a moment to be listening.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    fn base_address(&self) -> String {
+        self.base
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .to_string()
+    }
 }
 
 async fn start_server() -> Server {
@@ -44,8 +92,9 @@ async fn start_server() -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let served = state.clone();
     tokio::spawn(async move {
-        let _ = cowbot_server::router::serve_with_shutdown(listener, state, async move {
+        let _ = cowbot_server::router::serve_with_shutdown(listener, served, async move {
             let _ = shutdown_rx.await;
         })
         .await;
@@ -54,9 +103,10 @@ async fn start_server() -> Server {
     Server {
         base: format!("http://{address}"),
         store,
+        state,
         workspace_id: workspace.id.0,
         agent_id: agent.id,
-        _shutdown: shutdown,
+        shutdown: Some(shutdown),
     }
 }
 
@@ -188,4 +238,80 @@ async fn a_local_only_operation_reports_server_mode_clearly() {
     assert!(error.to_string().contains("server mode"), "got {error}");
     let _ = WorkspaceId::new(server.workspace_id);
     let _ = &server.store;
+}
+
+#[tokio::test]
+async fn a_stored_token_resumes_the_session_without_a_password() {
+    let server = start_server().await;
+    let client = client(&server).await;
+    let token = client.token().to_string();
+
+    let resumed = RemoteClient::resume(&server.base, &token, Some(client.workspace_id()))
+        .await
+        .expect("resume");
+    let session = resumed.session().await.unwrap();
+    assert_eq!(session.user.email, "owner@example.com");
+    assert_eq!(session.workspace.id.0, server.workspace_id);
+    assert_eq!(resumed.base_url(), server.base);
+}
+
+#[tokio::test]
+async fn a_token_the_server_forgot_resumes_as_a_sign_in_error() {
+    let server = start_server().await;
+    let error = RemoteClient::resume(&server.base, "not-a-real-token", Some(&server.workspace_id))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("sign in again"), "got {error}");
+}
+
+#[tokio::test]
+async fn the_account_workspace_list_comes_from_the_live_session() {
+    let server = start_server().await;
+    let client = client(&server).await;
+    let workspaces = client.account_workspaces().await.unwrap();
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].id, server.workspace_id);
+}
+
+#[tokio::test]
+async fn the_event_stream_keeps_trying_until_the_server_returns() {
+    let mut server = start_server().await;
+    let client = client(&server).await;
+
+    // Subscribe while nothing is listening: the first connect fails, and the
+    // client must retry until the server comes back rather than giving up.
+    server.stop();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let mut events = client.subscribe();
+
+    server.start_again().await;
+
+    client.create_channel("after the outage", "").await.unwrap();
+    let delivered = recv_until_within(&mut events, "ChannelCreated", 45).await;
+    assert!(
+        delivered.is_some(),
+        "events should flow once the server is reachable again"
+    );
+}
+
+/// One event of the named payload type, or `None` after a bounded wait.
+async fn recv_until_within(
+    events: &mut cowbot_client::EventStream,
+    wanted: &str,
+    seconds: u64,
+) -> Option<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        let Ok(Some(event)) = tokio::time::timeout(remaining, events.recv()).await else {
+            return None;
+        };
+        let name = serde_json::to_value(&event.payload).ok()?;
+        if name.get("type").and_then(|value| value.as_str()) == Some(wanted) {
+            return Some(());
+        }
+    }
 }
