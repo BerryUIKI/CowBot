@@ -55,6 +55,12 @@ pub enum StartupStatus {
         backups: Vec<String>,
         replaced: Option<String>,
     },
+    /// The device is in server mode and the server could not be opened.
+    ///
+    /// The local database was never inspected, so recovery options would offer
+    /// to replace a file that is not in use. The choice is whether to open the
+    /// local workspace instead or quit and fix the connection later.
+    ServerUnavailable { message: String, base_url: String },
 }
 
 impl StartupStatus {
@@ -73,6 +79,9 @@ pub struct StartupState {
     pub database: String,
     pub db_path: PathBuf,
     pub config_path: PathBuf,
+    /// Server origin when this device opens a server workspace, so a failure
+    /// names the server instead of offering to replace the local database.
+    pub server: Option<String>,
     status: Mutex<StartupStatus>,
 }
 
@@ -91,8 +100,15 @@ impl StartupState {
             database,
             db_path,
             config_path,
+            server: None,
             status: Mutex::new(status),
         }
+    }
+
+    /// Record the server this device opens, when it opens one.
+    pub fn with_server(mut self, server: Option<String>) -> Self {
+        self.server = server;
+        self
     }
 
     /// State for a failure that happened before any path could be resolved.
@@ -103,6 +119,7 @@ impl StartupState {
             database: String::new(),
             db_path: PathBuf::new(),
             config_path: PathBuf::new(),
+            server: None,
             status: Mutex::new(StartupStatus::Failed {
                 message,
                 database: String::new(),
@@ -120,8 +137,18 @@ impl StartupState {
         *self.status.lock() = status;
     }
 
-    /// Failure state after the paths are known, with the recovery options.
+    /// Failure state after the paths are known.
+    ///
+    /// In server mode the message concerns the connection, so the recovery
+    /// options name the server instead of offering to replace an unused local
+    /// database.
     pub fn failure(&self, message: String) -> StartupStatus {
+        if let Some(connection) = self.server.as_ref() {
+            return StartupStatus::ServerUnavailable {
+                message,
+                base_url: connection.clone(),
+            };
+        }
         StartupStatus::Failed {
             message,
             database: display(&self.db_path),

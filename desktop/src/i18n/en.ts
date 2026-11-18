@@ -111,6 +111,7 @@ export const en = {
       audit: "Audit",
       projects: "Projects",
       workspace: "Workspace",
+      server: "Server",
       about: "About",
     },
     header: {
@@ -254,6 +255,52 @@ export const en = {
       importTitle: "Import workspace package",
       packageFilter: "CowBot package",
       exportedTo: "Exported to {path}",
+    },
+    server: {
+      title: "Server",
+      hint: "Open a workspace hosted by CowBot Server instead of the local database. The session is stored on this device and resumes when CowBot starts.",
+      currentTitle: "This device",
+      currentHint:
+        "The backend CowBot opened. Leaving a server keeps the saved session; disconnecting forgets it.",
+      mode: "Backend",
+      modeLocal: "Local workspace",
+      modeServer: "Server",
+      serverUrl: "Server address",
+      serverUrlHint: "The HTTPS origin of your deployment, for example https://team.example.com.",
+      serverUrlPlaceholder: "https://team.example.com",
+      email: "Email",
+      password: "Password",
+      workspace: "Workspace",
+      workspacePlaceholder: "Choose a workspace",
+      signIn: "Sign in",
+      signingIn: "Signing in…",
+      foundWorkspaceOne: "1 workspace available. Choose one and connect.",
+      foundWorkspaceOther: "{count} workspaces available. Choose one and connect.",
+      connected: "Connected to {workspace} as {email}.",
+      connect: "Connect",
+      connecting: "Connecting…",
+      test: "Test connection",
+      testing: "Testing…",
+      testOk: "The server answered and the session is valid.",
+      testFailed: "The connection could not be tested: {error}",
+      switchWorkspace: "Switch workspace",
+      switchingWorkspace: "Switching…",
+      useLocal: "Open the local workspace",
+      usingLocal: "Opening…",
+      disconnect: "Disconnect and forget the session",
+      disconnectConfirm:
+        "Forget the saved server session? You will need to sign in again to reconnect. The local workspace is not affected.",
+      disconnectBusy: "Disconnecting…",
+      sessionExpired:
+        "The saved session is no longer valid. Sign in again to reconnect.",
+      localOnlyHint:
+        "Server mode runs agent turns with the server's configuration; worktrees, in-process crew execution, and context compaction need the local runtime and are hidden here.",
+      savedHint:
+        "A connection is saved but not in use. Connect to open it again.",
+      profileHint:
+        "Your name and email come from the server account. The server has no profile-edit route yet.",
+      sessionDecisionsHint:
+        "Session approvals are remembered per CowBot process, so a server workspace does not keep them. Each decision applies to the turn it is made in.",
     },
     about: {
       title: "About CowBot",
@@ -1231,6 +1278,11 @@ export const en = {
     freshAction: "Start with an empty workspace",
     freshHint: "The current database is kept as:",
     failedTitle: "CowBot could not open the workspace database",
+    serverTitle: "The server workspace could not be opened",
+    serverCopy:
+      "CowBot is set to open a workspace on {url} and could not reach it. {message}",
+    serverRetry: "Try again",
+    serverGoLocal: "Open the local workspace instead",
     quit: "Quit CowBot",
   },
   taskList: {

@@ -46,6 +46,9 @@ import type {
   ProviderProtocol,
   RuleDecision,
   Run,
+  ServerProbe,
+  ServerSettings,
+  ServerWorkspace,
   SessionDecisionEntry,
   Task,
   TaskOverviewEntry,
@@ -642,6 +645,52 @@ export function completeOnboarding(): Promise<OnboardingState> {
 
 export function listWorkspaces(): Promise<WorkspaceSummary[]> {
   return invoke<WorkspaceSummary[]>("list_workspaces");
+}
+
+export function getServerSettings(): Promise<ServerSettings> {
+  return invoke<ServerSettings>("get_server_settings");
+}
+
+/** Sign in against a server without changing where this device points. */
+export function probeServer(
+  baseUrl: string,
+  email: string,
+  password: string,
+): Promise<ServerProbe> {
+  return invoke<ServerProbe>("probe_server", { baseUrl, email, password });
+}
+
+/** Save a server connection as this device's backend and restart into it. */
+export function connectServer(
+  baseUrl: string,
+  email: string,
+  password: string,
+  workspaceId: string,
+): Promise<void> {
+  return invoke<void>("connect_server", {
+    baseUrl,
+    email,
+    password,
+    workspaceId,
+  });
+}
+
+export function listServerWorkspaces(): Promise<ServerWorkspace[]> {
+  return invoke<ServerWorkspace[]>("list_server_workspaces");
+}
+
+export function switchServerWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("switch_server_workspace", { workspaceId });
+}
+
+/** Return to the local workspace, keeping the saved server session. */
+export function useLocalBackend(): Promise<void> {
+  return invoke<void>("use_local_backend");
+}
+
+/** Forget the saved server session and return to the local workspace. */
+export function disconnectServer(): Promise<void> {
+  return invoke<void>("disconnect_server");
 }
 
 export function switchWorkspace(database: string): Promise<void> {

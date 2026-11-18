@@ -87,7 +87,9 @@ export default function StartupGate({ children }: { children: ReactNode }) {
                   ? t("startup.upgradeTitle")
                   : status.state === "newer"
                     ? t("startup.newerTitle")
-                    : t("startup.failedTitle")}
+                    : status.state === "serverUnavailable"
+                      ? t("startup.serverTitle")
+                      : t("startup.failedTitle")}
               </h1>
               <p className="onboarding-copy">
                 {status.state === "upgrade"
@@ -100,7 +102,12 @@ export default function StartupGate({ children }: { children: ReactNode }) {
                         current: status.current,
                         target: status.target,
                       })
-                    : status.message}
+                    : status.state === "serverUnavailable"
+                      ? t("startup.serverCopy", {
+                          url: status.baseUrl,
+                          message: status.message,
+                        })
+                      : status.message}
               </p>
 
               {status.state === "upgrade" ? (
@@ -156,6 +163,26 @@ export default function StartupGate({ children }: { children: ReactNode }) {
               ) : null}
 
               <div className="onboarding-actions">
+                {status.state === "serverUnavailable" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={busy}
+                      onClick={() => void apply({ kind: "retry" })}
+                    >
+                      {t("startup.serverRetry")}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={busy}
+                      onClick={() => void apply({ kind: "goLocal" })}
+                    >
+                      {t("startup.serverGoLocal")}
+                    </button>
+                  </>
+                ) : null}
                 {status.state === "upgrade" ? (
                   <>
                     <button
@@ -176,7 +203,7 @@ export default function StartupGate({ children }: { children: ReactNode }) {
                     </button>
                   </>
                 ) : null}
-                {backups.length > 0 ? (
+                {status.state !== "serverUnavailable" && backups.length > 0 ? (
                   <button
                     type="button"
                     className="primary-button"
@@ -190,7 +217,8 @@ export default function StartupGate({ children }: { children: ReactNode }) {
                     {t("startup.restoreAction")}
                   </button>
                 ) : null}
-                {status.state !== "upgrade" ? (
+                {status.state !== "upgrade" &&
+                status.state !== "serverUnavailable" ? (
                   <button
                     type="button"
                     className={

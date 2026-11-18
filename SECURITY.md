@@ -6,7 +6,7 @@ known to be missing, and what an operator must do before trusting it with real
 work. It replaces the shorter status note of earlier releases without changing
 the reporting instructions.
 
-**Applies to:** CowBot 0.1.15 and the `dev` branch at the time of writing.
+**Applies to:** CowBot 0.1.16 and the `dev` branch at the time of writing.
 
 ## Assets
 

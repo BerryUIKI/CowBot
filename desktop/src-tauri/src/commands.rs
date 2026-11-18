@@ -115,12 +115,22 @@ pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, S
 
 /// Return every channel, provisioning a direct conversation for each agent
 /// that does not have one yet.
+///
+/// Provisioning is a local-runtime write; a server workspace already has its
+/// conversations, so it simply lists what exists.
 #[tauri::command]
 pub async fn ensure_agent_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
-    local(&state)?
-        .ensure_agent_channels()
-        .await
-        .map_err(|error| error.to_string())
+    match state.local_client.as_deref() {
+        Some(client) => client
+            .ensure_agent_channels()
+            .await
+            .map_err(|error| error.to_string()),
+        None => state
+            .client
+            .list_channels()
+            .await
+            .map_err(|error| error.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -236,6 +246,7 @@ pub async fn post_message(
             if let Some(usable) = view.usable_tokens {
                 let projected = view.total_tokens.saturating_add(pending);
                 let threshold_reached = settings.auto_compact
+                    && state.local_client.is_some()
                     && u64::from(projected) * 100
                         >= u64::from(usable) * u64::from(settings.compact_threshold);
                 if threshold_reached {
@@ -708,7 +719,13 @@ pub async fn get_task_worktree(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Option<TaskWorktree>, String> {
-    local(&state)?
+    // A server workspace has no worktree on this machine. Reading one is a
+    // detail refresh the task view always performs, so it answers "none"
+    // rather than failing the whole panel.
+    let Some(client) = state.local_client.as_deref() else {
+        return Ok(None);
+    };
+    client
         .task_worktree(&TaskId::new(task_id))
         .await
         .map_err(|error| error.to_string())
@@ -828,7 +845,96 @@ fn overview_detail(assignment: &Assignment) -> Option<String> {
     }
 }
 
+/// Assignments of a run, including its crew tasks.
+///
+/// The local runtime answers from one query that follows `run_group`; a server
+/// workspace combines its assignments route with the tasks it lists, so the
+/// background panel shows the same groups in both modes.
+async fn run_assignments(state: &AppState, run_id: &TaskId) -> Result<Vec<Assignment>, String> {
+    if let Some(client) = state.local_client.as_deref() {
+        return client
+            .list_run_assignments(run_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let mut assignments = state
+        .client
+        .list_assignments(run_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let tasks = state
+        .client
+        .list_tasks()
+        .await
+        .map_err(|error| error.to_string())?;
+    for task in tasks
+        .iter()
+        .filter(|task| task.run_group.as_ref() == Some(run_id))
+    {
+        assignments.extend(
+            state
+                .client
+                .list_assignments(&task.id)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(assignments)
+}
+
+/// The newest tool call in a run, from any task in its group.
+async fn latest_run_tool_call(
+    state: &AppState,
+    run_id: &TaskId,
+) -> Result<Option<ToolCallRecord>, String> {
+    if let Some(client) = state.local_client.as_deref() {
+        return client
+            .latest_tool_call_for_task(run_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    // A server route exists per run, so walk the group's runs and keep the
+    // newest call.
+    let mut members = vec![run_id.clone()];
+    if let Ok(tasks) = state.client.list_tasks().await {
+        members.extend(
+            tasks
+                .into_iter()
+                .filter(|task| task.run_group.as_ref() == Some(run_id))
+                .map(|task| task.id),
+        );
+    }
+    let mut latest: Option<ToolCallRecord> = None;
+    for member in members {
+        for run in state
+            .client
+            .list_runs(&member)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            for call in state
+                .client
+                .list_tool_calls(&run.id)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                if latest
+                    .as_ref()
+                    .map(|current| call.created_at > current.created_at)
+                    .unwrap_or(true)
+                {
+                    latest = Some(call);
+                }
+            }
+        }
+    }
+    Ok(latest)
+}
+
 /// One summary entry per run group for sidebar cards and the background panel.
+///
+/// A server workspace has no worktrees on this machine, so the cards it shows
+/// carry assignments only. The rest is computed the same way in both modes.
 #[tauri::command]
 pub async fn list_task_overview(
     state: State<'_, AppState>,
@@ -838,13 +944,16 @@ pub async fn list_task_overview(
         .list_tasks()
         .await
         .map_err(|error| error.to_string())?;
-    let worktree_by_task: HashMap<String, TaskWorktree> = local(&state)?
-        .list_worktrees()
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|worktree| (worktree.task_id.0.clone(), worktree))
-        .collect();
+    let worktree_by_task: HashMap<String, TaskWorktree> = match state.local_client.as_deref() {
+        Some(client) => client
+            .list_worktrees()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|worktree| (worktree.task_id.0.clone(), worktree))
+            .collect(),
+        None => HashMap::new(),
+    };
 
     let mut groups: HashMap<String, Vec<Task>> = HashMap::new();
     for task in tasks {
@@ -859,10 +968,7 @@ pub async fn list_task_overview(
     let mut entries = Vec::new();
     for (run_id, group_tasks) in groups {
         let worktree = worktree_by_task.get(&run_id).cloned();
-        let assignments = local(&state)?
-            .list_run_assignments(&TaskId::new(run_id.clone()))
-            .await
-            .map_err(|error| error.to_string())?;
+        let assignments = run_assignments(&state, &TaskId::new(run_id.clone())).await?;
         if assignments.is_empty() && worktree.is_none() {
             continue;
         }
@@ -900,10 +1006,7 @@ pub async fn list_task_overview(
             .filter(|assignment| assignment.status.is_terminal())
             .count() as u32;
         let total = assignments.len() as u32;
-        let latest_tool_call = local(&state)?
-            .latest_tool_call_for_task(&TaskId::new(run_id.clone()))
-            .await
-            .map_err(|error| error.to_string())?;
+        let latest_tool_call = latest_run_tool_call(&state, &TaskId::new(run_id.clone())).await?;
         let title = if owner.title.trim().is_empty() {
             owner.description.clone()
         } else {
@@ -2528,6 +2631,10 @@ pub enum StartupAction {
     Restore { backup: String },
     /// Move the database aside and open an empty workspace.
     Fresh,
+    /// Try the saved server again after a connection failure.
+    Retry,
+    /// Switch this device back to its local workspace.
+    GoLocal,
 }
 
 /// Apply a startup decision and open the workspace when it becomes possible.
@@ -2561,6 +2668,22 @@ pub async fn resolve_startup(
         }
         StartupAction::Fresh => {
             startup::start_fresh(&state.db_path)?;
+        }
+        // A server that could not be opened is retried as it stands, or the
+        // device is pointed back at its local workspace; there is no local
+        // database to upgrade or replace in that state.
+        StartupAction::Retry => {
+            return open_workspace(&app, &state).await;
+        }
+        StartupAction::GoLocal => {
+            let mut config = config::load(&state.config_path)
+                .map_err(|error| format!("failed to read the configuration: {error}"))?;
+            config.backend = config::BackendMode::Local;
+            config::save(&state.config_path, &config)
+                .map_err(|error| format!("failed to write the configuration: {error}"))?;
+            // `finish` reads the configuration again, so opening now lands in
+            // the local workspace instead of the unreachable server.
+            return open_workspace(&app, &state).await;
         }
     }
 
@@ -2641,7 +2764,7 @@ pub fn complete_onboarding(state: State<'_, AppState>) -> Result<OnboardingState
     Ok(onboarding_state(&config, &state))
 }
 
-/// Build version and update-check preference shown in the About settings section.
+/// Build version, update-check preference, and backend shown in Settings.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -2649,6 +2772,9 @@ pub struct AppInfo {
     pub auto_check_updates: bool,
     /// Schema version of the workspace database this build provides.
     pub database_schema: i64,
+    /// `local` or `server`: which backend this device opened. Operations that
+    /// need this machine hide themselves when it is `server` (ADR-0053).
+    pub backend: String,
 }
 
 #[tauri::command]
@@ -2658,6 +2784,7 @@ pub fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> Result<AppInf
         version: app.package_info().version.to_string(),
         auto_check_updates,
         database_schema: cowbot_client::latest_database_schema_version(),
+        backend: backend_name(state.backend).to_string(),
     })
 }
 
@@ -2738,6 +2865,218 @@ fn ensure_no_running_tasks(state: &AppState) -> Result<(), String> {
                 .to_string(),
         )
     }
+}
+
+/// A server connection as the settings view sees it.
+///
+/// The token never crosses this boundary; the view only learns which account
+/// and workspace are connected, so a screenshot or a log of the settings page
+/// cannot leak a session.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerView {
+    /// `local` or `server`: which backend this device opens.
+    pub mode: String,
+    /// Absolute origin of the saved connection, when one exists.
+    pub base_url: Option<String>,
+    /// Account that signed in, when one did.
+    pub email: Option<String>,
+    /// Workspace this device is bound to on that server.
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+}
+
+fn server_view(config: &config::AppConfig) -> ServerView {
+    ServerView {
+        mode: backend_name(config.backend).to_string(),
+        base_url: config.server.as_ref().map(|saved| saved.base_url.clone()),
+        email: config.server.as_ref().map(|saved| saved.email.clone()),
+        workspace_id: config
+            .server
+            .as_ref()
+            .map(|saved| saved.workspace_id.clone()),
+        workspace_name: config
+            .server
+            .as_ref()
+            .map(|saved| saved.workspace_name.clone()),
+    }
+}
+
+/// The stored name of a backend mode, as the frontend sees it.
+fn backend_name(backend: config::BackendMode) -> &'static str {
+    match backend {
+        config::BackendMode::Local => "local",
+        config::BackendMode::Server => "server",
+    }
+}
+
+#[tauri::command]
+pub fn get_server_settings(state: State<'_, AppState>) -> Result<ServerView, String> {
+    Ok(server_view(&load_config(&state)?))
+}
+
+/// One workspace the signed-in account can enter, for the sign-in picker.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerWorkspaceView {
+    pub id: String,
+    pub name: String,
+}
+
+/// The account and workspaces a sign-in would open, before anything is saved.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerProbe {
+    pub workspaces: Vec<ServerWorkspaceView>,
+}
+
+/// Reach a server and sign in without changing where this device points.
+///
+/// Used by the settings form to list the account's workspaces before the user
+/// chooses one, and by "Test connection" when a session is already saved. It
+/// never writes the configuration, so a failed attempt leaves the open
+/// workspace exactly as it was.
+#[tauri::command]
+pub async fn probe_server(
+    base_url: String,
+    email: String,
+    password: String,
+) -> Result<ServerProbe, String> {
+    let base_url = config::normalize_base_url(&base_url)?;
+    if email.trim().is_empty() || password.is_empty() {
+        return Err("Enter the email and password for the server account.".to_string());
+    }
+    let client = cowbot_client::RemoteClient::sign_in(&base_url, email.trim(), &password, None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let workspaces = client
+        .account_workspaces()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ServerProbe {
+        workspaces: workspaces
+            .into_iter()
+            .map(|workspace| ServerWorkspaceView {
+                id: workspace.id,
+                name: workspace.name,
+            })
+            .collect(),
+    })
+}
+
+/// Sign in to a server, save the connection, and restart into it.
+#[tauri::command]
+pub async fn connect_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    base_url: String,
+    email: String,
+    password: String,
+    workspace_id: String,
+) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let base_url = config::normalize_base_url(&base_url)?;
+    if email.trim().is_empty() || password.is_empty() {
+        return Err("Enter the email and password for the server account.".to_string());
+    }
+    if workspace_id.trim().is_empty() {
+        return Err("Choose a workspace to open.".to_string());
+    }
+
+    // Sign in first: a server that refuses the account must not leave the
+    // device pointed at a workspace it cannot open.
+    let client = cowbot_client::RemoteClient::sign_in(
+        &base_url,
+        email.trim(),
+        &password,
+        Some(workspace_id.trim()),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let session = client.session().await.map_err(|error| error.to_string())?;
+
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Server;
+    config.server = Some(config::ServerConnection {
+        base_url,
+        email: session.user.email.clone(),
+        workspace_id: session.workspace.id.0.clone(),
+        workspace_name: session.workspace.name.clone(),
+        token: client.token().to_string(),
+    });
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))?;
+    app.restart();
+}
+
+/// One of the account's server workspaces, for switching without signing in
+/// again.
+#[tauri::command]
+pub async fn list_server_workspaces(
+    state: State<'_, AppState>,
+) -> Result<Vec<ServerWorkspaceView>, String> {
+    let Some(client) = state.server_client.clone() else {
+        return Err("This device is not connected to a server.".to_string());
+    };
+    let workspaces = client
+        .account_workspaces()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(workspaces
+        .into_iter()
+        .map(|workspace| ServerWorkspaceView {
+            id: workspace.id,
+            name: workspace.name,
+        })
+        .collect())
+}
+
+/// Open a different workspace on the saved server account.
+#[tauri::command]
+pub async fn switch_server_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    let Some(saved) = config.server.as_mut() else {
+        return Err("This device is not connected to a server.".to_string());
+    };
+    if saved.workspace_id == workspace_id {
+        return Err("That workspace is already open.".to_string());
+    }
+    // Confirm the account may still enter it, and learn its current name.
+    let client =
+        cowbot_client::RemoteClient::resume(&saved.base_url, &saved.token, Some(&workspace_id))
+            .await
+            .map_err(|error| error.to_string())?;
+    let session = client.session().await.map_err(|error| error.to_string())?;
+    saved.workspace_id = session.workspace.id.0.clone();
+    saved.workspace_name = session.workspace.name.clone();
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
+}
+
+/// Stop using a server and restart into the local workspace.
+///
+/// The saved connection is kept, so switching back does not ask for the
+/// password again; only `disconnect_server` forgets it.
+#[tauri::command]
+pub fn use_local_backend(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Local;
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
+}
+
+/// Forget the saved session and restart into the local workspace.
+#[tauri::command]
+pub fn disconnect_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Local;
+    config.server = None;
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    app.restart();
 }
 
 #[tauri::command]

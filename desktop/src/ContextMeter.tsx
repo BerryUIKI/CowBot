@@ -30,6 +30,11 @@ interface ContextMeterProps {
   onOpenModelSettings: () => void;
   /** Open the read-only prompt and recall inspector for one participant. */
   onInspect: (agentId: string) => void;
+  /**
+   * Whether compaction can run here. It needs the local tokenizer and model
+   * provider, so server mode hides the action instead of failing it.
+   */
+  localRuntime: boolean;
 }
 
 const RADIUS = 13;
@@ -162,6 +167,7 @@ export default function ContextMeter({
   onNewConversation,
   onOpenModelSettings,
   onInspect,
+  localRuntime,
 }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -412,14 +418,16 @@ export default function ContextMeter({
                     })
                   : t("context.meter.fullSingle")}
                 <div className="context-actions">
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={busy}
-                    onClick={() => onCompact(group ? current.agent_id : undefined)}
-                  >
-                    {t("context.meter.compactNow")}
-                  </button>
+                  {localRuntime ? (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={busy}
+                      onClick={() => onCompact(group ? current.agent_id : undefined)}
+                    >
+                      {t("context.meter.compactNow")}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="ghost-button"
@@ -597,37 +605,41 @@ export default function ContextMeter({
                               </div>
                             ) : null}
 
-                            <div className="context-settings">
-                              <label className="context-toggle">
-                                <input
-                                  type="checkbox"
-                                  checked={context.auto_compact}
-                                  disabled={busy}
-                                  onChange={(event) => onAutoCompactChange(event.target.checked)}
-                                />
-                                <span>{t("context.meter.autoCompact")}</span>
-                              </label>
-                              <label className="context-threshold">
-                                <span>{t("context.meter.at")}</span>
-                                <select
-                                  value={context.compact_threshold}
-                                  disabled={busy || !context.auto_compact}
-                                  onChange={(event) => onThresholdChange(Number(event.target.value))}
-                                  aria-label={t("context.meter.thresholdAria")}
-                                >
-                                  {[60, 70, 80, 90].map((threshold) => (
-                                    <option key={threshold} value={threshold}>
-                                      {threshold}%
-                                    </option>
-                                  ))}
-                                  {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
-                                    <option value={context.compact_threshold}>
-                                      {context.compact_threshold}%
-                                    </option>
-                                  )}
-                                </select>
-                              </label>
-                            </div>
+                            {/* Auto-compaction runs during a local send, so
+                                server mode has nothing to schedule. */}
+                            {localRuntime ? (
+                              <div className="context-settings">
+                                <label className="context-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={context.auto_compact}
+                                    disabled={busy}
+                                    onChange={(event) => onAutoCompactChange(event.target.checked)}
+                                  />
+                                  <span>{t("context.meter.autoCompact")}</span>
+                                </label>
+                                <label className="context-threshold">
+                                  <span>{t("context.meter.at")}</span>
+                                  <select
+                                    value={context.compact_threshold}
+                                    disabled={busy || !context.auto_compact}
+                                    onChange={(event) => onThresholdChange(Number(event.target.value))}
+                                    aria-label={t("context.meter.thresholdAria")}
+                                  >
+                                    {[60, 70, 80, 90].map((threshold) => (
+                                      <option key={threshold} value={threshold}>
+                                        {threshold}%
+                                      </option>
+                                    ))}
+                                    {[60, 70, 80, 90].includes(context.compact_threshold) ? null : (
+                                      <option value={context.compact_threshold}>
+                                        {context.compact_threshold}%
+                                      </option>
+                                    )}
+                                  </select>
+                                </label>
+                              </div>
+                            ) : null}
 
                             <NotesEditor
                               channelId={context.channel_id}

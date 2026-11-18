@@ -413,19 +413,58 @@ export type StartupStatus =
       database: string;
       backups: string[];
       replaced: string | null;
+    }
+  /**
+   * The device opens a server workspace and the server could not be reached.
+   *
+   * The local database was never inspected, so there is no upgrade or recovery
+   * to offer: the choice is to retry or switch back to the local workspace.
+   */
+  | {
+      state: "serverUnavailable";
+      message: string;
+      baseUrl: string;
     };
 
 export type StartupAction =
   | { kind: "upgrade" }
   | { kind: "upgradeWithBackup" }
   | { kind: "restore"; backup: string }
-  | { kind: "fresh" };
+  | { kind: "fresh" }
+  | { kind: "retry" }
+  | { kind: "goLocal" };
 
 export interface WorkspaceSummary {
   database: string;
   name: string;
   active: boolean;
   available: boolean;
+}
+
+/**
+ * Where this device's data comes from, as Settings → Workspace shows it.
+ *
+ * The session token is never part of this: the view learns only which account
+ * and workspace are connected.
+ */
+export interface ServerSettings {
+  /** `local` or `server`: which backend the app opened. */
+  mode: "local" | "server";
+  base_url: string | null;
+  email: string | null;
+  workspace_id: string | null;
+  workspace_name: string | null;
+}
+
+/** One workspace the signed-in server account can enter. */
+export interface ServerWorkspace {
+  id: string;
+  name: string;
+}
+
+/** What a sign-in reachable without saving the configuration reports. */
+export interface ServerProbe {
+  workspaces: ServerWorkspace[];
 }
 
 export interface Project {
@@ -481,6 +520,8 @@ export interface AppInfo {
   autoCheckUpdates: boolean;
   /** Schema version of the workspace database this build provides. */
   databaseSchema: number;
+  /** `local` or `server`: which backend this device opened. */
+  backend: "local" | "server";
 }
 
 export interface CommandArgInfo {

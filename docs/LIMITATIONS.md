@@ -1,7 +1,7 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.15 and the `dev` branch at the time of writing.
-**Last reviewed:** 2026-11-18.
+**Applies to:** CowBot 0.1.16 and the `dev` branch at the time of writing.
+**Last reviewed:** 2026-11-19.
 
 This page is the honest boundary of the product. It says what works, what does
 not, and which behaviours are deliberate choices that may surprise you. The
@@ -13,7 +13,7 @@ is stale — please open an issue.
 
 ## What works today
 
-CowBot 0.1.15 is a local-first **desktop app and CLI**. The default mode runs
+CowBot 0.1.16 is a local-first **desktop app and CLI**. The default mode runs
 everything on your machine against a SQLite database; an optional self-hosted
 server shares a workspace with a small team over HTTP and WebSocket.
 
@@ -30,7 +30,7 @@ server shares a workspace with a small team over HTTP and WebSocket.
 | Composer | Sixteen `/commands` as desktop actions, and `/btw` for a side question that never enters the conversation |
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
-| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it |
+| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace |
 | Interface | Thirteen languages (English, Simplified and Traditional Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese, Latin American and European Spanish), with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
@@ -41,28 +41,28 @@ tracked.
 
 ### Collaboration and hosting
 
-- **The app does not switch to a server from its settings yet.**
-  `cowbot-server` serves accounts, sessions, workspaces, roles, invitations,
-  channels, messages, tasks, approvals, audit, API tokens, a live event stream,
-  memory, conversations and their context, previews, recorded prompts,
-  workspace-scoped templates, and package import/export over HTTP and WebSocket
-  (ADR-0043 through ADR-0047). `RemoteClient` implements the same `Client` trait,
-  so every surface except worktrees, in-process crew execution, live-turn
-  cancellation, and process-local session decisions works against a server —
-  but the desktop's settings do not yet offer choosing one. The local runtime
-  still auto-creates one user and remains the default way to use CowBot. See the
-  [roadmap](ROADMAP.md).
 - **Only one machine runs agent turns.** A remote client can read a conversation
   and its context, but a turn still executes in the desktop's process with its
   model provider, so a team member without that provider configured cannot make
-  an agent answer.
+  an agent answer. Running crews, compacting context, and preparing worktrees
+  are therefore local to the machine that opened the workspace.
+- **Some actions are hidden in server mode, not supported remotely.** Settings →
+  Server switches between the local workspace and a server, and the controls
+  that need this machine disappear rather than failing: running a task, project
+  worktrees and repositories, local workspace management, package export and
+  import, compaction, and profile editing. See
+  [ADR-0053](ADR/0053-desktop-server-mode.md).
+- **Switching backends restarts CowBot.** The transport is chosen at startup, so
+  connecting, switching a server workspace, or returning to local mode reloads
+  the window. The saved session survives the restart; only Disconnect forgets it.
 - **Remote access is limited to the served surfaces.** The server exposes HTTP
   and a workspace-scoped WebSocket, and `RemoteClient` implements the `Client`
   trait, but there is no public API reference or SDK beyond that Rust client. A
   local-mode workspace still lives in one SQLite file on one machine.
 - **No live-turn transport.** A remote client can read a conversation and its
-  context, but streaming a live turn over the network, cancelling it, running a
-  crew in-process, and preparing a worktree are not available remotely.
+  context, but streaming a live turn over the network and cancelling one are not
+  available remotely. A dropped stream reconnects on its own and the window
+  reloads what it missed.
 
 ### Isolation and security
 
