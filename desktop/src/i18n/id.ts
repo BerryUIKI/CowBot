@@ -1273,6 +1273,11 @@ export const id: Catalog = {
     freshAction: "Mulai dengan ruang kerja kosong",
     freshHint: "Basis data saat ini disimpan sebagai:",
     failedTitle: "CowBot tidak dapat membuka basis data ruang kerja",
+    serverTitle: "Ruang kerja server tidak dapat dibuka",
+    serverCopy:
+      "CowBot diatur untuk membuka ruang kerja di {url} dan tidak dapat menjangkaunya. {message}",
+    serverRetry: "Coba lagi",
+    serverGoLocal: "Buka ruang kerja lokal sebagai gantinya",
     quit: "Keluar dari CowBot",
   },
   taskList: {

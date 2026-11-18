@@ -1273,6 +1273,11 @@ export const ja: Catalog = {
     freshAction: "空のワークスペースで開始",
     freshHint: "現在のデータベースは次の名前で保持されます：",
     failedTitle: "CowBot はワークスペースのデータベースを開けませんでした",
+    serverTitle: "サーバーのワークスペースを開けませんでした",
+    serverCopy:
+      "CowBot は {url} のワークスペースを開く設定ですが、到達できませんでした。{message}",
+    serverRetry: "再試行",
+    serverGoLocal: "代わりにローカルワークスペースを開く",
     quit: "CowBot を終了",
   },
   taskList: {

@@ -336,6 +336,25 @@ fn prepare(app: &tauri::App) -> Result<startup::StartupState, String> {
             ),
         };
 
+    // A server workspace never opens this machine's database, so inspecting it
+    // would ask about an upgrade that is not going to happen. Startup is ready
+    // as soon as the paths are resolved; whether the server answers is a
+    // question `finish` asks and reports.
+    let server = config
+        .active_server()
+        .map(|connection| connection.base_url.clone());
+    if server.is_some() {
+        return Ok(startup::StartupState::new(
+            data_dir,
+            database_dir,
+            database,
+            db_path,
+            config_path,
+            startup::StartupStatus::Ready,
+        )
+        .with_server(server));
+    }
+
     let status = tauri::async_runtime::block_on(startup::inspect(&db_path, &database_dir));
     Ok(startup::StartupState::new(
         data_dir,

@@ -413,13 +413,26 @@ export type StartupStatus =
       database: string;
       backups: string[];
       replaced: string | null;
+    }
+  /**
+   * The device opens a server workspace and the server could not be reached.
+   *
+   * The local database was never inspected, so there is no upgrade or recovery
+   * to offer: the choice is to retry or switch back to the local workspace.
+   */
+  | {
+      state: "serverUnavailable";
+      message: string;
+      baseUrl: string;
     };
 
 export type StartupAction =
   | { kind: "upgrade" }
   | { kind: "upgradeWithBackup" }
   | { kind: "restore"; backup: string }
-  | { kind: "fresh" };
+  | { kind: "fresh" }
+  | { kind: "retry" }
+  | { kind: "goLocal" };
 
 export interface WorkspaceSummary {
   database: string;

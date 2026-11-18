@@ -1267,6 +1267,11 @@ export const hi: Catalog = {
     freshAction: "खाली कार्यक्षेत्र से शुरू करें",
     freshHint: "वर्तमान डेटाबेस इस रूप में रखा जाता है:",
     failedTitle: "CowBot कार्यक्षेत्र डेटाबेस नहीं खोल सका",
+    serverTitle: "सर्वर कार्यक्षेत्र नहीं खोला जा सका",
+    serverCopy:
+      "CowBot {url} पर एक कार्यक्षेत्र खोलने के लिए सेट है और उस तक नहीं पहुँच सका। {message}",
+    serverRetry: "फिर से कोशिश करें",
+    serverGoLocal: "इसके बजाय स्थानीय कार्यक्षेत्र खोलें",
     quit: "CowBot बंद करें",
   },
   taskList: {

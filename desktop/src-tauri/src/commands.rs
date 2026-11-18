@@ -2630,6 +2630,10 @@ pub enum StartupAction {
     Restore { backup: String },
     /// Move the database aside and open an empty workspace.
     Fresh,
+    /// Try the saved server again after a connection failure.
+    Retry,
+    /// Switch this device back to its local workspace.
+    GoLocal,
 }
 
 /// Apply a startup decision and open the workspace when it becomes possible.
@@ -2663,6 +2667,22 @@ pub async fn resolve_startup(
         }
         StartupAction::Fresh => {
             startup::start_fresh(&state.db_path)?;
+        }
+        // A server that could not be opened is retried as it stands, or the
+        // device is pointed back at its local workspace; there is no local
+        // database to upgrade or replace in that state.
+        StartupAction::Retry => {
+            return open_workspace(&app, &state).await;
+        }
+        StartupAction::GoLocal => {
+            let mut config = config::load(&state.config_path)
+                .map_err(|error| format!("failed to read the configuration: {error}"))?;
+            config.backend = config::BackendMode::Local;
+            config::save(&state.config_path, &config)
+                .map_err(|error| format!("failed to write the configuration: {error}"))?;
+            // `finish` reads the configuration again, so opening now lands in
+            // the local workspace instead of the unreachable server.
+            return open_workspace(&app, &state).await;
         }
     }
 

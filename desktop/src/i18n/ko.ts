@@ -1254,6 +1254,11 @@ export const ko: Catalog = {
     freshAction: "빈 워크스페이스로 시작",
     freshHint: "현재 데이터베이스는 다음 이름으로 보존됩니다:",
     failedTitle: "CowBot이 워크스페이스 데이터베이스를 열지 못했습니다",
+    serverTitle: "서버 워크스페이스를 열 수 없습니다",
+    serverCopy:
+      "CowBot은 {url}의 워크스페이스를 열도록 설정되어 있지만 연결할 수 없습니다. {message}",
+    serverRetry: "다시 시도",
+    serverGoLocal: "대신 로컬 워크스페이스 열기",
     quit: "CowBot 종료",
   },
   taskList: {

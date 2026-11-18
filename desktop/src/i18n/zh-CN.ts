@@ -1238,6 +1238,11 @@ export const zhCN: Catalog = {
     freshAction: "使用空白工作区",
     freshHint: "当前数据库会保留为：",
     failedTitle: "CowBot 无法打开工作区数据库",
+    serverTitle: "无法打开服务器工作区",
+    serverCopy:
+      "CowBot 已设置为打开 {url} 上的工作区，但无法连接。{message}",
+    serverRetry: "重试",
+    serverGoLocal: "改为打开本地工作区",
     quit: "退出 CowBot",
   },
   taskList: {

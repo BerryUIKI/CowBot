@@ -1268,6 +1268,11 @@ export const esES: Catalog = {
     freshAction: "Empezar con un espacio de trabajo vacío",
     freshHint: "La base de datos actual se conserva como:",
     failedTitle: "CowBot no pudo abrir la base de datos del espacio de trabajo",
+    serverTitle: "No se pudo abrir el espacio de trabajo del servidor",
+    serverCopy:
+      "CowBot está configurado para abrir un espacio de trabajo en {url} y no pudo conectarse. {message}",
+    serverRetry: "Reintentar",
+    serverGoLocal: "Abrir el espacio local en su lugar",
     quit: "Salir de CowBot",
   },
   taskList: {

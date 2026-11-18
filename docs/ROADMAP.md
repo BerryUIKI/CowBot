@@ -146,6 +146,18 @@ Delivered:
 > events with the acting user (ADR-0044). Channel, task, and approval routes
 > reuse `require_member` and land with 2.3.
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
+
+> **2.3 progress**: complete. `RemoteClient` implements the `Client` trait over
+> HTTP with a WebSocket event stream, and the desktop now opens it: Settings →
+> Server signs in, lists the account's workspaces, saves the connection, and
+> restarts into it, and the device can switch back to its local workspace or
+> forget the session. `config.json` records which backend this device opens, a
+> restart resumes the saved token through `/api/v1/me`, and the event stream
+> reconnects with backoff, publishing `StreamResumed` so a window that missed
+> events reloads. Operations that need this machine (worktrees, in-process crew
+> execution, local compaction, package export, profile editing) hide themselves
+> in server mode. Agent turns still execute on the member's machine, which is
+> the milestone's remaining limit ([ADR-0053](ADR/0053-desktop-server-mode.md)).
 | 2.4 | Deployment and operations | Single binary and Docker image; Compose example; TLS via reverse proxy; health checks; backup/restore; configuration reference | 2.1 |
 
 > **2.4 progress**: `cowbot-server` reads its configuration from the environment

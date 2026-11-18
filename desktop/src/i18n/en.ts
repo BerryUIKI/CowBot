@@ -1276,6 +1276,11 @@ export const en = {
     freshAction: "Start with an empty workspace",
     freshHint: "The current database is kept as:",
     failedTitle: "CowBot could not open the workspace database",
+    serverTitle: "The server workspace could not be opened",
+    serverCopy:
+      "CowBot is set to open a workspace on {url} and could not reach it. {message}",
+    serverRetry: "Try again",
+    serverGoLocal: "Open the local workspace instead",
     quit: "Quit CowBot",
   },
   taskList: {

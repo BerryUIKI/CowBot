@@ -1290,6 +1290,11 @@ export const it: Catalog = {
     freshAction: "Inizia con uno spazio di lavoro vuoto",
     freshHint: "Il database corrente viene conservato come:",
     failedTitle: "CowBot non è riuscito ad aprire il database dello spazio di lavoro",
+    serverTitle: "Impossibile aprire lo spazio di lavoro del server",
+    serverCopy:
+      "CowBot è impostato per aprire uno spazio di lavoro su {url} e non è riuscito a raggiungerlo. {message}",
+    serverRetry: "Riprova",
+    serverGoLocal: "Apri invece lo spazio locale",
     quit: "Esci da CowBot",
   },
   taskList: {

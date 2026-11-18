@@ -1195,6 +1195,10 @@ export const zhTW: Catalog = {
     "freshAction": "使用空白工作區",
     "freshHint": "目前資料庫會保留為：",
     "failedTitle": "CowBot 無法開啟工作區資料庫",
+    "serverTitle": "無法開啟伺服器工作區",
+    "serverCopy": "CowBot 已設定為開啟 {url} 上的工作區，但無法連線。{message}",
+    "serverRetry": "重試",
+    "serverGoLocal": "改為開啟本機工作區",
     "quit": "結束 CowBot"
   },
   "taskList": {

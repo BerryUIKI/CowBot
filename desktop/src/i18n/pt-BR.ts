@@ -1273,6 +1273,11 @@ export const ptBR: Catalog = {
     freshAction: "Começar com um espaço de trabalho vazio",
     freshHint: "O banco de dados atual é mantido como:",
     failedTitle: "O CowBot não conseguiu abrir o banco de dados do espaço de trabalho",
+    serverTitle: "Não foi possível abrir o espaço de trabalho do servidor",
+    serverCopy:
+      "O CowBot está configurado para abrir um espaço de trabalho em {url} e não conseguiu alcançá-lo. {message}",
+    serverRetry: "Tentar novamente",
+    serverGoLocal: "Abrir o espaço local em vez disso",
     quit: "Sair do CowBot",
   },
   taskList: {

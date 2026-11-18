@@ -1312,6 +1312,11 @@ export const de: Catalog = {
     freshAction: "Mit einem leeren Arbeitsbereich starten",
     freshHint: "Die aktuelle Datenbank wird aufbewahrt als:",
     failedTitle: "CowBot konnte die Arbeitsbereichsdatenbank nicht öffnen",
+    serverTitle: "Der Server-Arbeitsbereich konnte nicht geöffnet werden",
+    serverCopy:
+      "CowBot ist auf einen Arbeitsbereich auf {url} eingestellt und konnte ihn nicht erreichen. {message}",
+    serverRetry: "Erneut versuchen",
+    serverGoLocal: "Stattdessen den lokalen Arbeitsbereich öffnen",
     quit: "CowBot beenden",
   },
   taskList: {

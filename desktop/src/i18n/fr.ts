@@ -1303,6 +1303,11 @@ export const fr: Catalog = {
     freshHint: "La base de données actuelle est conservée sous :",
     failedTitle:
       "CowBot n’a pas pu ouvrir la base de données de l’espace de travail",
+    serverTitle: "L'espace de travail serveur n'a pas pu être ouvert",
+    serverCopy:
+      "CowBot est configuré pour ouvrir un espace de travail sur {url} et n'a pas pu l'atteindre. {message}",
+    serverRetry: "Réessayer",
+    serverGoLocal: "Ouvrir l'espace local à la place",
     quit: "Quitter CowBot",
   },
   taskList: {
