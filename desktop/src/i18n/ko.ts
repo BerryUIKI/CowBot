@@ -289,6 +289,8 @@ export const ko: Catalog = {
       savedHint: "저장된 연결이 있지만 사용 중이 아닙니다. 연결하여 다시 여세요.",
       profileHint:
         "이름과 이메일은 서버 계정에서 가져옵니다. 서버는 아직 프로필 편집을 제공하지 않습니다.",
+      sessionDecisionsHint:
+        "세션 승인은 CowBot 프로세스 단위로 기억되므로 서버 워크스페이스에는 유지되지 않습니다. 각 결정은 결정한 턴에만 적용됩니다.",
     },
     about: {
       title: "CowBot 정보",

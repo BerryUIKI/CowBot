@@ -201,6 +201,12 @@ export default function SettingsView({
     if (section !== "approvals") return;
     let cancelled = false;
     setSessionError(null);
+    // Session decisions are per process, so a server workspace has none and
+    // the client refuses the call by design.
+    if (!localRuntime) {
+      setSessionDecisions([]);
+      return;
+    }
     getSessionDecisions()
       .then((entries) => {
         if (!cancelled) setSessionDecisions(entries);
@@ -211,7 +217,7 @@ export default function SettingsView({
     return () => {
       cancelled = true;
     };
-  }, [section]);
+  }, [section, localRuntime]);
 
   useEffect(() => {
     if (section !== "approvals") return;
@@ -718,7 +724,11 @@ export default function SettingsView({
                   {sessionError}
                 </p>
               ) : null}
-              {sessionDecisions.length === 0 ? (
+              {!localRuntime ? (
+                <p className="settings-hint">
+                  {t("settings.server.sessionDecisionsHint")}
+                </p>
+              ) : sessionDecisions.length === 0 ? (
                 <p className="settings-empty">
                   {t("settings.approvals.noSessionDecisions")}
                 </p>
@@ -737,18 +747,20 @@ export default function SettingsView({
                 </ul>
               )}
 
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={handleClearSessionDecisions}
-                  disabled={sessionBusy || sessionDecisions.length === 0}
-                >
-                  {sessionBusy
-                    ? t("settings.approvals.resetting")
-                    : t("settings.approvals.reset")}
-                </button>
-              </div>
+              {localRuntime ? (
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={handleClearSessionDecisions}
+                    disabled={sessionBusy || sessionDecisions.length === 0}
+                  >
+                    {sessionBusy
+                      ? t("settings.approvals.resetting")
+                      : t("settings.approvals.reset")}
+                  </button>
+                </div>
+              ) : null}
 
               <div className="settings-section-head settings-subsection">
                 <h3>{t("settings.approvals.bypassTitle")}</h3>

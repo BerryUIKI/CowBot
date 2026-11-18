@@ -297,6 +297,8 @@ export const de: Catalog = {
       savedHint: "Eine Verbindung ist gespeichert, aber nicht in Gebrauch. Verbinde, um sie wieder zu öffnen.",
       profileHint:
         "Name und E-Mail stammen vom Serverkonto. Der Server bietet noch keine Profilbearbeitung.",
+      sessionDecisionsHint:
+        "Sitzungsfreigaben gelten pro CowBot-Prozess; ein Server-Arbeitsbereich speichert sie nicht. Jede Entscheidung gilt für den Turn, in dem sie getroffen wird.",
     },
     about: {
       title: "Über CowBot",

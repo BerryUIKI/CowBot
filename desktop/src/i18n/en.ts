@@ -299,6 +299,8 @@ export const en = {
         "A connection is saved but not in use. Connect to open it again.",
       profileHint:
         "Your name and email come from the server account. The server has no profile-edit route yet.",
+      sessionDecisionsHint:
+        "Session approvals are remembered per CowBot process, so a server workspace does not keep them. Each decision applies to the turn it is made in.",
     },
     about: {
       title: "About CowBot",

@@ -298,6 +298,8 @@ export const it: Catalog = {
       savedHint: "Una connessione è salvata ma non in uso. Connetti per riaprirla.",
       profileHint:
         "Nome ed email provengono dall'account del server. Il server non offre ancora la modifica del profilo.",
+      sessionDecisionsHint:
+        "Le approvazioni di sessione sono ricordate per processo CowBot, quindi uno spazio server non le conserva. Ogni decisione vale per il turno in cui viene presa.",
     },
     about: {
       title: "Informazioni su CowBot",

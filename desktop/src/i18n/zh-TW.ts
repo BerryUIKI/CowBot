@@ -273,7 +273,8 @@ export const zhTW: Catalog = {
       "sessionExpired": "已儲存的工作階段已失效。請重新登入以重新連線。",
       "localOnlyHint": "伺服器模式下，代理回合使用伺服器的設定執行；工作樹、程序內團隊執行和內容壓縮需要本機執行環境，因此在此隱藏。",
       "savedHint": "已儲存連線但未在使用。連線後即可重新開啟。",
-      "profileHint": "姓名和電子郵件來自伺服器帳戶。伺服器暫不支援修改資料。"
+      "profileHint": "姓名和電子郵件來自伺服器帳戶。伺服器暫不支援修改資料。",
+      "sessionDecisionsHint": "工作階段核准依 CowBot 程序記錄，因此伺服器工作區不會保留。每次決定只對當次回合生效。"
     },
     "about": {
       "title": "關於 CowBot",

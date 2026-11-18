@@ -283,6 +283,8 @@ export const zhCN: Catalog = {
       savedHint: "已保存连接但未在使用。连接后即可重新打开。",
       profileHint:
         "姓名和邮箱来自服务器账户。服务器暂不支持修改资料。",
+      sessionDecisionsHint:
+        "会话审批按 CowBot 进程记录，因此服务器工作区不会保留。每次决定只对当次回合生效。",
     },
     about: {
       title: "关于 CowBot",

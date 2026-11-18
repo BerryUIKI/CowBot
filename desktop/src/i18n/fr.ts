@@ -296,6 +296,8 @@ export const fr: Catalog = {
       savedHint: "Une connexion est enregistrée mais inutilisée. Connectez-vous pour la rouvrir.",
       profileHint:
         "Votre nom et votre e-mail proviennent du compte serveur. Le serveur ne propose pas encore de modification du profil.",
+      sessionDecisionsHint:
+        "Les approbations de session sont mémorisées par processus CowBot ; un espace serveur ne les conserve donc pas. Chaque décision s'applique au tour où elle est prise.",
     },
     about: {
       title: "À propos de CowBot",

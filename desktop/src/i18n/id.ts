@@ -291,6 +291,8 @@ export const id: Catalog = {
       savedHint: "Ada koneksi tersimpan yang tidak dipakai. Hubungkan untuk membukanya lagi.",
       profileHint:
         "Nama dan email Anda berasal dari akun server. Server belum menyediakan penyuntingan profil.",
+      sessionDecisionsHint:
+        "Persetujuan sesi diingat per proses CowBot, jadi ruang kerja server tidak menyimpannya. Setiap keputusan berlaku untuk giliran saat dibuat.",
     },
     about: {
       title: "Tentang CowBot",

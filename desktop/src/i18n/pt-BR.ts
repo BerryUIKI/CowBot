@@ -293,6 +293,8 @@ export const ptBR: Catalog = {
       savedHint: "Há uma conexão salva sem uso. Conecte para abri-la novamente.",
       profileHint:
         "Seu nome e e-mail vêm da conta do servidor. O servidor ainda não oferece edição de perfil.",
+      sessionDecisionsHint:
+        "As aprovações de sessão são lembradas por processo do CowBot, então um espaço de servidor não as guarda. Cada decisão vale para o turno em que foi tomada.",
     },
     about: {
       title: "Sobre o CowBot",
