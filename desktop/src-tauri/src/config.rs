@@ -74,6 +74,37 @@ pub struct ProjectBranches {
     pub branches: Vec<String>,
 }
 
+/// Where the desktop keeps its data: this machine, or a CowBot server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendMode {
+    /// A SQLite workspace on this machine. The default and the offline mode.
+    #[default]
+    Local,
+    /// A workspace served by `cowbot-server` (ADR-0053).
+    Server,
+}
+
+/// A saved connection to a CowBot server.
+///
+/// The token is a session bearer the server issued at sign-in. It lives in the
+/// same owner-only `config.json` as model API keys and never crosses the Tauri
+/// command boundary back to the frontend; the UI only learns whether one is
+/// stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerConnection {
+    /// Absolute HTTP(S) origin, for example `https://team.example.com`.
+    pub base_url: String,
+    /// The account that signed in, for display.
+    pub email: String,
+    /// The workspace this device is bound to on that server.
+    pub workspace_id: String,
+    /// Display name of that workspace, for the settings view.
+    pub workspace_name: String,
+    /// Bearer token from sign-in.
+    pub token: String,
+}
+
 /// Wire protocol a saved provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ProviderProtocol {
@@ -171,6 +202,13 @@ pub struct AppConfig {
     /// Local git repositories available to worktree tasks.
     #[serde(default)]
     pub projects: Vec<ProjectEntry>,
+    /// Which backend the desktop opens. Missing means local, so an existing
+    /// configuration keeps its offline behaviour (ADR-0053).
+    #[serde(default)]
+    pub backend: BackendMode,
+    /// The saved server connection, present once a sign-in succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerConnection>,
 }
 
 fn onboarding_default_for_legacy() -> bool {
@@ -194,6 +232,8 @@ impl Default for AppConfig {
             active_workspace_database: None,
             workspaces: Vec::new(),
             projects: Vec::new(),
+            backend: BackendMode::Local,
+            server: None,
         }
     }
 }
@@ -216,6 +256,25 @@ impl AppConfig {
     pub fn active_provider(&self) -> Option<&ProviderConfig> {
         let id = self.active_provider_id.as_deref()?;
         self.provider(id)
+    }
+
+    /// Whether this device opens a server workspace.
+    pub fn uses_server(&self) -> bool {
+        self.backend == BackendMode::Server
+    }
+
+    /// A server connection the desktop can actually open.
+    ///
+    /// A saved mode without coordinates is treated as local: a configuration
+    /// file that lost its connection must still start the app rather than
+    /// leaving it with no workspace at all.
+    pub fn active_server(&self) -> Option<&ServerConnection> {
+        self.server.as_ref().filter(|connection| {
+            self.uses_server()
+                && !connection.base_url.trim().is_empty()
+                && !connection.token.trim().is_empty()
+                && !connection.workspace_id.trim().is_empty()
+        })
     }
 }
 
@@ -845,6 +904,8 @@ mod tests {
                 name: "cowbot".to_string(),
                 path: "/repos/cowbot".to_string(),
             }],
+            backend: BackendMode::Server,
+            server: Some(connection()),
         };
 
         save(&path, &config).unwrap();
@@ -1400,5 +1461,73 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    fn connection() -> ServerConnection {
+        ServerConnection {
+            base_url: "https://team.example.com".to_string(),
+            email: "owner@example.com".to_string(),
+            workspace_id: "ws-1".to_string(),
+            workspace_name: "Research".to_string(),
+            token: "session-token".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_configuration_without_a_backend_stays_local() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(&path, r#"{"providers":[]}"#).unwrap();
+
+        let config = load(&path).unwrap();
+        assert_eq!(config.backend, BackendMode::Local);
+        assert!(!config.uses_server());
+        assert!(config.active_server().is_none());
+    }
+
+    #[test]
+    fn a_server_connection_round_trips_through_the_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        let mut config = AppConfig {
+            backend: BackendMode::Server,
+            server: Some(connection()),
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded, config);
+        assert!(loaded.uses_server());
+        assert_eq!(
+            loaded
+                .active_server()
+                .map(|saved| saved.workspace_name.as_str()),
+            Some("Research")
+        );
+
+        // Turning server mode off keeps the saved coordinates so the switch
+        // back does not ask for the password again.
+        config.backend = BackendMode::Local;
+        save(&path, &config).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(loaded.server.is_some());
+        assert!(loaded.active_server().is_none());
+    }
+
+    #[test]
+    fn server_mode_without_a_usable_connection_falls_back_to_local() {
+        let mut config = AppConfig {
+            backend: BackendMode::Server,
+            server: Some(ServerConnection {
+                token: String::new(),
+                ..connection()
+            }),
+            ..AppConfig::default()
+        };
+        assert!(config.active_server().is_none());
+
+        config.server = None;
+        assert!(config.active_server().is_none());
     }
 }
