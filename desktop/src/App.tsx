@@ -1020,6 +1020,24 @@ export default function App() {
       if (type === "ApprovalRequested" || type === "ApprovalDecided") {
         refreshApprovals().catch((err) => setError(errorMessage(err)));
       }
+      if (type === "StreamResumed") {
+        // The server socket was reconnecting (ADR-0053): whatever happened in
+        // between was not delivered, so reload everything this screen keeps
+        // live rather than trusting a stale timeline.
+        refreshChannels().catch((err) => setError(errorMessage(err)));
+        refreshAgents().catch((err) => setError(errorMessage(err)));
+        refreshTasks().catch((err) => setError(errorMessage(err)));
+        refreshApprovals().catch((err) => setError(errorMessage(err)));
+        refreshMessages(selectedId).catch((err) => setError(errorMessage(err)));
+        scheduleOverviewRefresh();
+        setContextVersion((version) => version + 1);
+      }
+      if (type === "SystemNotice") {
+        // The server writes these when a live stream falls behind or a session
+        // is no longer valid; both are worth showing without a reload.
+        const notice = event.payload.payload as { message?: string } | undefined;
+        if (notice?.message) setNotice(notice.message);
+      }
     })
       .then((stop) => {
         if (cancelled) {
