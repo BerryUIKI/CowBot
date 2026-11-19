@@ -63,6 +63,18 @@ tracked.
   context, but streaming a live turn over the network and cancelling one are not
   available remotely. A dropped stream reconnects on its own and the window
   reloads what it missed.
+- **The server has no rate limiting.** A shared deployment has no per-user or
+  per-workspace request ceiling; an API token or session can issue requests as
+  fast as the client and proxy allow. `429` responses are handled by the desktop
+  client if a proxy adds them, but the server does not produce them.
+- **A write that fails mid-flight is not retried.** Reads are retried up to three
+  times over about 600 ms; a create, edit, or approval decision that fails is
+  reported so you can decide whether to repeat it, because the API has no
+  idempotency key and a silent replay could duplicate it.
+- **The desktop checks the server's API version and refuses a mismatch.** A
+  server and a desktop from different protocol versions report the mismatch with
+  both numbers instead of failing later on an unexpected response; update the
+  older side.
 
 ### Isolation and security
 

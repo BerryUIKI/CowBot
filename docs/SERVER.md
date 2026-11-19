@@ -82,7 +82,11 @@ limiting and keeps the raw port off the internet.
 ### Health
 
 `GET /health` returns `{"status":"ok","api_version":1}` without a token. The
-container image declares it as its health check; point your own probe at it.
+container image declares it as its health check; point your own probe at it. The
+desktop reads it before signing in or resuming a session and refuses a server
+that speaks another API version, naming both. A protocol bump therefore means
+deploying the server and updating the desktops together; the message tells the
+user which side is older.
 
 ### Backup
 
