@@ -57,6 +57,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0051](0051-database-lifecycle-safeguards.md) | Data-directory isolation, upgrade consent, and database recovery |
 | [0052](0052-default-main-agent-and-agent-tags.md) | A default CowBot main agent, first-chat naming, and agent tags |
 | [0053](0053-desktop-server-mode.md) | The desktop's server mode: saved sessions, reconnect, and mode gating |
+| [0054](0054-server-api-version-and-read-retry.md) | Checking the server's API version and retrying transient reads |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

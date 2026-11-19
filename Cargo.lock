@@ -450,6 +450,7 @@ name = "cowbot-client"
 version = "0.1.16"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "cowbot-agent",
  "cowbot-bus",

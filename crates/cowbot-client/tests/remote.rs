@@ -315,3 +315,289 @@ async fn recv_until_within(
         }
     }
 }
+
+/// A stub that answers `/health` with the version it was given and everything
+/// else with a fixed response.
+///
+/// The real server only ever reports its own version, so the mismatch path
+/// cannot be reached against it; a stub is the only way to prove the check
+/// happens before the first authenticated request.
+struct Stub {
+    base: String,
+    /// Counts of `/health` hits and fallback hits, read once the stub stops.
+    hits: tokio::task::JoinHandle<(usize, usize)>,
+    stop: tokio::sync::oneshot::Sender<()>,
+}
+
+impl Stub {
+    /// Stop the stub and read how many requests each route saw.
+    async fn finish(self) -> (usize, usize) {
+        let _ = self.stop.send(());
+        self.hits.await.expect("the stub should not panic")
+    }
+}
+
+async fn stub_server(api_version: u32) -> Stub {
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let health_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let health_counter = health_hits.clone();
+    let app = Router::new()
+        .route(
+            "/health",
+            get(move || {
+                let health_counter = health_counter.clone();
+                async move {
+                    health_counter.fetch_add(1, Ordering::SeqCst);
+                    Json(serde_json::json!({ "status": "ok", "api_version": api_version }))
+                }
+            }),
+        )
+        .fallback(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        });
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = stop_rx.await;
+            })
+            .await;
+        (
+            health_hits.load(Ordering::SeqCst),
+            hits.load(Ordering::SeqCst),
+        )
+    });
+    Stub {
+        base: format!("http://{address}"),
+        hits: server,
+        stop,
+    }
+}
+
+#[tokio::test]
+async fn a_server_speaking_another_api_version_is_refused_before_signing_in() {
+    // The stub's fallback would answer the sign-in request if it were sent, so
+    // the fallback count proves the version check stopped it.
+    let stub = stub_server(99).await;
+    let base = stub.base.clone();
+    let error = RemoteClient::sign_in(&base, "owner@example.com", PASSWORD, None)
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("version 99"), "got {message}");
+    assert!(
+        message.contains("speaks server API version 1"),
+        "the message should name the version this build speaks: {message}"
+    );
+    let (health_hits, other_hits) = stub.finish().await;
+    assert_eq!(health_hits, 1, "the version check should run once");
+    assert_eq!(other_hits, 0, "no other request may reach the server");
+}
+
+#[tokio::test]
+async fn a_matching_api_version_lets_the_first_request_through() {
+    let stub = stub_server(1).await;
+    let base = stub.base.clone();
+    // The stub has no sign-in route, so the request fails; what matters is
+    // that it was attempted rather than blocked by the version check.
+    let error = RemoteClient::sign_in(&base, "owner@example.com", PASSWORD, None)
+        .await
+        .unwrap_err();
+    let (health_hits, other_hits) = stub.finish().await;
+    assert!(health_hits >= 1, "the client should have checked /health");
+    assert_eq!(other_hits, 1, "the sign-in request should have been sent");
+    assert!(
+        error.to_string().contains("unexpected sign-in response"),
+        "got {error}"
+    );
+}
+
+#[tokio::test]
+async fn resuming_a_session_checks_the_api_version_too() {
+    let stub = stub_server(7).await;
+    let base = stub.base.clone();
+    let error = RemoteClient::resume(&base, "some-token", None)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("version 7"), "got {error}");
+    let (_, other_hits) = stub.finish().await;
+    assert_eq!(other_hits, 0, "the session request must not be sent");
+}
+
+/// A stub whose channel route fails a fixed number of times before answering.
+///
+/// Counts keep `/health`, `/me`, and sign-in answering immediately so the test
+/// reaches the route it is about; only the read under test is disturbed.
+struct FlakyStub {
+    base: String,
+    /// Channel reads and channel writes that reached the stub, in that order.
+    hits: tokio::task::JoinHandle<(usize, usize)>,
+    stop: tokio::sync::oneshot::Sender<()>,
+}
+
+impl FlakyStub {
+    async fn finish(self) -> (usize, usize) {
+        let _ = self.stop.send(());
+        self.hits.await.expect("the stub should not panic")
+    }
+}
+
+/// A stub for exercising read retries.
+///
+/// `failures` channel reads answer `503` before the stub answers `200` with an
+/// empty list, and every write records how often it was called so a test can
+/// prove writes are not replayed.
+async fn flaky_stub(failures: usize) -> FlakyStub {
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let channel_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let write_hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let channels = channel_hits.clone();
+    let channel_writes = write_hits.clone();
+    let app = Router::new()
+        .route(
+            "/health",
+            get(|| async { Json(serde_json::json!({ "status": "ok", "api_version": 1 })) }),
+        )
+        .route(
+            "/api/v1/auth/sign-in",
+            post(|| async {
+                Json(serde_json::json!({
+                    "token": "stub-token",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "user": { "id": "user-1", "name": "Owner", "email": "owner@example.com" },
+                    "workspaces": [{
+                        "id": "ws-1", "name": "Test", "created_at": "2026-01-01T00:00:00Z",
+                        "role": "owner"
+                    }]
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/me",
+            get(|| async {
+                Json(serde_json::json!({
+                    "session_expires_at": "2099-01-01T00:00:00Z",
+                    "user": { "id": "user-1", "name": "Owner", "email": "owner@example.com" },
+                    "workspaces": [{
+                        "id": "ws-1", "name": "Test", "created_at": "2026-01-01T00:00:00Z",
+                        "role": "owner"
+                    }]
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/workspaces/{id}/channels",
+            get(move || {
+                let channels = channels.clone();
+                async move {
+                    let attempt = channels.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt <= failures {
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            Json(serde_json::json!({ "code": "unavailable", "message": "try later" })),
+                        )
+                    } else {
+                        (
+                            axum::http::StatusCode::OK,
+                            Json(serde_json::json!([])),
+                        )
+                    }
+                }
+            })
+            .post(move || {
+                let channel_writes = channel_writes.clone();
+                async move {
+                    channel_writes.fetch_add(1, Ordering::SeqCst);
+                    (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({ "code": "unavailable", "message": "try later" })),
+                    )
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let reader_counter = channel_hits.clone();
+    let writer_counter = write_hits.clone();
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = stop_rx.await;
+            })
+            .await;
+        (
+            reader_counter.load(Ordering::SeqCst),
+            writer_counter.load(Ordering::SeqCst),
+        )
+    });
+    FlakyStub {
+        base: format!("http://{address}"),
+        hits: server,
+        stop,
+    }
+}
+
+#[tokio::test]
+async fn a_read_that_fails_transiently_is_tried_again() {
+    let stub = flaky_stub(2).await;
+    let base = stub.base.clone();
+    let client = RemoteClient::sign_in(&base, "owner@example.com", "password", Some("ws-1"))
+        .await
+        .expect("sign in");
+    let channels = client
+        .list_channels()
+        .await
+        .expect("the third read answers");
+    assert!(channels.is_empty());
+    let (reads, _) = stub.finish().await;
+    assert_eq!(reads, 3, "three attempts should reach the stub");
+}
+
+#[tokio::test]
+async fn a_read_that_keeps_failing_reports_the_error() {
+    // More failures than attempts, so the client gives up and reports it.
+    let stub = flaky_stub(5).await;
+    let base = stub.base.clone();
+    let client = RemoteClient::sign_in(&base, "owner@example.com", "password", Some("ws-1"))
+        .await
+        .expect("sign in");
+    let error = client.list_channels().await.unwrap_err();
+    assert!(
+        error.to_string().contains("try later"),
+        "the server's message should survive: {error}"
+    );
+    let (reads, _) = stub.finish().await;
+    assert_eq!(reads, 3, "retries stop after three attempts");
+}
+
+#[tokio::test]
+async fn a_write_is_never_replayed() {
+    let stub = flaky_stub(0).await;
+    let base = stub.base.clone();
+    let client = RemoteClient::sign_in(&base, "owner@example.com", "password", Some("ws-1"))
+        .await
+        .expect("sign in");
+    // Creating a channel is a POST; the stub fails it and the client must stop
+    // there rather than risk a second create.
+    let error = client.create_channel("ops", "").await.unwrap_err();
+    assert!(error.to_string().contains("try later"), "got {error}");
+    let (_, writes) = stub.finish().await;
+    assert_eq!(writes, 1, "a write must reach the server exactly once");
+}
