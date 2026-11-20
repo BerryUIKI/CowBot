@@ -154,14 +154,15 @@ audit does not split by transport.
   other people's data. It is not an isolation boundary (this was already true on
   a desktop) and the narrow tool set is the mitigation, not a fix.
 - Group routing's percentage capacity gate needs `participant_capacity`, which
-  the desktop computes from model metadata it owns. The executor passes none for
-  now, which means the group skip path is inactive on the server. Recorded as a
-  gap rather than solved here.
-- The single-participant capacity check still lives in the desktop
-  (`commands.rs`), so a server turn in a single-participant conversation can
-  overrun its budget. Moving it into `ChannelAgentService` is the planned fix
-  (S0.4) and is not part of this change.
+  the desktop computes from model metadata it owns. The executor computes it
+  from `COWBOT_SERVER_LLM_CONTEXT_WINDOW` and `_MAX_OUTPUT_TOKENS`; with
+  neither set it passes none and the gate is inactive, which is the same
+  degradation a group has when the desktop passes no window.
+- The single-participant capacity check used to live only in the desktop
+  (`commands.rs`), so a server turn in a single-participant conversation could
+  overrun its budget. It now lives in `ChannelAgentService::reply` and applies
+  to every transport, and auto-compaction moved with it — a caller that wants
+  it must pass a window, and one that cannot is not guessed at.
 
-**Follow-ups.** Streaming over the socket (S0.6); moving the single-participant
-capacity check into the service; a per-workspace provider table; a token budget
-per workspace.
+**Follow-ups.** Streaming over the socket (S0.6); a per-workspace provider
+table; a token budget per workspace.

@@ -41,6 +41,8 @@ single-machine trial working.
 | `COWBOT_SERVER_LLM_BASE_URL` | unset | Provider endpoint; required for every protocol but `mock` |
 | `COWBOT_SERVER_LLM_API_KEY` | unset | Provider key; never written or returned by the API |
 | `COWBOT_SERVER_LLM_MODEL` | unset (or `mock`) | Model every channel turn is answered with |
+| `COWBOT_SERVER_LLM_CONTEXT_WINDOW` | unset | The model's context window, so a full conversation is skipped rather than sent |
+| `COWBOT_SERVER_LLM_MAX_OUTPUT_TOKENS` | unset | The model's output limit, subtracted from the window |
 
 A value that does not parse stops the server with a message rather than silently
 falling back — a mistyped listen address should not move the server somewhere
@@ -83,6 +85,13 @@ the same pending approval the API lists at
 Two limits are worth knowing before deploying this: the server cannot stream a
 turn into a remote client's timeline while it runs (the answer appears when the
 turn settles), and a turn cannot be cancelled through the API.
+
+Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
+whose branch no longer fits is then skipped with a notice instead of being sent
+and failing at the provider — and compaction, when the conversation has
+auto-compaction on, runs inside the turn with the same provider. Without it the
+server has no idea how large the model's window is, so it does not attempt
+either.
 
 ## Running from source
 

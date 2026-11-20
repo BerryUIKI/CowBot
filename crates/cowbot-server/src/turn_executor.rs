@@ -15,11 +15,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use cowbot_bus::EventBus;
+use cowbot_core::agent::AgentId;
 use cowbot_core::channel::{ChannelId, ChannelMessage};
 use cowbot_core::error::CowResult;
 use cowbot_core::identity::WorkspaceId;
-use cowbot_llm::LlmProvider;
-use cowbot_service::{ChannelAgentService, ChannelTurnOptions, SessionDecisions};
+use cowbot_llm::{token_counter_for_model, LlmProvider};
+use cowbot_service::{
+    ChannelAgentService, ChannelTurnOptions, ParticipantCapacity, SessionDecisions,
+};
 use cowbot_store::Store;
 use cowbot_tools::{
     CodeExecutionTool, ReadFileTool, SubprocessSandbox, ToolRegistry, WriteFileTool,
@@ -43,6 +46,11 @@ pub struct TurnExecutor {
     bus: EventBus,
     llm: Arc<dyn LlmProvider>,
     model: String,
+    /// Usable input window the capacity check enforces, when the deployment
+    /// declared one. Without it a full branch surfaces as a turn failure
+    /// instead of a skip, which is the same degradation a group has when the
+    /// desktop passes no window.
+    usable_window: Option<u32>,
     /// A tool set a server can offer safely: the sandbox, and file access
     /// rooted at one directory the server owns.
     tools: ToolRegistry,
@@ -86,6 +94,10 @@ impl TurnExecutor {
             bus,
             llm: config.provider(),
             model: config.model.clone(),
+            usable_window: cowbot_core::conversation::usable_window(
+                config.context_window,
+                config.max_output_tokens,
+            ),
             tools,
             session_decisions: SessionDecisions::new(),
             services: Mutex::new(HashMap::new()),
@@ -95,6 +107,11 @@ impl TurnExecutor {
     /// The model every turn is answered with.
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// The input window the capacity check enforces, when one was configured.
+    pub fn usable_window(&self) -> Option<u32> {
+        self.usable_window
     }
 
     /// The tool names this executor offers, for tests and for the startup log.
@@ -133,6 +150,54 @@ impl TurnExecutor {
             .clone()
     }
 
+    /// Tool-schema tokens each participant pays in every request, paired with
+    /// the declared window.
+    ///
+    /// Empty when the deployment declared no window, which makes the service
+    /// skip the capacity check rather than guess one.
+    async fn participant_capacity(
+        &self,
+        workspace_id: &WorkspaceId,
+        channel_id: &ChannelId,
+    ) -> Vec<ParticipantCapacity> {
+        let Some(usable_window) = self.usable_window else {
+            return Vec::new();
+        };
+        let Ok(agents) = self.store.list_agents(workspace_id).await else {
+            return Vec::new();
+        };
+        let counter = token_counter_for_model(&self.model);
+        let Some(channel) = self.store.get_channel(channel_id).await.ok().flatten() else {
+            return Vec::new();
+        };
+        let participants: Vec<AgentId> = if channel.is_conversation() {
+            match self.store.list_channel_participants(channel_id).await {
+                Ok(participants) if !participants.is_empty() => participants
+                    .into_iter()
+                    .map(|participant| participant.agent_id)
+                    .collect(),
+                _ => channel.agent_id.clone().into_iter().collect(),
+            }
+        } else {
+            return Vec::new();
+        };
+
+        participants
+            .into_iter()
+            .filter_map(|agent_id| {
+                let agent = agents.iter().find(|agent| agent.id == agent_id)?;
+                let tool_tokens = serde_json::to_string(&self.tools.definitions_for(&agent.tools))
+                    .map(|serialized| counter.count(&serialized))
+                    .unwrap_or(0);
+                Some(ParticipantCapacity {
+                    agent_id: agent.id.clone(),
+                    usable_window,
+                    tool_tokens,
+                })
+            })
+            .collect()
+    }
+
     /// Answer `message` on behalf of the agents it mentions.
     ///
     /// Runs in the caller's task; [`Self::spawn_reply`] is the version a request
@@ -144,6 +209,7 @@ impl TurnExecutor {
             return Ok(());
         };
         let service = self.service(&workspace_id);
+        let capacity = self.participant_capacity(&workspace_id, channel_id).await;
         let report = service
             .reply(
                 channel_id,
@@ -151,7 +217,10 @@ impl TurnExecutor {
                 self.llm.clone(),
                 self.tools.clone(),
                 &self.model,
-                &ChannelTurnOptions::default(),
+                &ChannelTurnOptions {
+                    participant_capacity: capacity,
+                    ..ChannelTurnOptions::default()
+                },
             )
             .await?;
 
@@ -238,6 +307,8 @@ mod tests {
             base_url: None,
             api_key: None,
             model: "mock".to_string(),
+            context_window: None,
+            max_output_tokens: None,
         };
         TurnExecutor::new(store, EventBus::default_bus(), &config, directory.path())
             .await
