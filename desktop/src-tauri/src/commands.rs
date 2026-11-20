@@ -227,9 +227,13 @@ pub async fn post_message(
         .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
     let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
 
-    // A single-agent conversation keeps the M2 pre-send capacity block. A
-    // group is not pre-blocked: the service checks each selected branch after
-    // routing. The view supplies the per-participant windows for that check.
+    // The capacity rule lives in the service (`ChannelAgentService::reply`), so
+    // every transport applies it the same way. The desktop keeps one cheap
+    // pre-send refusal on top of it: a conversation that is already full cannot
+    // get an answer, and saying so before the message is stored beats storing
+    // it and posting a notice. Auto-compaction moved into the service for the
+    // same reason — it needs the provider, and only the service has it on every
+    // transport (ADR-0055).
     let mut participant_capacity = Vec::new();
     let (llm, model) = if channel.is_conversation() {
         let settings = state
@@ -239,30 +243,11 @@ pub async fn post_message(
             .map_err(|error| error.to_string())?;
         let runtime = conversation_runtime(&state, &settings);
         let counter = token_counter_for_model(&settings.model);
-        let mut view = conversation_context_view(&state, &channel_id).await?;
+        let view = conversation_context_view(&state, &channel_id).await?;
 
         if view.participants.len() <= 1 {
             let pending = counter.count_message(content.trim());
             if let Some(usable) = view.usable_tokens {
-                let projected = view.total_tokens.saturating_add(pending);
-                let threshold_reached = settings.auto_compact
-                    && state.local_client.is_some()
-                    && u64::from(projected) * 100
-                        >= u64::from(usable) * u64::from(settings.compact_threshold);
-                if threshold_reached {
-                    let outcome = local(&state)?
-                        .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    if outcome.in_progress {
-                        return Err(
-                            "This conversation's context is already being compacted. Try again \
-                             shortly."
-                                .to_string(),
-                        );
-                    }
-                    view = conversation_context_view(&state, &channel_id).await?;
-                }
                 if view.total_tokens.saturating_add(pending) >= usable {
                     return Err(
                         "This conversation's context is full. Compact the context, clear it, or \

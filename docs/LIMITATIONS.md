@@ -74,12 +74,14 @@ tracked.
 - **A server turn has no spending ceiling.** A deployment that answers turns
   itself spends on a model with nobody present. The approval gate bounds which
   tools run, not how many tokens a turn uses, and there is no per-workspace
-  budget yet.
-- **Server-side group routing skips the capacity gate.** A group conversation
-  normally skips a participant whose context branch is full, using the window
-  the desktop knows from its model metadata. The server passes no window, so
-  that percentage gate is inactive there and a full branch surfaces as a turn
-  failure instead of a skip.
+  budget yet. A turn's context size *is* bounded when the operator sets
+  `COWBOT_SERVER_LLM_CONTEXT_WINDOW`: a full conversation branch is then skipped
+  rather than sent, the same way a full group participant is.
+- **Server-side group routing skips the capacity gate unless a window is set.**
+  A group conversation normally skips a participant whose context branch is
+  full, using the window the desktop knows from its model metadata. The server
+  passes one only when the operator declares `COWBOT_SERVER_LLM_CONTEXT_WINDOW`,
+  so without it a full branch surfaces as a turn failure instead of a skip.
 - **The server has no rate limiting.** A shared deployment has no per-user or
   per-workspace request ceiling; an API token or session can issue requests as
   fast as the client and proxy allow. `429` responses are handled by the desktop

@@ -614,6 +614,75 @@ async fn usage_is_attributed_to_the_conversation_channel() {
 }
 
 #[tokio::test]
+async fn a_single_conversation_skips_a_full_branch_instead_of_overrunning() {
+    // The single-participant path has no routing step, so nothing checks the
+    // branch after routing the way a group does. Without a check here a server
+    // turn would send a request larger than the window and fail opaquely
+    // (ADR-0055). This pins the skip and the notice.
+    let (store, agent, service, channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(RecordingLlm::new());
+    let message = post_user(&channels, &channel, "one more question").await;
+    let mut turn_options = options();
+    // A window far smaller than the branch, so the check must trip.
+    turn_options.participant_capacity = vec![ParticipantCapacity {
+        agent_id: agent.id.clone(),
+        usable_window: 1_000,
+        tool_tokens: 0,
+    }];
+
+    let report = service
+        .reply(
+            &channel.id,
+            &message,
+            llm.clone(),
+            ToolRegistry::new(),
+            &turn_options,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.skipped, vec![agent.id.clone()]);
+    assert!(report.replied.is_empty());
+    // The model was never called: the check runs before the request is built.
+    assert!(llm.requests().is_empty());
+
+    let messages = channels.list_messages(&channel.id, 50).await.unwrap();
+    assert!(messages.iter().any(|message| {
+        message.sender == Sender::System && message.content.contains("context is full")
+    }));
+}
+
+#[tokio::test]
+async fn a_single_conversation_without_a_window_is_not_blocked() {
+    // A caller that cannot tell us the window (the CLI, the server without
+    // COWBOT_SERVER_LLM_CONTEXT_WINDOW) must not be guessed at: the check is
+    // skipped and the turn runs, matching the group capacity gate.
+    let (store, agent, service, channels, channel) = setup().await;
+    seed_large_entries(&store, &channel, &agent.id, 6).await;
+
+    let llm = Arc::new(RecordingLlm::new());
+    let message = post_user(&channels, &channel, "one more question").await;
+    let report = service
+        .reply(
+            &channel.id,
+            &message,
+            llm.clone(),
+            ToolRegistry::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+    // A single-participant turn reports its addressee in `agents`, not in
+    // `replied` (which the group path fills).
+    assert_eq!(report.agents, vec![agent.id.clone()]);
+    assert!(report.skipped.is_empty());
+    assert_eq!(llm.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn compaction_summarizes_old_entries_and_keeps_recent_ones() {
     let (store, agent, service, channels, channel) = setup().await;
     for index in 0..6 {

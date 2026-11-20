@@ -528,6 +528,114 @@ impl ConversationService {
         let agents = self.store.list_agents(&self.workspace_id).await?;
         let counter = token_counter_for_model(&settings.model);
 
+        // A single-participant conversation has no routing step, so nothing
+        // checks the branch after routing the way the group path does. This is
+        // the only place a budget can be enforced, and it has to be here rather
+        // than in each caller: the desktop runs the same turn, and a check that
+        // lives in one transport lets the other overrun (ADR-0055).
+        //
+        // The window comes from the caller because the service does not own
+        // model metadata. A caller that passes none — the CLI, the server's
+        // executor — is saying it cannot tell us, and the check is skipped
+        // rather than guessed, matching the group capacity gate.
+        if let Some(capacity) = options
+            .participant_capacity
+            .iter()
+            .find(|capacity| capacity.agent_id == agent.id)
+        {
+            let window = capacity.usable_window;
+            if window > 0 {
+                let pending = counter.count_message(message.content.trim());
+                let mut projection = self
+                    .branch_projection(
+                        counter.as_ref(),
+                        channel,
+                        agent,
+                        participants,
+                        None,
+                        options.platform_context.as_deref(),
+                        &agents,
+                        capacity.tool_tokens,
+                    )
+                    .await?;
+                let percent = context_usage_state(
+                    projection.total_tokens().saturating_add(pending),
+                    Some(window),
+                )
+                .0;
+                let crosses =
+                    percent.is_some_and(|percent| percent >= settings.compact_threshold as f32);
+                let mut notice = None;
+                if settings.auto_compact && crosses {
+                    match self
+                        .compact_branch(channel, agent, llm.clone(), &settings.model, false)
+                        .await
+                    {
+                        Ok(outcome) if outcome.compacted => {
+                            self.channels
+                                .post_system_notice(
+                                    &channel.id,
+                                    &format!("Context compacted automatically for {}.", agent.name),
+                                )
+                                .await?;
+                            // The branch changed under us; the check below needs
+                            // the new size.
+                            projection = self
+                                .branch_projection(
+                                    counter.as_ref(),
+                                    channel,
+                                    agent,
+                                    participants,
+                                    None,
+                                    options.platform_context.as_deref(),
+                                    &agents,
+                                    capacity.tool_tokens,
+                                )
+                                .await?;
+                        }
+                        Ok(outcome) if outcome.in_progress => {
+                            notice = Some(
+                                "its context is being compacted; try again shortly".to_string(),
+                            );
+                        }
+                        Ok(outcome) if outcome.invalid_sequences => {
+                            notice = Some(
+                                "its context branch cannot be compacted; start a new conversation \
+                                 or re-import the workspace"
+                                    .to_string(),
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            // Automatic compaction is an optimization. A provider
+                            // or store failure must not abort the user's turn; the
+                            // capacity check below decides.
+                            tracing::warn!(
+                                error = %error,
+                                agent = %agent.name,
+                                "Automatic compaction failed; answering without it"
+                            );
+                        }
+                    }
+                }
+                if projection.total_tokens().saturating_add(pending) >= window {
+                    let notice = match notice {
+                        Some(detail) => format!("No reply was posted: {}.", detail),
+                        None => "This conversation's context is full. Compact the context, \
+                                 clear it, or start a new conversation before sending."
+                            .to_string(),
+                    };
+                    self.channels
+                        .post_system_notice(&channel.id, &notice)
+                        .await?;
+                    return Ok(ChannelTurnReport {
+                        skipped: vec![agent.id.clone()],
+                        ..ChannelTurnReport::default()
+                    });
+                }
+            }
+        }
+
         // The user message enters the branch before assembly, so the model
         // request is exactly the active branch plus a fresh system prompt.
         let mut user_entry = ContextEntry::new(

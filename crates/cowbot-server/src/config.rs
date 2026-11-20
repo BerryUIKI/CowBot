@@ -65,6 +65,18 @@ pub struct ServerLlmConfig {
     /// never writes it anywhere or returns it from an API.
     pub api_key: Option<String>,
     pub model: String,
+    /// Context window the endpoint advertises for `model`, if the operator
+    /// knows it.
+    ///
+    /// A conversation's capacity check needs this and the server has no model
+    /// catalogue of its own, so it is configuration rather than discovery. Left
+    /// unset, the check is skipped and a full branch surfaces as a turn failure
+    /// instead of a skip — the same degraded behavior a group has when the
+    /// desktop passes no window.
+    pub context_window: Option<u32>,
+    /// Output limit the endpoint advertises for `model`, subtracted from the
+    /// window when computing what a turn may use.
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ServerLlmConfig {
@@ -74,11 +86,21 @@ impl ServerLlmConfig {
     /// configuration error rather than a silent fallback, the same rule the
     /// rest of this struct applies to a mistyped value.
     pub fn from_env() -> Result<Option<Self>, String> {
+        let context_window = parse_optional_number(
+            "COWBOT_SERVER_LLM_CONTEXT_WINDOW",
+            read("COWBOT_SERVER_LLM_CONTEXT_WINDOW"),
+        )?;
+        let max_output_tokens = parse_optional_number(
+            "COWBOT_SERVER_LLM_MAX_OUTPUT_TOKENS",
+            read("COWBOT_SERVER_LLM_MAX_OUTPUT_TOKENS"),
+        )?;
         Self::from_values(
             read("COWBOT_SERVER_LLM_PROTOCOL"),
             read("COWBOT_SERVER_LLM_BASE_URL"),
             read("COWBOT_SERVER_LLM_API_KEY"),
             read("COWBOT_SERVER_LLM_MODEL"),
+            context_window,
+            max_output_tokens,
         )
     }
 
@@ -89,6 +111,8 @@ impl ServerLlmConfig {
         base_url: Option<String>,
         api_key: Option<String>,
         model: Option<String>,
+        context_window: Option<u32>,
+        max_output_tokens: Option<u32>,
     ) -> Result<Option<Self>, String> {
         if protocol.is_none() && base_url.is_none() && api_key.is_none() && model.is_none() {
             return Ok(None);
@@ -110,6 +134,8 @@ impl ServerLlmConfig {
                 base_url,
                 api_key,
                 model: model.unwrap_or_else(|| "mock".to_string()),
+                context_window,
+                max_output_tokens,
             }));
         }
 
@@ -124,6 +150,8 @@ impl ServerLlmConfig {
             base_url: Some(base_url),
             api_key,
             model,
+            context_window,
+            max_output_tokens,
         }))
     }
 
@@ -156,6 +184,21 @@ fn read(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// Parse an optional numeric variable, naming it in the error.
+///
+/// A value that does not parse stops the server for the same reason every other
+/// setting does: a mistyped window would silently disable the capacity check,
+/// and the operator would have no way to notice.
+fn parse_optional_number(name: &str, value: Option<String>) -> Result<Option<u32>, String> {
+    match value {
+        None => Ok(None),
+        Some(raw) => raw
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{name} is not a number: '{raw}'")),
+    }
 }
 
 /// Everything the server needs to start.
@@ -298,7 +341,7 @@ mod tests {
     fn no_llm_variables_means_no_turn_execution() {
         // The regression that matters most: a deployment that sets none of the
         // four variables behaves exactly as it did before the executor existed.
-        let config = ServerLlmConfig::from_values(None, None, None, None).unwrap();
+        let config = ServerLlmConfig::from_values(None, None, None, None, None, None).unwrap();
         assert!(config.is_none());
     }
 
@@ -311,6 +354,8 @@ mod tests {
             None,
             Some("key".into()),
             Some("gpt-4o".into()),
+            None,
+            None,
         );
         assert!(missing_endpoint.unwrap_err().contains("BASE_URL"));
 
@@ -319,11 +364,19 @@ mod tests {
             Some("http://x".into()),
             None,
             None,
+            None,
+            None,
         );
         assert!(missing_model.unwrap_err().contains("MODEL"));
 
-        let missing_protocol =
-            ServerLlmConfig::from_values(None, Some("http://x".into()), None, Some("m".into()));
+        let missing_protocol = ServerLlmConfig::from_values(
+            None,
+            Some("http://x".into()),
+            None,
+            Some("m".into()),
+            None,
+            None,
+        );
         assert!(missing_protocol.unwrap_err().contains("PROTOCOL"));
     }
 
@@ -331,12 +384,43 @@ mod tests {
     fn a_mock_needs_neither_endpoint_nor_model() {
         // The only configuration that runs without a key, and therefore the one
         // every executor test uses.
-        let config = ServerLlmConfig::from_values(Some("mock".into()), None, None, None)
-            .unwrap()
-            .expect("a mock is a configured LLM");
+        let config =
+            ServerLlmConfig::from_values(Some("mock".into()), None, None, None, None, None)
+                .unwrap()
+                .expect("a mock is a configured LLM");
         assert_eq!(config.protocol, ServerLlmProtocol::Mock);
         assert_eq!(config.model, "mock");
         assert!(config.base_url.is_none());
+    }
+
+    #[test]
+    fn a_declared_window_reaches_the_capacity_check() {
+        // Without this the server cannot enforce a budget at all: the service
+        // skips the check when the caller passes no window, so an operator who
+        // sets these two variables is the only way a server turn is bounded.
+        let config = ServerLlmConfig::from_values(
+            Some("openai-chat".into()),
+            Some("https://api.openai.com/v1".into()),
+            Some("key".into()),
+            Some("gpt-4o".into()),
+            Some(128_000),
+            Some(4_096),
+        )
+        .unwrap()
+        .expect("a configured LLM");
+        assert_eq!(config.context_window, Some(128_000));
+        assert_eq!(config.max_output_tokens, Some(4_096));
+    }
+
+    #[test]
+    fn a_mistyped_window_is_an_error_rather_than_a_silent_skip() {
+        // A window that quietly fails to parse would disable the capacity
+        // check without the operator noticing.
+        let error = parse_optional_number("COWBOT_SERVER_LLM_CONTEXT_WINDOW", Some("128k".into()))
+            .unwrap_err();
+        assert!(error.contains("128k"));
+        assert!(error.contains("COWBOT_SERVER_LLM_CONTEXT_WINDOW"));
+        assert_eq!(parse_optional_number("X", None).unwrap(), None);
     }
 
     #[test]
@@ -346,6 +430,8 @@ mod tests {
             Some("https://api.anthropic.com/v1".into()),
             Some("secret".into()),
             Some("claude-sonnet-5-5".into()),
+            None,
+            None,
         )
         .unwrap()
         .expect("a remote provider is a configured LLM");
@@ -363,7 +449,8 @@ mod tests {
     #[test]
     fn an_unknown_protocol_names_what_is_accepted() {
         let error =
-            ServerLlmConfig::from_values(Some("gemini".into()), None, None, None).unwrap_err();
+            ServerLlmConfig::from_values(Some("gemini".into()), None, None, None, None, None)
+                .unwrap_err();
         assert!(error.contains("gemini"));
         assert!(error.contains("openai-chat"));
         assert!(error.contains("mock"));
