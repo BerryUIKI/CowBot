@@ -36,10 +36,53 @@ single-machine trial working.
 | `COWBOT_SERVER_SESSION_HOURS` | `336` (two weeks) | Session lifetime |
 | `COWBOT_SERVER_LOGIN_ATTEMPTS` | `10` | Failed sign-ins per source before refusal |
 | `COWBOT_SERVER_LOGIN_WINDOW_SECS` | `900` | Rate-limit window |
+| `COWBOT_SERVER_WORKSPACE_DIR` | `cowbot-workspace` | Directory the file tools are rooted at and the sandbox runs in |
+| `COWBOT_SERVER_LLM_PROTOCOL` | unset | `openai-chat`, `anthropic`, `openai-responses`, or `mock` |
+| `COWBOT_SERVER_LLM_BASE_URL` | unset | Provider endpoint; required for every protocol but `mock` |
+| `COWBOT_SERVER_LLM_API_KEY` | unset | Provider key; never written or returned by the API |
+| `COWBOT_SERVER_LLM_MODEL` | unset (or `mock`) | Model every channel turn is answered with |
 
 A value that does not parse stops the server with a message rather than silently
 falling back — a mistyped listen address should not move the server somewhere
 unexpected.
+
+### Answering channel turns
+
+The four `COWBOT_SERVER_LLM_*` variables are all-or-nothing. Set none and the
+server stores a posted message and runs no turn, which is what a server has
+always done: the reply is the job of whichever desktop holds the model
+provider. Set all of them and the server answers a message that mentions an
+agent itself, with no desktop in the loop — see
+[ADR-0055](ADR/0055-server-side-turn-execution.md).
+
+```bash
+COWBOT_SERVER_LLM_PROTOCOL=openai-chat \
+COWBOT_SERVER_LLM_BASE_URL=https://api.openai.com/v1 \
+COWBOT_SERVER_LLM_API_KEY=sk-... \
+COWBOT_SERVER_LLM_MODEL=gpt-4o \
+cowbot-server
+```
+
+Setting only some of them is a startup error naming the missing one, rather than
+a server that starts and then fails every turn.
+
+`COWBOT_SERVER_LLM_PROTOCOL=mock` answers with an echo provider and needs
+neither a key nor an endpoint. It exists so a deployment can be stood up and
+tested end to end without spending on a model, and so the acceptance tests run
+in CI.
+
+**The server's agent is deliberately less capable than a desktop's.** A server
+turn can run code and read or write files inside `COWBOT_SERVER_WORKSPACE_DIR`,
+and nothing else. The desktop's workspace tools — creating a channel,
+instantiating a team, queueing a task, reaching a registered git project —
+assume a local project folder the server does not have, so they are not
+registered. Approvals still apply: a risky tool call in a server turn creates
+the same pending approval the API lists at
+`GET /api/v1/workspaces/{id}/approvals`.
+
+Two limits are worth knowing before deploying this: the server cannot stream a
+turn into a remote client's timeline while it runs (the answer appears when the
+turn settles), and a turn cannot be cancelled through the API.
 
 ## Running from source
 

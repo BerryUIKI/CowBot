@@ -1,7 +1,7 @@
 # What CowBot does today, and what it does not
 
 **Applies to:** CowBot 0.1.16 and the `dev` branch at the time of writing.
-**Last reviewed:** 2026-11-19.
+**Last reviewed:** 2026-11-21.
 
 This page is the honest boundary of the product. It says what works, what does
 not, and which behaviours are deliberate choices that may surprise you. The
@@ -30,7 +30,7 @@ server shares a workspace with a small team over HTTP and WebSocket.
 | Composer | Sixteen `/commands` as desktop actions, and `/btw` for a side question that never enters the conversation |
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
-| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace |
+| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace. A deployment can configure one model provider and answer channel turns itself, with no desktop running (ADR-0055) |
 | Interface | Thirteen languages (English, Simplified and Traditional Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese, Latin American and European Spanish), with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
@@ -41,11 +41,16 @@ tracked.
 
 ### Collaboration and hosting
 
-- **Only one machine runs agent turns.** A remote client can read a conversation
-  and its context, but a turn still executes in the desktop's process with its
-  model provider, so a team member without that provider configured cannot make
-  an agent answer. Running crews, compacting context, and preparing worktrees
-  are therefore local to the machine that opened the workspace.
+- **Only a configured server or the desktop runs agent turns.** By default a
+  turn executes in the desktop's process with its model provider, so a team
+  member without that provider configured cannot make an agent answer. A server
+  can be configured to answer channel turns itself through four
+  `COWBOT_SERVER_LLM_*` variables ([ADR-0055](ADR/0055-server-side-turn-execution.md)),
+  but its agent is deliberately less capable: it can run code and read or write
+  files inside `COWBOT_SERVER_WORKSPACE_DIR`, and nothing else. The desktop's
+  workspace tools and project worktrees remain local. Running crews, compacting
+  context, and preparing worktrees are local to the machine that opened the
+  workspace.
 - **Some actions are hidden in server mode, not supported remotely.** Settings →
   Server switches between the local workspace and a server, and the controls
   that need this machine disappear rather than failing: running a task, project
@@ -62,7 +67,19 @@ tracked.
 - **No live-turn transport.** A remote client can read a conversation and its
   context, but streaming a live turn over the network and cancelling one are not
   available remotely. A dropped stream reconnects on its own and the window
-  reloads what it missed.
+  reloads what it missed. This also bounds a server-run turn: the socket opens a
+  bubble when a turn starts and then carries nothing until it settles, so the
+  answer appears at once rather than as it is written, and the only way to stop
+  one is to cancel the task behind it.
+- **A server turn has no spending ceiling.** A deployment that answers turns
+  itself spends on a model with nobody present. The approval gate bounds which
+  tools run, not how many tokens a turn uses, and there is no per-workspace
+  budget yet.
+- **Server-side group routing skips the capacity gate.** A group conversation
+  normally skips a participant whose context branch is full, using the window
+  the desktop knows from its model metadata. The server passes no window, so
+  that percentage gate is inactive there and a full branch surfaces as a turn
+  failure instead of a skip.
 - **The server has no rate limiting.** A shared deployment has no per-user or
   per-workspace request ceiling; an API token or session can issue requests as
   fast as the client and proxy allow. `429` responses are handled by the desktop

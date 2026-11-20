@@ -34,6 +34,10 @@ pub struct AppState {
     pub bus: cowbot_bus::EventBus,
     /// Session-scoped approval decisions, shared by every workspace.
     pub session_decisions: Arc<cowbot_service::SessionDecisions>,
+    /// Runs channel turns in this process. `None` when the deployment
+    /// configured no LLM, in which case a posted message is stored and no
+    /// answer arrives — the behaviour every server release had before ADR-0055.
+    pub turns: Option<Arc<crate::TurnExecutor>>,
 }
 
 impl AppState {
@@ -43,7 +47,14 @@ impl AppState {
             auth,
             bus,
             session_decisions: cowbot_service::SessionDecisions::new(),
+            turns: None,
         }
+    }
+
+    /// Attach a turn executor, enabling server-side answers (ADR-0055).
+    pub fn with_turns(mut self, turns: Arc<crate::TurnExecutor>) -> Self {
+        self.turns = Some(turns);
+        self
     }
 
     /// The channel service. It is not workspace-scoped; every call names a
