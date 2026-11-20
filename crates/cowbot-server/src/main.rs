@@ -49,7 +49,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Change it from POST /api/v1/auth/password after signing in.");
     }
 
-    let state = AppState::new(store, auth, cowbot_bus::EventBus::default_bus());
+    let state = AppState::new(store.clone(), auth, cowbot_bus::EventBus::default_bus());
+    let state = match &config.llm {
+        Some(llm) => {
+            let executor = cowbot_server::TurnExecutor::new(
+                store,
+                state.bus.clone(),
+                llm,
+                &config.workspace_dir,
+            )
+            .await?;
+            tracing::info!(
+                protocol = llm.protocol.as_str(),
+                model = %llm.model,
+                workspace_dir = %config.workspace_dir.display(),
+                "Server will answer channel turns"
+            );
+            state.with_turns(executor)
+        }
+        None => {
+            tracing::info!(
+                "No COWBOT_SERVER_LLM_* variables set: channel turns are stored but not answered"
+            );
+            state
+        }
+    };
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     tracing::info!(
         address = %config.address,

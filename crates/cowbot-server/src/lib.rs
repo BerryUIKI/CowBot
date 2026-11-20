@@ -24,9 +24,11 @@ pub mod stream;
 pub mod tasks;
 pub mod templates;
 pub mod tokens;
+pub mod turn_executor;
 pub mod workspaces;
 
 pub use auth::{AuthService, AuthenticatedUser, IssuedSession};
 pub use config::ServerConfig;
 pub use error::ApiError;
 pub use router::{app, AppState};
+pub use turn_executor::TurnExecutor;

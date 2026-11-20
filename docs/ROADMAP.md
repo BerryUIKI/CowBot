@@ -176,6 +176,15 @@ Delivered:
 > the four that need the machine it runs on. Schema migrations run on open and a
 > backup is one file ([ADR-0047](ADR/0047-hosting-the-workspace-data-surfaces.md)).
 
+> **Server-side turns** (the prerequisite for IM integrations, workstream 3.3):
+> a deployment that sets the four `COWBOT_SERVER_LLM_*` variables answers
+> channel turns in the server process, with no desktop running. One provider per
+> deployment, a narrow tool set rooted at `COWBOT_SERVER_WORKSPACE_DIR`, and the
+> reply delivered as an ordinary `MessagePosted` event
+> ([ADR-0055](ADR/0055-server-side-turn-execution.md)). Streaming a live turn
+> over the socket, cancelling one through the API, and a per-workspace provider
+> table remain open.
+
 ### 5.2 Phase 2 Exit Criteria
 
 - A team can deploy the server with Docker or a single binary and connect desktop clients over HTTPS.

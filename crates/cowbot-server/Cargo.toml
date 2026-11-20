@@ -11,6 +11,10 @@ cowbot-store = { workspace = true }
 cowbot-service = { workspace = true }
 cowbot-package = { workspace = true }
 cowbot-bus = { workspace = true }
+# The turn executor answers channel messages in this process, so the server
+# needs a provider and a tool set the way the desktop's runtime does (ADR-0055).
+cowbot-llm = { workspace = true }
+cowbot-tools = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
