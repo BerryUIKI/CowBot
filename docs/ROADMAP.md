@@ -203,7 +203,7 @@ Delivered:
 | --- | --- | --- |
 | 3.1 | Sandbox and execution | Docker sandbox backend; resource quotas; network policy; additional built-in tools |
 | 3.2 | Knowledge and retention | Project-scoped knowledge bases; retrieval-augmented context; memory retention and privacy controls; embeddings and hybrid retrieval |
-| 3.3 | Integrations | Webhooks; Mattermost, Slack, and Feishu adapters; optional browser access |
+| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md) |
 | 3.4 | Ecosystem | Plugin mechanism; MCP compatibility; template marketplace with signing; SDK for custom tools |
 | 3.5 | Enterprise readiness | OIDC/SSO; PostgreSQL backend; data-at-rest encryption; audit export; multi-workspace/organization management |
 | 3.6 | Scale and polish | Streaming responses; retries/backoff; rate limiting; token and cost accounting; performance and UX improvements |
