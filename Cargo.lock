@@ -487,6 +487,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-integrations"
+version = "0.1.16"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-service",
+ "cowbot-store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-llm"
 version = "0.1.16"
 dependencies = [
