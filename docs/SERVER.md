@@ -86,6 +86,17 @@ Two limits are worth knowing before deploying this: the server cannot stream a
 turn into a remote client's timeline while it runs (the answer appears when the
 turn settles), and a turn cannot be cancelled through the API.
 
+### IM integrations
+
+`cowbot-integrations` is the shared layer every IM adapter sits on: channel
+bindings, an inbound pipeline that dedupes a platform's retried delivery and
+attributes the message to the person who wrote it, and an outbound mirror that
+posts an agent's reply back into the IM
+([ADR-0056](ADR/0056-im-integrations.md)). **No platform adapter ships yet**, and
+there is no Settings surface or API route to create or bind an integration, so a
+deployment cannot currently connect one. The four tables the layer uses are
+created by migration `0021` and stay empty until one binds.
+
 Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
 whose branch no longer fits is then skipped with a notice instead of being sent
 and failing at the provider — and compaction, when the conversation has

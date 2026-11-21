@@ -185,6 +185,13 @@ Delivered:
 > over the socket, cancelling one through the API, and a per-workspace provider
 > table remain open.
 
+> **IM integrations, shared layer** (workstream 3.3, stage S1): the
+> `cowbot-integrations` crate defines the adapter contract, the inbound pipeline
+> (dedupe, echo suppression, mention translation), the outbound mirror with
+> platform-sized chunking, and per-account CowBot users, over four additive
+> tables ([ADR-0056](ADR/0056-im-integrations.md)). The platform adapters
+> themselves — Mattermost, Telegram, Slack, Feishu — are the stages that follow.
+
 ### 5.2 Phase 2 Exit Criteria
 
 - A team can deploy the server with Docker or a single binary and connect desktop clients over HTTPS.
@@ -212,7 +219,7 @@ Delivered:
 | --- | --- | --- |
 | 3.1 | Sandbox and execution | Docker sandbox backend; resource quotas; network policy; additional built-in tools |
 | 3.2 | Knowledge and retention | Project-scoped knowledge bases; retrieval-augmented context; memory retention and privacy controls; embeddings and hybrid retrieval |
-| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md) |
+| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md). The shared layer (adapter contract, bindings, inbound pipeline, outbound mirror) is built ([ADR-0056](ADR/0056-im-integrations.md)); the four platform adapters are not |
 | 3.4 | Ecosystem | Plugin mechanism; MCP compatibility; template marketplace with signing; SDK for custom tools |
 | 3.5 | Enterprise readiness | OIDC/SSO; PostgreSQL backend; data-at-rest encryption; audit export; multi-workspace/organization management |
 | 3.6 | Scale and polish | Streaming responses; retries/backoff; rate limiting; token and cost accounting; performance and UX improvements |

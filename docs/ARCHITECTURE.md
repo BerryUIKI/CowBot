@@ -232,6 +232,7 @@ Inspired by Claude Code's permission modes:
 | `cowbot-client` | Unified local/remote client abstraction | Existing (local mode; memory operations, recall preview, context preview) |
 | `desktop/` | Tauri v2 shell + React/TypeScript frontend | Existing (channels, single and group conversations, context tabs and colored bar, prompt/recall inspector, memory settings, tasks, approvals, worktrees, background tasks, settings, model providers) |
 | `cowbot-package` | `.cowpkg` / `.cowtemplate` import/export | Existing |
+| `cowbot-integrations` | The IM adapters' shared layer: adapter contract and registry, inbound pipeline (dedupe, echo suppression, mention translation), outbound mirror with platform-sized chunking, and per-account CowBot users | Existing (shared layer; no platform adapter yet, ADR-0056) |
 | `cowbot-desktop` | Tauri shell and frontend integration | Existing (`desktop/src-tauri`) |
 | Frontend app | React + TypeScript (channels, conversations, tasks, approvals, worktrees, background tasks, agent management UI) | Existing (`desktop/`) |
 
