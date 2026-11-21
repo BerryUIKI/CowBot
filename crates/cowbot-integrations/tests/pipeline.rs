@@ -515,6 +515,43 @@ async fn a_stopped_integration_stops_both_of_its_tasks() {
     assert!(adapter.delivered.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn a_message_posted_the_moment_start_returns_is_still_mirrored() {
+    // The mirror subscribes synchronously in `start`. Subscribing inside its
+    // task would leave a window where a reply posted right after `start`
+    // returned is never delivered, because the subscription did not exist yet.
+    let fixture = fixture().await;
+    let adapter = FakeAdapter::new();
+    let sink = Arc::new(ChannelSink::new(
+        fixture.store.clone(),
+        ChannelService::new(fixture.store.clone(), fixture.bus.clone()),
+        fixture.integration.clone(),
+    ));
+    let running = start(
+        fixture.store.clone(),
+        fixture.bus.clone(),
+        fixture.integration.clone(),
+        Arc::new(adapter.clone()),
+        sink,
+    );
+
+    ChannelService::new(fixture.store.clone(), fixture.bus.clone())
+        .post_message(
+            &fixture.channel.id,
+            Sender::Agent(AgentId("agent-1".into())),
+            "Immediately after start.",
+        )
+        .await
+        .unwrap();
+
+    wait_for_deliveries(&adapter, 1).await;
+    assert_eq!(
+        adapter.delivered.lock().unwrap()[0].1.text,
+        "Immediately after start."
+    );
+    running.stop();
+}
+
 // -- helpers ---------------------------------------------------------------
 
 async fn wait_for_messages(store: &Store, channel: &ChannelId, count: usize) {

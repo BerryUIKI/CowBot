@@ -23,13 +23,13 @@ use crate::outbound;
 /// One running integration: its adapter and the task driving it.
 pub struct Running {
     pub integration: IntegrationRecord,
-    adapter: Arc<dyn Integration>,
+    kind: cowbot_core::integration::IntegrationKind,
     cancel: CancelSignal,
 }
 
 impl Running {
     pub fn kind(&self) -> cowbot_core::integration::IntegrationKind {
-        self.adapter.kind()
+        self.kind
     }
 
     /// Stop this integration. Idempotent; the tasks exit at their own pace.
@@ -148,7 +148,7 @@ pub fn start(
 
     let mirror = Mirror {
         store,
-        bus,
+        events: bus.subscribe(),
         integration: record.clone(),
         adapter: adapter.clone(),
     };
@@ -158,8 +158,8 @@ pub fn start(
     });
 
     Running {
+        kind: record.kind,
         integration: record,
-        adapter,
         cancel,
     }
 }
@@ -167,20 +167,24 @@ pub fn start(
 /// The outbound half: bus events in, platform posts out.
 struct Mirror {
     store: Store,
-    bus: EventBus,
+    /// Taken synchronously by [`start`], before the task runs.
+    ///
+    /// Subscribing inside the task would leave a window between `start`
+    /// returning and the subscription existing, and an agent reply in that
+    /// window would never reach the IM.
+    events: tokio::sync::broadcast::Receiver<cowbot_core::event::Event>,
     integration: IntegrationRecord,
     adapter: Arc<dyn Integration>,
 }
 
 impl Mirror {
-    async fn run(self, cancel: CancelSignal) {
-        let mut events = self.bus.subscribe();
+    async fn run(mut self, cancel: CancelSignal) {
         loop {
             tokio::select! {
                 // Woken the instant the integration is stopped, rather than at
                 // the next event, so a quiet channel does not delay shutdown.
                 () = cancel.cancelled() => break,
-                received = events.recv() => match received {
+                received = self.events.recv() => match received {
                     Ok(event) => {
                         if let Err(error) = self.mirror_one(&event.payload).await {
                             warn!(
