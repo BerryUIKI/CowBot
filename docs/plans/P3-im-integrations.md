@@ -1,6 +1,9 @@
 # P3 — IM integrations (research and proposal)
 
-- Status: Research only — nothing implemented
+- Status: Research, with S0 and S1 built. S0 (server-side turns) is
+  [ADR-0055](../ADR/0055-server-side-turn-execution.md); S1 (the shared adapter
+  layer) is [ADR-0056](../ADR/0056-im-integrations.md). No platform adapter
+  exists yet.
 - Date: 2026-11-20
 - Related: [ADR-0043](../ADR/0043-self-hosted-server-auth.md),
   [ADR-0045](../ADR/0045-collaboration-api-and-remote-client.md),

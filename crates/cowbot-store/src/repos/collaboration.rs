@@ -198,6 +198,26 @@ impl Store {
         Ok(())
     }
 
+    /// Move a channel to another workspace.
+    ///
+    /// Only a test or a repair needs this: the service never moves a channel,
+    /// because its messages, participants, and bindings would follow it into a
+    /// team that never saw them. It exists so the guard against delivering an IM
+    /// message into another workspace's channel can be exercised.
+    pub async fn move_channel_to_workspace(
+        &self,
+        id: &ChannelId,
+        workspace_id: &WorkspaceId,
+    ) -> CowResult<()> {
+        sqlx::query("UPDATE channels SET workspace_id = ? WHERE id = ?")
+            .bind(&workspace_id.0)
+            .bind(&id.0)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
     pub async fn delete_channel(&self, id: &ChannelId) -> CowResult<()> {
         sqlx::query("DELETE FROM channels WHERE id = ?")
             .bind(&id.0)

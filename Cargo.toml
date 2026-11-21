@@ -9,6 +9,7 @@ members = [
     "crates/cowbot-client",
     "crates/cowbot-package",
     "crates/cowbot-service",
+    "crates/cowbot-integrations",
     "crates/cowbot-cli",
     "crates/cowbot-server",
 ]
@@ -65,4 +66,5 @@ cowbot-store = { path = "crates/cowbot-store" }
 cowbot-client = { path = "crates/cowbot-client" }
 cowbot-package = { path = "crates/cowbot-package" }
 cowbot-service = { path = "crates/cowbot-service" }
+cowbot-integrations = { path = "crates/cowbot-integrations" }
 cowbot-server = { path = "crates/cowbot-server" }

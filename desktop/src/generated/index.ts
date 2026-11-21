@@ -45,6 +45,7 @@ export type { ConversationParticipantContext } from "./ConversationParticipantCo
 export type { ConversationSettings } from "./ConversationSettings";
 export type { ConversationSettingsUpdate } from "./ConversationSettingsUpdate";
 export type { ConversationTurn } from "./ConversationTurn";
+export type { IntegrationKind } from "./IntegrationKind";
 export type { LlmCallKind } from "./LlmCallKind";
 export type { LlmPromptSnapshot } from "./LlmPromptSnapshot";
 export type { MemoryEntry } from "./MemoryEntry";

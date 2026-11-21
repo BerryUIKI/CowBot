@@ -95,6 +95,22 @@ tracked.
   both numbers instead of failing later on an unexpected response; update the
   older side.
 
+- **No IM integration ships yet.** The shared layer exists — an adapter contract,
+  channel bindings, an inbound pipeline with dedupe and echo suppression, an
+  outbound mirror, and per-account CowBot users
+  ([ADR-0056](ADR/0056-im-integrations.md)) — but none of the four platform
+  adapters (Mattermost, Telegram, Slack, Feishu) is built, and there is no
+  Settings surface to create or bind an integration. A deployment cannot yet talk
+  to a CowBot agent from an IM.
+- **An integration's configuration is stored unencrypted.** A bot token is kept
+  as JSON in the deployment's database; a reader of that file sees it. It never
+  appears in an API response, a log line, or a `.cowpkg`, but there is no
+  encryption at rest and no key management.
+- **Each IM account becomes a CowBot user.** A platform account that writes to a
+  bound channel is provisioned a `Member` row on first sight, with no password so
+  it cannot sign in. In a large tenant the user list grows with the IM directory,
+  and no retention action removes an account that stopped writing.
+
 ### Isolation and security
 
 - **The sandbox is not an isolation boundary.** Code execution runs as your host
