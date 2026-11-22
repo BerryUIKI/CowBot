@@ -110,29 +110,46 @@ The configuration — endpoint, bot token, signing secret — is sent once on cr
 and **never returned**. It is stored as JSON in the database with no encryption at
 rest, so a reader of that file sees a bot token.
 
-**Mattermost is the one platform this build can run**
-([ADR-0057](ADR-0057-mattermost-adapter.md)). Its configuration is:
+**Mattermost and Telegram are the platforms this build can run**
+([ADR-0057](ADR-0057-mattermost-adapter.md), [ADR-0058](ADR-0058-telegram-adapter.md)).
+Their configurations are:
 
 ```json
 { "base_url": "https://chat.example.com", "bot_token": "…" }
 ```
 
-The bot's own user id and the server's post size limit are read from the server,
-so those are the only two values to supply. Telegram, Slack, and Feishu report
-`supported: false` — a row can be created for them and a conversation bound, but
-nothing runs it.
+```json
+{ "bot_token": "123456:ABC-DEF…" }
+```
+
+The Mattermost bot's own user id and the server's post size limit are read from
+the server, so those are the only two values to supply. Telegram needs only the
+token BotFather issued; `api_base` is optional and points a deployment at a
+self-hosted Bot API server. Slack and Feishu report `supported: false` — a row can
+be created for them and a conversation bound, but nothing runs it.
+
+**Neither adapter needs an inbound surface.** A Mattermost bot opens a WebSocket
+to its own server; a Telegram bot long-polls `getUpdates`. Neither needs a public
+DNS name, a reverse proxy, or TLS termination in front of CowBot, which also means
+neither needs a signature check or a replay window.
+
+**A Telegram binding is a chat id, which is a signed integer.** Get it from the
+group or channel, or from the person's first message to the bot. A bot cannot open
+a private chat: the person has to message it once before the binding can post.
 
 An integration starts with the server, and only when a model provider is
 configured: a bot that stores a question and cannot answer it is worse than one
 that is not running. Retire one through the API and restart to stop it.
 
-**The bot must be a member of the channels it is bound to.** Mattermost delivers
-posts only for channels the bot has joined, and a binding that misses one is
-silent rather than broken. Two things check it: a bind responds with a `health` of
-`reachable`, `unreachable`, or `unknown` and the reason, and startup posts a notice
-into the CowBot channel of any binding that cannot receive. `unknown` means the
-check could not run — it is never treated as success. A bot removed from a channel
-after startup is not noticed until the next restart.
+**The bot must be able to reach the conversation it is bound to.** Mattermost
+delivers posts only for channels the bot has joined; Telegram delivers only from
+chats the bot was added to, and in a Telegram channel it must be an administrator
+to post at all. Either way a binding that misses the requirement is silent rather
+than broken. Two things check it: a bind responds with a `health` of `reachable`,
+`unreachable`, or `unknown` and the reason, and startup posts a notice into the
+CowBot channel of any binding that cannot receive. `unknown` means the check could
+not run — it is never treated as success. A bot removed from a chat after startup
+is not noticed until the next restart.
 
 Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
 whose branch no longer fits is then skipped with a notice instead of being sent
