@@ -337,6 +337,7 @@ export const ja: Catalog = {
       binding: "紐付ける",
       bindingBusy: "紐付け中…",
       bound: "会話を紐付けました。",
+      boundUnreachable: "会話は紐付けましたが、ボットはまだそこに到達できません: {reason}",
       unbind: "紐付けを解除",
       unbinding: "解除中…",
       error: "操作に失敗しました: {error}",

@@ -339,6 +339,7 @@ export const de: Catalog = {
       binding: "Binden",
       bindingBusy: "Wird gebunden…",
       bound: "Unterhaltung gebunden.",
+      boundUnreachable: "Die Unterhaltung ist gebunden, aber der Bot erreicht sie noch nicht: {reason}",
       unbind: "Lösen",
       unbinding: "Wird gelöst…",
       error: "Die Aktion ist fehlgeschlagen: {error}",

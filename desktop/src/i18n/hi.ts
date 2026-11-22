@@ -332,6 +332,7 @@ export const hi: Catalog = {
       binding: "जोड़ें",
       bindingBusy: "जोड़ा जा रहा है…",
       bound: "बातचीत जुड़ गई।",
+      boundUnreachable: "बातचीत जुड़ गई, लेकिन बॉट अभी उस तक नहीं पहुँच सकता: {reason}",
       unbind: "हटाएँ",
       unbinding: "हटाया जा रहा है…",
       error: "कार्रवाई विफल रही: {error}",

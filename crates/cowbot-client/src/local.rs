@@ -1310,6 +1310,8 @@ fn binding_view(binding: IntegrationBinding) -> BindingView {
         external_id: binding.external_id,
         channel_id: binding.channel_id,
         agent_id: binding.agent_id,
+        // A local workspace starts no adapter, so there is nothing to ask.
+        health: None,
     }
 }
 

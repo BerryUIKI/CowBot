@@ -118,6 +118,37 @@ impl Rest {
         self.get_json(&format!("/users/{user_id}")).await
     }
 
+    /// Whether `user_id` is a member of `channel_id`.
+    ///
+    /// Mattermost answers `201` with a member object when the user is in the
+    /// channel, and `400` with a `not_in_channel` style error when they are not.
+    /// That `400` is the answer this exists to read, so it is mapped rather than
+    /// propagated: "the bot is not in this channel" is a fact about the binding,
+    /// not a failure of the request.
+    pub async fn is_channel_member(&self, channel_id: &str, user_id: &str) -> CowResult<bool> {
+        let response = self
+            .http
+            .get(
+                self.config
+                    .api(&format!("/channels/{channel_id}/members/{user_id}")),
+            )
+            .bearer_auth(self.token())
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::BAD_REQUEST {
+            return Ok(false);
+        }
+        // A 401 or a 5xx is not an answer about membership; reporting `false`
+        // would tell an operator to fix a binding that is fine.
+        Err(rejected("checking channel membership", status, response).await)
+    }
+
     /// The server's configuration, for the post size limit.
     pub async fn server_config(&self) -> CowResult<ServerConfig> {
         self.get_json("/config/client?format=json").await

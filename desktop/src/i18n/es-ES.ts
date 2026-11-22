@@ -334,6 +334,7 @@ export const esES: Catalog = {
       binding: "Vincular",
       bindingBusy: "Vinculando…",
       bound: "Conversación vinculada.",
+      boundUnreachable: "La conversación se ha vinculado, pero el bot todavía no puede alcanzarla: {reason}",
       unbind: "Desvincular",
       unbinding: "Desvinculando…",
       error: "La acción falló: {error}",

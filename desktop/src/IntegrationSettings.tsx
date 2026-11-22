@@ -131,7 +131,7 @@ export default function IntegrationSettings() {
     setNotice(null);
     setBusy(`bind:${integrationId}`);
     try {
-      await bindIntegrationChannel(
+      const bound = await bindIntegrationChannel(
         integrationId,
         externalId,
         channelId,
@@ -140,7 +140,14 @@ export default function IntegrationSettings() {
       setExternalId("");
       setChannelId("");
       setAgentId("");
-      setNotice(t("settings.integrations.bound"));
+      // A binding the adapter could not confirm is worth saying now: the
+      // operator is still on the screen and can go add the bot to the channel.
+      const detail = bound.health?.detail;
+      setNotice(
+        bound.health && bound.health.status !== "reachable" && detail
+          ? t("settings.integrations.boundUnreachable", { reason: detail })
+          : t("settings.integrations.bound"),
+      );
       await loadBindings(integrationId);
       await refresh();
     } catch (err) {

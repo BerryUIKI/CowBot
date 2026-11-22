@@ -340,6 +340,7 @@ export const it: Catalog = {
       binding: "Collega",
       bindingBusy: "Collegamento…",
       bound: "Conversazione collegata.",
+      boundUnreachable: "La conversazione è collegata, ma il bot non riesce ancora a raggiungerla: {reason}",
       unbind: "Scollega",
       unbinding: "Scollegamento…",
       error: "L’azione non è riuscita: {error}",

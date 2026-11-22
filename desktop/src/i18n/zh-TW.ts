@@ -315,6 +315,7 @@ export const zhTW: Catalog = {
       "binding": "綁定",
       "bindingBusy": "正在綁定…",
       "bound": "對話已綁定。",
+      "boundUnreachable": "對話已綁定，但機器人暫時還收不到它的訊息：{reason}",
       "unbind": "解除綁定",
       "unbinding": "正在解除…",
       "error": "操作失敗：{error}",

@@ -341,6 +341,7 @@ export const en = {
       binding: "Bind",
       bindingBusy: "Binding…",
       bound: "Conversation bound.",
+      boundUnreachable: "The conversation was bound, but the bot cannot reach it yet: {reason}",
       unbind: "Unbind",
       unbinding: "Unbinding…",
       error: "The action failed: {error}",

@@ -13,7 +13,7 @@ use cowbot_core::error::CowResult;
 use cowbot_core::integration::IntegrationKind;
 use cowbot_store::Store;
 
-use crate::model::{DeliveredId, OutboundContent, OutboundTarget};
+use crate::model::{BindingHealth, DeliveredId, OutboundContent, OutboundTarget};
 
 /// What an adapter is given when it starts.
 ///
@@ -23,6 +23,12 @@ use crate::model::{DeliveredId, OutboundContent, OutboundTarget};
 #[derive(Clone)]
 pub struct IntegrationContext {
     pub store: Store,
+    /// The deployment's event bus.
+    ///
+    /// Carried so an adapter can post a notice the way a turn does. A bus of its
+    /// own would write the notice to the database and publish it to nobody, which
+    /// is a notice no client ever sees.
+    pub bus: cowbot_bus::EventBus,
     /// The integration this adapter was started for.
     pub integration: cowbot_core::integration::IntegrationRecord,
     /// Where an accepted message goes.
@@ -78,6 +84,22 @@ pub trait Integration: Send + Sync {
         target: &OutboundTarget,
         content: &OutboundContent,
     ) -> CowResult<DeliveredId>;
+
+    /// Whether this external conversation can actually reach the adapter.
+    ///
+    /// A binding row says a conversation feeds a channel; it does not say the
+    /// platform will deliver anything. Every platform has a requirement the row
+    /// cannot express — Mattermost delivers posts only for channels the bot has
+    /// joined — and a binding that fails it is silent rather than broken, which
+    /// makes it the hardest kind of fault for an operator to find.
+    ///
+    /// The default reports [`BindingHealth::Unknown`] rather than
+    /// [`BindingHealth::Reachable`]: an adapter that cannot check has not
+    /// confirmed anything, and a green light it did not earn is worse than an
+    /// honest "I cannot tell".
+    async fn check_binding(&self, _external_id: &str) -> BindingHealth {
+        BindingHealth::Unknown("this adapter cannot check its bindings yet".into())
+    }
 }
 
 /// The adapters a deployment can start, by kind.

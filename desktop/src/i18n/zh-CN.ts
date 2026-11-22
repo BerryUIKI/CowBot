@@ -325,6 +325,7 @@ export const zhCN: Catalog = {
       binding: "绑定",
       bindingBusy: "正在绑定…",
       bound: "对话已绑定。",
+      boundUnreachable: "对话已绑定，但机器人暂时还收不到它的消息：{reason}",
       unbind: "解除绑定",
       unbinding: "正在解除…",
       error: "操作失败：{error}",

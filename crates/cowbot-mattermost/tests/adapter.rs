@@ -38,6 +38,9 @@ struct Recorded {
 struct Fake {
     recorded: Arc<Recorded>,
     max_post_size: i64,
+    /// Channels the bot is a member of. Anything else answers the way Mattermost
+    /// does for a user who is not in the channel.
+    joined: Vec<String>,
 }
 
 async fn me(State(fake): State<Fake>, headers: axum::http::HeaderMap) -> impl IntoResponse {
@@ -56,6 +59,28 @@ async fn user(
 ) -> impl IntoResponse {
     record_token(&fake, &headers);
     Json(json!({ "id": user_id, "username": "alice" }))
+}
+
+async fn channel_member(
+    State(fake): State<Fake>,
+    headers: axum::http::HeaderMap,
+    Path((channel_id, user_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    record_token(&fake, &headers);
+    if fake.joined.contains(&channel_id) {
+        (
+            StatusCode::CREATED,
+            Json(json!({ "channel_id": channel_id, "user_id": user_id })),
+        )
+    } else {
+        // Mattermost answers a not-a-member lookup with a 400 and a message.
+        (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "id": "api.context.invalid_param.app_error", "message": "not in channel" }),
+            ),
+        )
+    }
 }
 
 async fn create_post(
@@ -131,6 +156,10 @@ async fn fake_server(fake: Fake) -> (String, Router) {
         .route("/api/v4/users/me", get(me))
         .route("/api/v4/config/client", get(client_config))
         .route("/api/v4/users/{user_id}", get(user))
+        .route(
+            "/api/v4/channels/{channel_id}/members/{user_id}",
+            get(channel_member),
+        )
         .route("/api/v4/posts", post(create_post))
         .route("/api/v4/websocket", get(websocket))
         .with_state(fake);
@@ -200,6 +229,7 @@ async fn the_adapter_authenticates_and_relays_a_mention() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let sink = Arc::new(RecordingSink::default());
@@ -208,6 +238,7 @@ async fn the_adapter_authenticates_and_relays_a_mention() {
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -281,6 +312,7 @@ async fn a_message_that_does_not_address_the_bot_is_relayed_but_not_addressed() 
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let sink = Arc::new(RecordingSink::default());
@@ -289,6 +321,7 @@ async fn a_message_that_does_not_address_the_bot_is_relayed_but_not_addressed() 
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -343,6 +376,7 @@ async fn the_bots_own_post_never_reaches_the_pipeline() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let sink = Arc::new(RecordingSink::default());
@@ -351,6 +385,7 @@ async fn the_bots_own_post_never_reaches_the_pipeline() {
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -423,6 +458,7 @@ async fn a_system_post_is_never_relayed() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let sink = Arc::new(RecordingSink::default());
@@ -430,6 +466,7 @@ async fn a_system_post_is_never_relayed() {
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -475,6 +512,7 @@ async fn a_rejected_token_is_reported_rather_than_retried_forever() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake).await;
     let sink = Arc::new(RecordingSink::default());
@@ -487,6 +525,7 @@ async fn a_rejected_token_is_reported_rather_than_retried_forever() {
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -519,6 +558,7 @@ async fn delivering_posts_the_answer_into_the_thread_it_came_from() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let adapter = MattermostIntegration::new(config(base));
@@ -548,6 +588,7 @@ async fn a_multi_part_answer_says_which_part_it_is() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let adapter = MattermostIntegration::new(config(base));
@@ -577,6 +618,7 @@ async fn every_rest_call_carries_the_bot_token() {
     let fake = Fake {
         recorded: Arc::new(Recorded::default()),
         max_post_size: 16_384,
+        joined: Vec::new(),
     };
     let base = serve(fake.clone()).await;
     let sink = Arc::new(RecordingSink::default());
@@ -584,6 +626,7 @@ async fn every_rest_call_carries_the_bot_token() {
     let store = cowbot_store::Store::connect_in_memory().await.unwrap();
     let ctx = IntegrationContext {
         store,
+        bus: cowbot_bus::EventBus::default_bus(),
         integration: cowbot_core::integration::IntegrationRecord {
             id: cowbot_core::integration::IntegrationId::new("i1"),
             workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
@@ -620,4 +663,101 @@ fn the_identity_starts_unknown() {
         adapter.max_post_bytes(),
         cowbot_mattermost::rest::DEFAULT_MAX_POST_BYTES
     );
+}
+
+#[tokio::test]
+async fn a_channel_the_bot_joined_is_reachable() {
+    let fake = Fake {
+        recorded: Arc::new(Recorded::default()),
+        max_post_size: 16_384,
+        joined: vec!["mm-channel-1".into()],
+    };
+    let base = serve(fake.clone()).await;
+    let adapter = MattermostIntegration::new(config(base));
+    let store = cowbot_store::Store::connect_in_memory().await.unwrap();
+    let ctx = IntegrationContext {
+        store,
+        bus: cowbot_bus::EventBus::default_bus(),
+        integration: cowbot_core::integration::IntegrationRecord {
+            id: cowbot_core::integration::IntegrationId::new("i1"),
+            workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
+            kind: cowbot_core::integration::IntegrationKind::Mattermost,
+            label: "Support".into(),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        },
+        sink: Arc::new(RecordingSink::default()),
+    };
+    let cancel = CancelSignal::new();
+    let running = cancel.clone();
+    let handle = {
+        let adapter = adapter.clone();
+        tokio::spawn(async move { adapter.run(ctx, running).await })
+    };
+    wait_for_socket(&fake).await;
+
+    let health = adapter.check_binding("mm-channel-1").await;
+    assert_eq!(health, cowbot_integrations::BindingHealth::Reachable);
+
+    cancel.cancel();
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn a_channel_the_bot_never_joined_is_unreachable_with_a_fixable_reason() {
+    let fake = Fake {
+        recorded: Arc::new(Recorded::default()),
+        max_post_size: 16_384,
+        joined: Vec::new(),
+    };
+    let base = serve(fake).await;
+    let adapter = MattermostIntegration::new(config(base));
+    let store = cowbot_store::Store::connect_in_memory().await.unwrap();
+    let ctx = IntegrationContext {
+        store,
+        bus: cowbot_bus::EventBus::default_bus(),
+        integration: cowbot_core::integration::IntegrationRecord {
+            id: cowbot_core::integration::IntegrationId::new("i1"),
+            workspace_id: cowbot_core::identity::WorkspaceId::new("w1"),
+            kind: cowbot_core::integration::IntegrationKind::Mattermost,
+            label: "Support".into(),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        },
+        sink: Arc::new(RecordingSink::default()),
+    };
+    let cancel = CancelSignal::new();
+    let running = cancel.clone();
+    let handle = {
+        let adapter = adapter.clone();
+        tokio::spawn(async move { adapter.run(ctx, running).await })
+    };
+    // The identity lookup is what `check_binding` needs; the socket is up too.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let health = adapter.check_binding("mm-channel-2").await;
+    let reason = health.problem().expect("an unreachable binding says why");
+    // The reason is what an operator reads, so it names the fix rather than the
+    // symptom.
+    assert!(reason.contains("not a member"), "{reason}");
+    assert!(reason.contains("mm-channel-2"), "{reason}");
+
+    cancel.cancel();
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn a_binding_checked_before_the_identity_is_known_is_unknown_not_reachable() {
+    // The failure mode this distinction exists for: a check that could not run
+    // must not read as a green light.
+    let adapter = MattermostIntegration::new(config("http://127.0.0.1:1".into()));
+    let health = adapter.check_binding("mm-channel-1").await;
+    assert_eq!(
+        health,
+        cowbot_integrations::BindingHealth::Unknown(
+            "the bot's own identity was not discovered, so its channel membership was not checked"
+                .into()
+        )
+    );
+    assert!(!health.is_reachable());
 }

@@ -335,6 +335,7 @@ export const ptBR: Catalog = {
       binding: "Vincular",
       bindingBusy: "Vinculando…",
       bound: "Conversa vinculada.",
+      boundUnreachable: "A conversa foi vinculada, mas o bot ainda não consegue alcançá-la: {reason}",
       unbind: "Desvincular",
       unbinding: "Desvinculando…",
       error: "A ação falhou: {error}",
