@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 cowbot-core = { workspace = true }
 cowbot-integrations = { workspace = true }
+cowbot-bus = { workspace = true }
+cowbot-service = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -19,8 +21,6 @@ tokio-tungstenite = "0.30"
 futures = { workspace = true }
 
 [dev-dependencies]
-cowbot-bus = { workspace = true }
 cowbot-store = { workspace = true }
-cowbot-service = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 axum = { version = "0.8", features = ["ws"] }

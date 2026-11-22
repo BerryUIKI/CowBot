@@ -11,11 +11,15 @@ use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use cowbot_core::cancel::CancelSignal;
+use cowbot_core::channel::Sender;
 use cowbot_core::error::CowResult;
 use cowbot_core::integration::IntegrationKind;
 use cowbot_integrations::adapter::{Integration, IntegrationContext};
-use cowbot_integrations::model::{DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget};
-use tracing::{debug, info};
+use cowbot_integrations::model::{
+    BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
+};
+use cowbot_service::ChannelService;
+use tracing::{debug, info, warn};
 
 use crate::config::MattermostConfig;
 use crate::rest::{Rest, DEFAULT_MAX_POST_BYTES};
@@ -242,6 +246,65 @@ fn moment(create_at: i64) -> chrono::DateTime<Utc> {
         .unwrap_or_else(Utc::now)
 }
 
+impl MattermostIntegration {
+    /// Tell each unusable binding's channel that it will receive nothing.
+    ///
+    /// A notice rather than a startup error: the other bindings on this
+    /// integration work, and one channel the bot was never added to is a fix an
+    /// operator makes in the IM, not a reason to stop serving the rest.
+    async fn report_binding_health(&self, ctx: &IntegrationContext) {
+        let bindings = match ctx
+            .store
+            .list_integration_bindings(&ctx.integration.id)
+            .await
+        {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                // The store is the caller's; a failure here is reported and the
+                // socket still runs, because receiving messages does not depend
+                // on having read the binding list.
+                warn!(
+                    integration = %ctx.integration.id,
+                    %error,
+                    "could not read the bindings to check them"
+                );
+                return;
+            }
+        };
+
+        let identity = self.identity();
+        for binding in bindings {
+            let health = binding_health(&self.rest, identity.as_ref(), &binding.external_id).await;
+            match health {
+                BindingHealth::Reachable => {}
+                BindingHealth::Unreachable(reason) | BindingHealth::Unknown(reason) => {
+                    warn!(
+                        integration = %ctx.integration.id,
+                        external = %binding.external_id,
+                        channel = %binding.channel_id.0,
+                        %reason,
+                        "a bound Mattermost conversation cannot reach the bot"
+                    );
+                    let notice =
+                        format!("This channel's IM binding cannot receive messages: {reason}.");
+                    if let Err(error) = ChannelService::new(ctx.store.clone(), ctx.bus.clone())
+                        .post_message(&binding.channel_id, Sender::System, notice)
+                        .await
+                    {
+                        // A notice about a broken binding must not be the thing
+                        // that breaks the adapter.
+                        warn!(
+                            channel = %binding.channel_id.0,
+                            %error,
+                            "could not post a binding notice"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl Integration for MattermostIntegration {
     fn kind(&self) -> IntegrationKind {
@@ -272,6 +335,14 @@ impl Integration for MattermostIntegration {
             "the Mattermost adapter is running"
         );
 
+        // Check the bindings while the identity is fresh and before any event
+        // arrives. A binding whose channel the bot never joined receives
+        // nothing and logs nothing — the single hardest fault in this adapter to
+        // find — so each one that cannot reach the bot gets a notice in the
+        // CowBot channel it points at, where the person who would go and add the
+        // bot is already looking.
+        self.report_binding_health(&ctx).await;
+
         let sink = ctx.sink;
         let adapter = self.clone();
         crate::socket::run(self.config.clone(), cancel, move |post| {
@@ -301,6 +372,37 @@ impl Integration for MattermostIntegration {
             )
             .await?;
         Ok(DeliveredId(post.id))
+    }
+
+    async fn check_binding(&self, external_id: &str) -> BindingHealth {
+        binding_health(&self.rest, self.identity().as_ref(), external_id).await
+    }
+}
+
+/// Check whether the bot is a member of a bound channel.
+///
+/// `pub` so the startup and bind-time checks read the same logic the trait
+/// method does: a test that went through a differently written path would prove
+/// less than it looks.
+pub async fn binding_health(
+    rest: &Rest,
+    identity: Option<&Identity>,
+    external_id: &str,
+) -> BindingHealth {
+    let Some(identity) = identity else {
+        // Without the bot's own id there is nothing to ask about, and a "fine"
+        // here would be a claim the adapter cannot support.
+        return BindingHealth::Unknown(
+            "the bot's own identity was not discovered, so its channel membership was not checked"
+                .into(),
+        );
+    };
+    match rest.is_channel_member(external_id, &identity.user_id).await {
+        Ok(true) => BindingHealth::Reachable,
+        Ok(false) => BindingHealth::Unreachable(format!(
+            "the bot is not a member of Mattermost channel '{external_id}'; add it to the channel              or the binding will receive nothing"
+        )),
+        Err(error) => BindingHealth::Unknown(error.to_string()),
     }
 }
 
@@ -481,5 +583,111 @@ mod tests {
         // cache keeps these tests about translation.
         adapter.cache_name("u1", "alice");
         adapter
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+    use cowbot_core::agent::AgentProfile;
+    use cowbot_core::channel::{Channel, ChannelId, Sender};
+    use cowbot_core::identity::Workspace;
+    use cowbot_core::integration::{IntegrationBinding, IntegrationKind, NewIntegration};
+    use cowbot_integrations::adapter::MessageSink;
+    use cowbot_integrations::model::{InboundMessage, Ingested, Skipped};
+    use cowbot_store::Store;
+
+    /// A sink that accepts nothing; the notice path does not use it.
+    struct NoSink;
+
+    #[async_trait::async_trait]
+    impl MessageSink for NoSink {
+        async fn accept(&self, _message: InboundMessage) -> CowResult<Ingested> {
+            Ok(Ingested::Skipped(Skipped::Duplicate))
+        }
+    }
+
+    /// A workspace, a channel, and an integration bound to one external id.
+    async fn fixture(external_id: &str) -> (Store, IntegrationContext, ChannelId) {
+        let store = Store::connect_in_memory().await.unwrap();
+        store.migrate().await.unwrap();
+        let workspace = Workspace::new("Team");
+        store.create_workspace(&workspace).await.unwrap();
+        let channel = Channel::new("support", "");
+        store.create_channel(&workspace.id, &channel).await.unwrap();
+        // The pipeline attributes a system notice to nobody, but the binding
+        // needs an agent row only when it names one; none is needed here.
+        let _ = AgentProfile::new("CowBot", "assistant", "goal", "backstory");
+
+        let new = NewIntegration::new(&workspace.id, IntegrationKind::Mattermost, "Bot", "{}");
+        store.create_integration(&new).await.unwrap();
+        store
+            .bind_integration_channel(&IntegrationBinding {
+                integration_id: new.id.clone(),
+                external_id: external_id.into(),
+                channel_id: channel.id.clone(),
+                agent_id: None,
+            })
+            .await
+            .unwrap();
+
+        let integration = store.get_integration(&new.id).await.unwrap().unwrap();
+        let ctx = IntegrationContext {
+            store: store.clone(),
+            bus: cowbot_bus::EventBus::default_bus(),
+            integration,
+            sink: std::sync::Arc::new(NoSink),
+        };
+        (store, ctx, channel.id)
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_binding_posts_a_notice_into_its_cowbot_channel() {
+        // The whole point: the operator is looking at the CowBot channel, not at
+        // a log file. A silent binding reads as a broken product.
+        let (store, ctx, channel_id) = fixture("mm-channel-1").await;
+        // Port 1 refuses connections, so the membership check cannot answer and
+        // the binding is `Unknown` — which is still not a green light.
+        let adapter = MattermostIntegration::new(MattermostConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            bot_token: "abc".into(),
+        });
+        adapter.set_identity(Identity {
+            user_id: "bot-id".into(),
+            username: "cowbot [bot]".into(),
+            max_post_bytes: 1_000,
+        });
+
+        adapter.report_binding_health(&ctx).await;
+
+        let messages = store.list_messages(&channel_id, 10).await.unwrap();
+        assert_eq!(messages.len(), 1, "no notice was posted");
+        assert_eq!(messages[0].sender, Sender::System);
+        assert!(
+            messages[0].content.contains("cannot receive messages"),
+            "{}",
+            messages[0].content
+        );
+    }
+
+    #[tokio::test]
+    async fn a_binding_that_was_never_checked_still_says_so() {
+        // Without an identity there is nothing to ask, and saying nothing would
+        // let an operator believe the binding works.
+        let (store, ctx, channel_id) = fixture("mm-channel-1").await;
+        let adapter = MattermostIntegration::new(MattermostConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            bot_token: "abc".into(),
+        });
+
+        adapter.report_binding_health(&ctx).await;
+
+        let messages = store.list_messages(&channel_id, 10).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0].content.contains("was not discovered"),
+            "{}",
+            messages[0].content
+        );
     }
 }
