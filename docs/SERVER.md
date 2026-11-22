@@ -127,9 +127,12 @@ configured: a bot that stores a question and cannot answer it is worse than one
 that is not running. Retire one through the API and restart to stop it.
 
 **The bot must be a member of the channels it is bound to.** Mattermost delivers
-posts only for channels the bot has joined, so a binding to a channel it is not in
-receives nothing and says nothing. This is the first thing to check when a bound
-channel stays silent.
+posts only for channels the bot has joined, and a binding that misses one is
+silent rather than broken. Two things check it: a bind responds with a `health` of
+`reachable`, `unreachable`, or `unknown` and the reason, and startup posts a notice
+into the CowBot channel of any binding that cannot receive. `unknown` means the
+check could not run — it is never treated as success. A bot removed from a channel
+after startup is not noticed until the next restart.
 
 Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
 whose branch no longer fits is then skipped with a notice instead of being sent

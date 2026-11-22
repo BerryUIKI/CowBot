@@ -90,7 +90,33 @@ suffix. That window is a fraction of a second, and the fallback is conservative:
 an unrecognised author is treated as a person, which at worst costs one turn
 rather than losing a message.
 
-### 6. Startup, and only when a provider exists
+### 6. A binding is checked, at bind time and at startup
+
+A binding row says a conversation feeds a channel. It does not say the platform
+will deliver anything, and Mattermost delivers posts only for channels the bot
+has joined. The result is the worst kind of fault: nothing is broken, nothing is
+logged, and the channel is simply silent.
+
+So `Integration::check_binding` exists, with a default that reports
+`BindingHealth::Unknown` rather than `Reachable`. An adapter that cannot check has
+not confirmed anything, and a green light it did not earn is worse than an honest
+"I cannot tell" — which is why `Unknown` and `Reachable` are different variants
+and why `Unknown` is not treated as success anywhere.
+
+It is asked twice, because the two moments serve different needs:
+
+* **On bind, in the response.** The operator is on the screen and can go add the
+  bot to the channel. Deferring this to the next restart means they bind, see a
+  201, and hear nothing.
+* **At startup, as a notice in the CowBot channel.** A bot removed from a channel
+  after binding, or a deployment upgraded while it was away, has no bind to hang
+  the answer on. The notice goes where the person who would fix it is already
+  looking rather than into a log file.
+
+A list deliberately omits the verdict: checking every binding would turn a cheap
+read into N round trips, and the startup notice already covers it.
+
+### 7. Startup, and only when a provider exists
 
 `integration_startup::start_all` runs at server start, not from a route: a bot has
 to be running before anyone messages it, and a route that starts one would need a
@@ -127,10 +153,12 @@ running, which is the acceptance criterion the whole workstream was for. The
 
 **Costs and risks.**
 
-- **The bot must be in the channel.** Mattermost only delivers posts for channels
-  the bot has joined; a binding to a channel it is not in silently receives
-  nothing. There is no check for this yet, and it is the most likely first
-  support question.
+- **The membership check costs one REST call per binding at startup, and one per
+  bind.** Cheap, but not free on an integration with many bindings.
+- **A binding removed from the channel after startup is not re-checked.** The
+  check runs once when the adapter starts; a bot kicked from a channel later
+  fails silently until the next restart. A periodic re-check is the obvious next
+  step and is not built.
 - **A user lookup per unseen author.** A mention's display name costs one REST
   call, cached afterwards. A channel with a large rotating audience pays one call
   per new person.
@@ -145,6 +173,6 @@ running, which is the acceptance criterion the whole workstream was for. The
 - **No start or stop control.** Integrations start with the server and are
   retired through the API; a change takes effect at the next restart.
 
-**Follow-ups.** A check that the bot has joined a bound channel; Telegram (S3);
+**Follow-ups.** A periodic re-check of the bindings, so a bot removed from a channel after startup is noticed; Telegram (S3);
 approvals over IM (S5), where Mattermost's interactive message actions are the
 reference; attachments (S7).

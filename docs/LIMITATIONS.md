@@ -100,9 +100,12 @@ tracked.
   ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram, Slack, and Feishu still
   report `supported: false` and do not run.
 - **The Mattermost bot must be a member of every channel it is bound to.**
-  Mattermost delivers posts only for channels the bot has joined, and there is no
-  check for it: a binding to a channel the bot is not in receives nothing and
-  reports no error.
+  Mattermost delivers posts only for channels the bot has joined, and a binding
+  that misses one is silent rather than broken. Bindings are checked when they are
+  created — the response says `reachable`, `unreachable`, or `unknown` — and at
+  startup, where a problem posts a notice into the CowBot channel it points at
+  ([ADR-0057](ADR/0057-mattermost-adapter.md)). A bot removed from a channel
+  after startup is not noticed until the next restart.
 - **A second bot in a bound channel is treated as a person.** Mattermost does not
   mark a post as coming from a bot, so the adapter cannot reuse the shared echo
   guard for one and two bots would answer each other.
