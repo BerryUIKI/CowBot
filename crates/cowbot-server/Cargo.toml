@@ -20,6 +20,8 @@ cowbot-tools = { workspace = true }
 cowbot-integrations = { workspace = true }
 # The Mattermost adapter is the first platform this build can run (ADR-0057).
 cowbot-mattermost = { workspace = true }
+# Telegram is the second: a SaaS platform, reached by long polling (ADR-0058).
+cowbot-telegram = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }

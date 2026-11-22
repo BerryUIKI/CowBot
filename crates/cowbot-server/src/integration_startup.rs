@@ -229,13 +229,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mattermost_is_a_supported_kind_in_this_build() {
-        assert!(crate::adapters::registry()
-            .kinds()
-            .contains(&IntegrationKind::Mattermost));
-        // The other three still have no adapter, which is what their rows report.
-        assert!(!crate::adapters::registry()
-            .kinds()
-            .contains(&IntegrationKind::Telegram));
+    async fn mattermost_and_telegram_are_supported_kinds_in_this_build() {
+        let kinds = crate::adapters::registry().kinds();
+        assert!(kinds.contains(&IntegrationKind::Mattermost));
+        assert!(kinds.contains(&IntegrationKind::Telegram));
+        // Slack and Feishu still have no adapter, which is what their rows
+        // report.
+        assert!(!kinds.contains(&IntegrationKind::Slack));
+        assert!(!kinds.contains(&IntegrationKind::Feishu));
     }
 }
