@@ -9,6 +9,7 @@ import type {
   Assignment,
   AssignmentEvent,
   AuditEvent,
+  BindingView,
   Channel,
   ChannelMessage,
   ClientSession,
@@ -21,6 +22,7 @@ import type {
   ConversationSummary,
   ConversationTurn,
   CowEvent,
+  IntegrationView,
   MemoryEntry,
   MemoryEntryUpdate,
   MemoryFilter,
@@ -335,6 +337,47 @@ export function previewMemoryRecall(
 
 export function listAgents(): Promise<AgentProfile[]> {
   return invoke<AgentProfile[]>("list_agents");
+}
+
+export function listIntegrations(): Promise<IntegrationView[]> {
+  return invoke<IntegrationView[]>("list_integrations");
+}
+
+export function createIntegration(
+  kind: string,
+  label: string,
+  config: unknown,
+): Promise<IntegrationView> {
+  return invoke<IntegrationView>("create_integration", { kind, label, config });
+}
+
+export function revokeIntegration(integrationId: string): Promise<void> {
+  return invoke<void>("revoke_integration", { integrationId });
+}
+
+export function listIntegrationBindings(integrationId: string): Promise<BindingView[]> {
+  return invoke<BindingView[]>("list_integration_bindings", { integrationId });
+}
+
+export function bindIntegrationChannel(
+  integrationId: string,
+  externalId: string,
+  channelId: string,
+  agentId: string | null,
+): Promise<BindingView> {
+  return invoke<BindingView>("bind_integration_channel", {
+    integrationId,
+    externalId,
+    channelId,
+    agentId,
+  });
+}
+
+export function unbindIntegrationChannel(
+  integrationId: string,
+  externalId: string,
+): Promise<void> {
+  return invoke<void>("unbind_integration_channel", { integrationId, externalId });
 }
 
 export function listTemplates(): Promise<TemplateDocument[]> {

@@ -6482,3 +6482,106 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+/* IM integrations (ADR-0056). The list is cards rather than a table because a
+   binding panel opens inside one, and a table row cannot grow a form without
+   breaking the columns. */
+.integration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.integration-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+
+.integration-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.integration-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.integration-bindings {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.integration-binding-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.integration-binding {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.integration-binding code {
+  font-size: 12px;
+  color: var(--paper-dim);
+}
+
+.integration-binding button {
+  margin-left: auto;
+}
+
+.integration-bind-form,
+.integration-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+}
+
+.integration-create {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.integration-bind-form label,
+.integration-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.integration-config {
+  min-height: 120px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.settings-error {
+  margin: 0;
+  color: var(--danger, #d9776a);
+  font-size: 13px;
+}

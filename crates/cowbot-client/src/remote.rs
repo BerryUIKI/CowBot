@@ -27,6 +27,7 @@ use cowbot_core::conversation::{
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::{Workspace, WorkspaceId};
+use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt_snapshot::{
@@ -38,13 +39,15 @@ use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
 use reqwest::{Client as HttpClient, Method, StatusCode};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, ConversationPreview, EventStream, MemoryFilter,
-    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
-    NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView, TaskRunPreview,
+    AgentUpdate, BindingView, Client, ClientSession, ClientUser, ConversationPreview, EventStream,
+    IntegrationView, MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate,
+    NewBinding, NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave,
+    RecalledMemory, RemoteWorkspace, SessionDecisionView, TaskRunPreview,
 };
 
 /// First wait before the event socket reconnects after a drop.
@@ -1416,6 +1419,136 @@ impl Client for RemoteClient {
             })),
         )
         .await
+    }
+
+    async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>> {
+        let body = self
+            .request::<Vec<IntegrationBody>>(
+                Method::GET,
+                self.workspace_path("/integrations"),
+                None,
+            )
+            .await?;
+        Ok(body.into_iter().map(IntegrationView::from).collect())
+    }
+
+    async fn create_integration(
+        &self,
+        request: &NewIntegrationRequest,
+    ) -> CowResult<IntegrationView> {
+        let body = self
+            .request::<IntegrationBody>(
+                Method::POST,
+                self.workspace_path("/integrations"),
+                Some(json!({
+                    "kind": request.kind.as_str(),
+                    "label": request.label,
+                    "config": request.config,
+                })),
+            )
+            .await?;
+        Ok(IntegrationView::from(body))
+    }
+
+    async fn revoke_integration(&self, id: &IntegrationId) -> CowResult<()> {
+        self.send_empty(
+            Method::DELETE,
+            self.workspace_path(&format!("/integrations/{}", id.0)),
+        )
+        .await
+    }
+
+    async fn list_integration_bindings(&self, id: &IntegrationId) -> CowResult<Vec<BindingView>> {
+        let body = self
+            .request::<Vec<BindingBody>>(
+                Method::GET,
+                self.workspace_path(&format!("/integrations/{}/bindings", id.0)),
+                None,
+            )
+            .await?;
+        Ok(body.into_iter().map(BindingView::from).collect())
+    }
+
+    async fn bind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        binding: &NewBinding,
+    ) -> CowResult<BindingView> {
+        let body = self
+            .request::<BindingBody>(
+                Method::POST,
+                self.workspace_path(&format!("/integrations/{}/bindings", id.0)),
+                Some(json!({
+                    "external_id": binding.external_id,
+                    "channel_id": binding.channel_id.0,
+                    "agent_id": binding.agent_id.as_ref().map(|agent| agent.0.clone()),
+                })),
+            )
+            .await?;
+        Ok(BindingView::from(body))
+    }
+
+    async fn unbind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        external_id: &str,
+    ) -> CowResult<()> {
+        self.send_empty(
+            Method::DELETE,
+            self.workspace_path(&format!(
+                "/integrations/{}/bindings/{}",
+                id.0,
+                urlencode(external_id)
+            )),
+        )
+        .await
+    }
+}
+
+/// The wire shape of an integration, as the server sends it.
+#[derive(Debug, Deserialize)]
+struct IntegrationBody {
+    id: String,
+    workspace_id: String,
+    kind: IntegrationKind,
+    label: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    supported: bool,
+    binding_count: usize,
+}
+
+impl From<IntegrationBody> for IntegrationView {
+    fn from(body: IntegrationBody) -> Self {
+        Self {
+            id: IntegrationId::new(body.id),
+            workspace_id: body.workspace_id,
+            kind: body.kind,
+            label: body.label,
+            created_at: body.created_at,
+            revoked_at: body.revoked_at,
+            supported: body.supported,
+            binding_count: body.binding_count,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BindingBody {
+    integration_id: String,
+    external_id: String,
+    channel_id: String,
+    agent_id: Option<String>,
+}
+
+impl From<BindingBody> for BindingView {
+    fn from(body: BindingBody) -> Self {
+        Self {
+            integration_id: IntegrationId::new(body.integration_id),
+            external_id: body.external_id,
+            channel_id: ChannelId::new(body.channel_id),
+            agent_id: body.agent_id.map(AgentId),
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{
-    AgentUpdate, Client, ConversationSummary, MemoryFilter, MemoryNotes, MemorySave,
-    MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory, NewTask, NoteSave,
-    RecalledMemory,
+    AgentUpdate, BindingView, Client, ConversationSummary, IntegrationView, MemoryFilter,
+    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation,
+    NewIntegrationRequest, NewMemory, NewTask, NoteSave, RecalledMemory,
 };
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
@@ -20,6 +20,7 @@ use cowbot_core::conversation::{
     ConversationTurn, RoutingMode, TurnId,
 };
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt::{PromptKind, PromptPlan};
@@ -347,6 +348,95 @@ pub async fn post_message(
     });
 
     Ok(message)
+}
+
+#[tauri::command]
+pub async fn list_integrations(state: State<'_, AppState>) -> Result<Vec<IntegrationView>, String> {
+    state
+        .client
+        .list_integrations()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_integration(
+    state: State<'_, AppState>,
+    kind: String,
+    label: String,
+    config: serde_json::Value,
+) -> Result<IntegrationView, String> {
+    let kind = kind
+        .parse::<IntegrationKind>()
+        .map_err(|_| format!("'{kind}' is not a known integration kind"))?;
+    state
+        .client
+        .create_integration(&NewIntegrationRequest {
+            kind,
+            label,
+            config,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn revoke_integration(
+    state: State<'_, AppState>,
+    integration_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .revoke_integration(&IntegrationId::new(integration_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_integration_bindings(
+    state: State<'_, AppState>,
+    integration_id: String,
+) -> Result<Vec<BindingView>, String> {
+    state
+        .client
+        .list_integration_bindings(&IntegrationId::new(integration_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn bind_integration_channel(
+    state: State<'_, AppState>,
+    integration_id: String,
+    external_id: String,
+    channel_id: String,
+    agent_id: Option<String>,
+) -> Result<BindingView, String> {
+    state
+        .client
+        .bind_integration_channel(
+            &IntegrationId::new(integration_id),
+            &NewBinding {
+                external_id,
+                channel_id: ChannelId::new(channel_id),
+                agent_id: agent_id.map(AgentId::new),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unbind_integration_channel(
+    state: State<'_, AppState>,
+    integration_id: String,
+    external_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .unbind_integration_channel(&IntegrationId::new(integration_id), &external_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

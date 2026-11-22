@@ -18,6 +18,7 @@ use cowbot_core::conversation::{
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
 use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemorySettings, Note};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt_snapshot::{
@@ -72,6 +73,55 @@ pub struct RemoteWorkspace {
 pub struct SessionDecisionView {
     pub key: String,
     pub decision: String,
+}
+
+/// An IM integration as a client sees it (ADR-0056).
+///
+/// Deliberately without its configuration: the bot token crosses into the server
+/// once when an integration is created and never comes back out, so there is no
+/// field here that could carry one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IntegrationView {
+    pub id: IntegrationId,
+    pub workspace_id: String,
+    pub kind: IntegrationKind,
+    pub label: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the server this client speaks to can run the kind, so the
+    /// desktop can say "this deployment cannot start it" rather than offering a
+    /// toggle that silently does nothing.
+    pub supported: bool,
+    pub binding_count: usize,
+}
+
+/// One platform conversation feeding a CowBot channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BindingView {
+    pub integration_id: IntegrationId,
+    pub external_id: String,
+    pub channel_id: ChannelId,
+    pub agent_id: Option<AgentId>,
+}
+
+/// A request to create an integration.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewIntegrationRequest {
+    pub kind: IntegrationKind,
+    pub label: String,
+    /// Adapter configuration: endpoint, bot token, signing secret. Its shape is
+    /// the adapter's, so it is passed through as JSON.
+    pub config: serde_json::Value,
+}
+
+/// A request to bind one platform conversation to a channel.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewBinding {
+    /// The platform's own conversation id.
+    pub external_id: String,
+    pub channel_id: ChannelId,
+    /// The agent a mention of the bot addresses, for a group channel.
+    pub agent_id: Option<AgentId>,
 }
 
 /// Summary of a workspace imported from a `.cowpkg` package.
@@ -450,4 +500,31 @@ pub trait Client: Send + Sync {
 
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
     async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
+
+    /// The workspace's IM integrations, including retired ones (ADR-0056).
+    ///
+    /// The configuration is never part of the answer: a bot token crosses into
+    /// the server once when an integration is created and never comes back out.
+    async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>>;
+    /// Create one, storing its adapter configuration.
+    async fn create_integration(
+        &self,
+        request: &NewIntegrationRequest,
+    ) -> CowResult<IntegrationView>;
+    /// Retire one. Its bindings stay readable and it is no longer started.
+    async fn revoke_integration(&self, id: &IntegrationId) -> CowResult<()>;
+    /// The external conversations that feed this integration's channels.
+    async fn list_integration_bindings(&self, id: &IntegrationId) -> CowResult<Vec<BindingView>>;
+    /// Bind a platform conversation to a channel in this workspace.
+    async fn bind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        binding: &NewBinding,
+    ) -> CowResult<BindingView>;
+    /// Remove one binding.
+    async fn unbind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        external_id: &str,
+    ) -> CowResult<()>;
 }
