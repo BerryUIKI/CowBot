@@ -95,18 +95,20 @@ tracked.
   both numbers instead of failing later on an unexpected response; update the
   older side.
 
-- **No IM platform adapter ships yet.** The shared layer exists — an adapter
-  contract, channel bindings, an inbound pipeline with dedupe and echo
-  suppression, an outbound mirror, and per-account CowBot users — and an Owner or
-  Admin can create an integration and bind conversations from Settings →
-  Integrations or the API ([ADR-0056](ADR/0056-im-integrations.md)). But none of
-  the four platform adapters (Mattermost, Telegram, Slack, Feishu) is built, so
-  every integration reports `supported: false` and none of them runs. A deployment
-  cannot yet talk to a CowBot agent from an IM.
-- **Nothing starts a configured integration yet.** The server's startup does not
-  begin one, and there is no start or stop control in Settings. A row is stored
-  configuration; the supervisor that would run it is built but not wired into
-  startup.
+- **One IM platform adapter ships: Mattermost.** It dials out to a self-hosted
+  server over a WebSocket, so the deployment needs no inbound surface
+  ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram, Slack, and Feishu still
+  report `supported: false` and do not run.
+- **The Mattermost bot must be a member of every channel it is bound to.**
+  Mattermost delivers posts only for channels the bot has joined, and there is no
+  check for it: a binding to a channel the bot is not in receives nothing and
+  reports no error.
+- **A second bot in a bound channel is treated as a person.** Mattermost does not
+  mark a post as coming from a bot, so the adapter cannot reuse the shared echo
+  guard for one and two bots would answer each other.
+- **A Mattermost disconnect does not recover what was missed.** The socket reconnects
+  with backoff, but posts sent while it was down are gone; Mattermost has no
+  resume-from-id over this transport.
 - **An integration's configuration is stored unencrypted.** A bot token is kept
   as JSON in the deployment's database; a reader of that file sees it. It never
   appears in an API response, a log line, or a `.cowpkg`, but there is no

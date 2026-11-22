@@ -185,14 +185,16 @@ Delivered:
 > over the socket, cancelling one through the API, and a per-workspace provider
 > table remain open.
 
-> **IM integrations, shared layer and configuration** (workstream 3.3, stage S1):
-> the `cowbot-integrations` crate defines the adapter contract, the inbound
-> pipeline (dedupe, echo suppression, mention translation), the outbound mirror
-> with platform-sized chunking, and per-account CowBot users, over four additive
-> tables. A deployment configures one through four routes and the desktop's
-> Settings → Integrations panel ([ADR-0056](ADR-0056-im-integrations.md)). The
-> platform adapters themselves — Mattermost, Telegram, Slack, Feishu — are the
-> stages that follow, and until one lands every integration reports unsupported.
+> **IM integrations** (workstream 3.3): the `cowbot-integrations` crate defines
+> the adapter contract, the inbound pipeline (dedupe, echo suppression, mention
+> translation), the outbound mirror with platform-sized chunking, and per-account
+> CowBot users, over four additive tables; a deployment configures one through
+> four routes and the desktop's Settings → Integrations panel
+> ([ADR-0056](ADR-0056-im-integrations.md)). Mattermost is the first platform
+> adapter: a WebSocket bot that dials out, so a deployment needs no inbound
+> surface, started at boot when a model provider is configured
+> ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram, Slack, and Feishu are
+> the stages that follow, and until each lands its rows report unsupported.
 
 ### 5.2 Phase 2 Exit Criteria
 
@@ -221,7 +223,7 @@ Delivered:
 | --- | --- | --- |
 | 3.1 | Sandbox and execution | Docker sandbox backend; resource quotas; network policy; additional built-in tools |
 | 3.2 | Knowledge and retention | Project-scoped knowledge bases; retrieval-augmented context; memory retention and privacy controls; embeddings and hybrid retrieval |
-| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md). The shared layer (adapter contract, bindings, inbound pipeline, outbound mirror) and its API and Settings surface are built ([ADR-0056](ADR/0056-im-integrations.md)); the four platform adapters are not |
+| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md). The shared layer (adapter contract, bindings, inbound pipeline, outbound mirror) and its API and Settings surface are built ([ADR-0056](ADR/0056-im-integrations.md)); Mattermost is the first adapter ([ADR-0057](ADR-0057-mattermost-adapter.md)), the other three are not |
 | 3.4 | Ecosystem | Plugin mechanism; MCP compatibility; template marketplace with signing; SDK for custom tools |
 | 3.5 | Enterprise readiness | OIDC/SSO; PostgreSQL backend; data-at-rest encryption; audit export; multi-workspace/organization management |
 | 3.6 | Scale and polish | Streaming responses; retries/backoff; rate limiting; token and cost accounting; performance and UX improvements |
