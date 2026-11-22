@@ -85,6 +85,15 @@ pub trait Integration: Send + Sync {
         content: &OutboundContent,
     ) -> CowResult<DeliveredId>;
 
+    /// How this platform measures a message's length.
+    ///
+    /// The default is the shared character budget. An adapter overrides it when
+    /// its platform counts differently — Telegram counts UTF-16 code units — so
+    /// an answer is split to a limit the platform will actually accept.
+    fn chunk_limit(&self) -> crate::model::ChunkLimit {
+        crate::model::ChunkLimit::Characters(crate::outbound::MAX_CHUNK_CHARS)
+    }
+
     /// Whether this external conversation can actually reach the adapter.
     ///
     /// A binding row says a conversation feeds a channel; it does not say the

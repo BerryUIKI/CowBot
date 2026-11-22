@@ -10,6 +10,8 @@
 //! * [`outbound`] — one channel message back into the IM, including chunking to a
 //!   platform's message limit;
 //! * [`principal`] — a platform account as a CowBot user;
+//! * [`notice`] — starting every binding check and saying, in the CowBot channel,
+//!   which ones cannot receive;
 //! * [`supervisor`] — running an adapter's inbound loop beside its mirror.
 //!
 //! The four platform crates (S2–S6) implement [`adapter::Integration`] and
@@ -20,6 +22,7 @@
 pub mod adapter;
 pub mod inbound;
 pub mod model;
+pub mod notice;
 pub mod outbound;
 pub mod principal;
 pub mod route;
@@ -28,9 +31,11 @@ pub mod supervisor;
 
 pub use adapter::{Factory, Integration, IntegrationContext, MessageSink, Registry};
 pub use model::{
-    BindingHealth, ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested,
+    BindingHealth, ChunkLimit, ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested,
     OutboundContent, OutboundTarget, Route, Skipped,
 };
+pub use notice::report_binding_health;
+pub use outbound::{build_posts_with, chunk, chunk_units, label_chunk};
 pub use principal::{resolve_principal, Principal};
 pub use route::resolve_route;
 pub use sink::{ChannelSink, RecordingTurns, TurnStart};

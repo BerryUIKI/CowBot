@@ -1,9 +1,15 @@
 # P3 — IM integrations (research and proposal)
 
-- Status: Research, with S0 and S1 built. S0 (server-side turns) is
+- Status: Research, with S0–S3 built. S0 (server-side turns) is
   [ADR-0055](../ADR/0055-server-side-turn-execution.md); S1 (the shared adapter
-  layer) is [ADR-0056](../ADR/0056-im-integrations.md). No platform adapter
-  exists yet.
+  layer) is [ADR-0056](../ADR/0056-im-integrations.md); S2 (Mattermost) is
+  [ADR-0057](../ADR/0057-mattermost-adapter.md); S3 (Telegram) is
+  [ADR-0058](../ADR/0058-telegram-adapter.md). Slack (S4) is next.
+
+  S3 has moved the shared layer on in two ways the plan did not anticipate: the
+  binding-health notice loop and the `(2/3)` chunk label are now shared, and the
+  splitter has a UTF-16 variant for a platform whose limit is measured that way.
+  Both are evidence from a second adapter, not a redesign.
 - Date: 2026-11-20
 - Related: [ADR-0043](../ADR/0043-self-hosted-server-auth.md),
   [ADR-0045](../ADR/0045-collaboration-api-and-remote-client.md),
@@ -376,7 +382,7 @@ is to omit all four and let an operator re-bind.
 | S0 | Server-side turn execution, single-provider env config, server tools profile | — |
 | S1 | `cowbot-integrations` crate, adapter trait, bindings table, outbound mirror | S0 |
 | S2 | Mattermost inbound (WebSocket bot), mention translation, dedupe, principal provisioning | S1 |
-| S3 | Telegram inbound (`getUpdates` long polling, private chat → direct channel, group → mention turn), inline keyboards | S2 |
+| S3 | Telegram inbound (`getUpdates` long polling, private chat → direct channel, group → mention turn). **Built** ([ADR-0058](../ADR/0058-telegram-adapter.md)); inline keyboards move to S5 with the other platforms' approval actions | S2 |
 | S4 | Slack via Socket Mode; Events API as a deployment option | S3 |
 | S5 | Approvals over IM (async approval wait, interactive actions for Mattermost, Telegram, Slack) | S3 |
 | S6 | Feishu (encrypted events, card replies, card updates for long answers) | S5 |

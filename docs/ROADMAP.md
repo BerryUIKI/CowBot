@@ -193,8 +193,11 @@ Delivered:
 > ([ADR-0056](ADR-0056-im-integrations.md)). Mattermost is the first platform
 > adapter: a WebSocket bot that dials out, so a deployment needs no inbound
 > surface, started at boot when a model provider is configured
-> ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram, Slack, and Feishu are
-> the stages that follow, and until each lands its rows report unsupported.
+> ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram follows as the first SaaS
+> adapter, long-polling `getUpdates` with no inbound surface either, and adding
+> UTF-16 entity and length handling the shared layer now provides to every later
+> adapter ([ADR-0058](ADR-0058-telegram-adapter.md)). Slack and Feishu are the
+> stages that follow, and until each lands its rows report unsupported.
 
 ### 5.2 Phase 2 Exit Criteria
 
@@ -223,7 +226,7 @@ Delivered:
 | --- | --- | --- |
 | 3.1 | Sandbox and execution | Docker sandbox backend; resource quotas; network policy; additional built-in tools |
 | 3.2 | Knowledge and retention | Project-scoped knowledge bases; retrieval-augmented context; memory retention and privacy controls; embeddings and hybrid retrieval |
-| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md). The shared layer (adapter contract, bindings, inbound pipeline, outbound mirror) and its API and Settings surface are built ([ADR-0056](ADR/0056-im-integrations.md)); Mattermost is the first adapter ([ADR-0057](ADR-0057-mattermost-adapter.md)), the other three are not |
+| 3.3 | Integrations | Webhooks; Mattermost, Telegram, Slack, and Feishu adapters; optional browser access. Research and a staged plan: [P3 IM integrations](plans/P3-im-integrations.md). The shared layer (adapter contract, bindings, inbound pipeline, outbound mirror) and its API and Settings surface are built ([ADR-0056](ADR/0056-im-integrations.md)); Mattermost ([ADR-0057](ADR/0057-mattermost-adapter.md)) and Telegram ([ADR-0058](ADR/0058-telegram-adapter.md)) adapters exist, Slack and Feishu do not |
 | 3.4 | Ecosystem | Plugin mechanism; MCP compatibility; template marketplace with signing; SDK for custom tools |
 | 3.5 | Enterprise readiness | OIDC/SSO; PostgreSQL backend; data-at-rest encryption; audit export; multi-workspace/organization management |
 | 3.6 | Scale and polish | Streaming responses; retries/backoff; rate limiting; token and cost accounting; performance and UX improvements |

@@ -357,6 +357,85 @@ async fn a_long_agent_answer_arrives_as_ordered_chunks() {
     started.stop_all();
 }
 
+/// A platform that counts UTF-16 code units, the way Telegram does.
+struct UnitCounted(std::sync::Arc<FakeAdapter>);
+
+#[async_trait::async_trait]
+impl cowbot_integrations::Integration for UnitCounted {
+    fn kind(&self) -> cowbot_core::integration::IntegrationKind {
+        cowbot_core::integration::IntegrationKind::Telegram
+    }
+
+    fn chunk_limit(&self) -> cowbot_integrations::ChunkLimit {
+        cowbot_integrations::ChunkLimit::Units(4_096)
+    }
+
+    async fn run(
+        &self,
+        _ctx: cowbot_integrations::IntegrationContext,
+        cancel: cowbot_core::cancel::CancelSignal,
+    ) -> cowbot_core::error::CowResult<()> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    async fn deliver(
+        &self,
+        target: &cowbot_integrations::OutboundTarget,
+        content: &cowbot_integrations::OutboundContent,
+    ) -> cowbot_core::error::CowResult<cowbot_integrations::DeliveredId> {
+        self.0.deliver(target, content).await
+    }
+}
+
+#[tokio::test]
+async fn a_mirrored_answer_is_split_by_the_unit_limit_its_platform_reports() {
+    // The wiring that makes the unit-counted split reachable. Without it an
+    // emoji-heavy answer is twice as long to Telegram as the mirror thinks.
+    let fixture = fixture().await;
+    let adapter = std::sync::Arc::new(FakeAdapter::new());
+    let sink = std::sync::Arc::new(cowbot_integrations::ChannelSink::new(
+        fixture.store.clone(),
+        ChannelService::new(fixture.store.clone(), fixture.bus.clone()),
+        fixture.integration.clone(),
+    ));
+    let mut registry = Registry::new();
+    let counted = std::sync::Arc::new(UnitCounted(adapter.clone()));
+    registry.register(
+        IntegrationKind::Mattermost,
+        Arc::new(move |_config| Ok(counted.clone() as Arc<dyn Integration>)),
+    );
+    let started = start_workspace(
+        &fixture.store,
+        &fixture.bus,
+        &registry,
+        sink,
+        &fixture.workspace.id,
+    )
+    .await
+    .unwrap();
+
+    // 3 000 emoji: 6 000 UTF-16 units, well over Telegram's 4 096, and far
+    // under 4 000 *characters* — so a character budget would send it whole.
+    ChannelService::new(fixture.store.clone(), fixture.bus.clone())
+        .post_message(
+            &fixture.channel.id,
+            Sender::Agent(AgentId("agent-1".into())),
+            "🚀".repeat(3_000),
+        )
+        .await
+        .unwrap();
+    wait_for_deliveries(&adapter, 2).await;
+
+    let delivered = adapter.delivered.lock().unwrap().clone();
+    assert_eq!(delivered.len(), 2, "the answer was not split");
+    for (_, content) in &delivered {
+        assert!(content.text.encode_utf16().count() <= 4_096);
+    }
+
+    started.stop_all();
+}
+
 #[tokio::test]
 async fn a_replayed_delivery_starts_one_turn_not_two() {
     let fixture = fixture().await;

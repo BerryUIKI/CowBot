@@ -40,4 +40,14 @@ fn register_adapters(registry: &mut Registry) {
             )
         }),
     );
+    registry.register(
+        cowbot_core::integration::IntegrationKind::Telegram,
+        std::sync::Arc::new(|config| {
+            let config = cowbot_telegram::TelegramConfig::from_json(config)?;
+            Ok(
+                std::sync::Arc::new(cowbot_telegram::TelegramIntegration::new(config))
+                    as std::sync::Arc<dyn cowbot_integrations::Integration>,
+            )
+        }),
+    );
 }

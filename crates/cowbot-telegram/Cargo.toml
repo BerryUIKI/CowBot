@@ -1,0 +1,23 @@
+[package]
+name = "cowbot-telegram"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cowbot-core = { workspace = true }
+cowbot-integrations = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+cowbot-store = { workspace = true }
+cowbot-bus = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+axum = "0.8"

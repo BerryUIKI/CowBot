@@ -215,7 +215,8 @@ impl Mirror {
         let Some(message) = outbound::mirrorable(payload) else {
             return Ok(());
         };
-        let posts = outbound::mirror_posts(&self.store, &self.integration, message).await?;
+        let limit = self.adapter.chunk_limit();
+        let posts = outbound::mirror_posts(&self.store, &self.integration, message, limit).await?;
         for post in posts {
             // One failed chunk does not stop the rest: the answer is already in
             // CowBot, and a half-delivered long reply is better than none of it.

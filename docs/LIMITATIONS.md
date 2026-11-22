@@ -95,17 +95,31 @@ tracked.
   both numbers instead of failing later on an unexpected response; update the
   older side.
 
-- **One IM platform adapter ships: Mattermost.** It dials out to a self-hosted
-  server over a WebSocket, so the deployment needs no inbound surface
-  ([ADR-0057](ADR-0057-mattermost-adapter.md)). Telegram, Slack, and Feishu still
-  report `supported: false` and do not run.
-- **The Mattermost bot must be a member of every channel it is bound to.**
-  Mattermost delivers posts only for channels the bot has joined, and a binding
-  that misses one is silent rather than broken. Bindings are checked when they are
-  created — the response says `reachable`, `unreachable`, or `unknown` — and at
-  startup, where a problem posts a notice into the CowBot channel it points at
-  ([ADR-0057](ADR/0057-mattermost-adapter.md)). A bot removed from a channel
-  after startup is not noticed until the next restart.
+- **Two IM platform adapters ship: Mattermost and Telegram.** Both dial out — a
+  Mattermost bot over a WebSocket, a Telegram bot by long polling — so the
+  deployment needs no inbound surface for either
+  ([ADR-0057](ADR-0057-mattermost-adapter.md),
+  [ADR-0058](ADR-0058-telegram-adapter.md)). Slack and Feishu still report
+  `supported: false` and do not run.
+- **A Telegram bot cannot read history and cannot open a private chat.** It sees
+  only updates delivered while it is polling, so a CowBot channel cannot be
+  backfilled from an existing Telegram conversation, and a person has to message
+  the bot once before it can post to them.
+- **Telegram attachments are dropped.** A photo or document carries no text, so
+  the message is skipped as empty.
+- **A Telegram answer that Telegram refuses for rate limiting loses that chunk.**
+  The poll loop honours `retry_after`; a mirrored reply is posted once per chunk
+  and a refusal is logged rather than retried.
+- **The bot must be able to reach every conversation it is bound to.**
+  Mattermost delivers posts only for channels the bot has joined; Telegram only
+  from chats the bot was added to, and in a Telegram channel only when it is an
+  administrator. A binding that misses the requirement is silent rather than
+  broken. Bindings are checked when they are created — the response says
+  `reachable`, `unreachable`, or `unknown` — and at startup, where a problem posts
+  a notice into the CowBot channel it points at
+  ([ADR-0057](ADR/0057-mattermost-adapter.md),
+  [ADR-0058](ADR/0058-telegram-adapter.md)). A bot removed from a chat after
+  startup is not noticed until the next restart.
 - **A second bot in a bound channel is treated as a person.** Mattermost does not
   mark a post as coming from a bot, so the adapter cannot reuse the shared echo
   guard for one and two bots would answer each other.

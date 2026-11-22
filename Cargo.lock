@@ -570,6 +570,7 @@ dependencies = [
  "cowbot-package",
  "cowbot-service",
  "cowbot-store",
+ "cowbot-telegram",
  "cowbot-tools",
  "http-body-util",
  "serde",
@@ -616,6 +617,24 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "cowbot-telegram"
+version = "0.1.16"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
