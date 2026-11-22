@@ -18,6 +18,8 @@ cowbot-tools = { workspace = true }
 # The integration routes resolve bindings and report which adapter kinds this
 # build can start (ADR-0056).
 cowbot-integrations = { workspace = true }
+# The Mattermost adapter is the first platform this build can run (ADR-0057).
+cowbot-mattermost = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }

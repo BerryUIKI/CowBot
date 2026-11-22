@@ -26,5 +26,18 @@ pub fn registry() -> &'static Registry {
 
 /// Register every adapter this build compiles in.
 ///
-/// Empty until S2: the platform crates land one at a time and add a line here.
-fn register_adapters(_registry: &mut Registry) {}
+/// The platform crates land one at a time and add a line here. A kind with no
+/// line reports `supported: false` on its integration row, which is how an
+/// operator learns that this build cannot run the bot they created.
+fn register_adapters(registry: &mut Registry) {
+    registry.register(
+        cowbot_core::integration::IntegrationKind::Mattermost,
+        std::sync::Arc::new(|config| {
+            let config = cowbot_mattermost::MattermostConfig::from_json(config)?;
+            Ok(
+                std::sync::Arc::new(cowbot_mattermost::MattermostIntegration::new(config))
+                    as std::sync::Arc<dyn cowbot_integrations::Integration>,
+            )
+        }),
+    );
+}
