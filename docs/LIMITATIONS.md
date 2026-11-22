@@ -95,13 +95,18 @@ tracked.
   both numbers instead of failing later on an unexpected response; update the
   older side.
 
-- **No IM integration ships yet.** The shared layer exists — an adapter contract,
-  channel bindings, an inbound pipeline with dedupe and echo suppression, an
-  outbound mirror, and per-account CowBot users
-  ([ADR-0056](ADR/0056-im-integrations.md)) — but none of the four platform
-  adapters (Mattermost, Telegram, Slack, Feishu) is built, and there is no
-  Settings surface to create or bind an integration. A deployment cannot yet talk
-  to a CowBot agent from an IM.
+- **No IM platform adapter ships yet.** The shared layer exists — an adapter
+  contract, channel bindings, an inbound pipeline with dedupe and echo
+  suppression, an outbound mirror, and per-account CowBot users — and an Owner or
+  Admin can create an integration and bind conversations from Settings →
+  Integrations or the API ([ADR-0056](ADR/0056-im-integrations.md)). But none of
+  the four platform adapters (Mattermost, Telegram, Slack, Feishu) is built, so
+  every integration reports `supported: false` and none of them runs. A deployment
+  cannot yet talk to a CowBot agent from an IM.
+- **Nothing starts a configured integration yet.** The server's startup does not
+  begin one, and there is no start or stop control in Settings. A row is stored
+  configuration; the supervisor that would run it is built but not wired into
+  startup.
 - **An integration's configuration is stored unencrypted.** A bot token is kept
   as JSON in the deployment's database; a reader of that file sees it. It never
   appears in an API response, a log line, or a `.cowpkg`, but there is no

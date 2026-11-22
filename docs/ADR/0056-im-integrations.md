@@ -127,7 +127,34 @@ weaker guarantee than the sealed snapshots of ADR-0037: the configuration is
 stored as plain JSON, and a database reader sees it. Encrypting it at rest needs
 a key-management story this milestone does not have.
 
-### 6. Retired integrations stay readable
+### 6. An operator configures one through the API
+
+Four routes under `/api/v1/workspaces/{ws}/integrations`: list and create, retire,
+list bindings and bind, and unbind
+(`crates/cowbot-server/src/integrations.rs`).
+
+**Reading is a Member action; writing is Admin.** An operator deciding whether to
+approve something needs to know which bots feed which channels, so the list cannot
+be admin-only. Creating one is administer-level: a Member who could mint a bot
+connection could point it at a webhook they control and read what the workspace
+says. Every write is audited with the acting user.
+
+**The configuration crosses the boundary once.** `CreateIntegrationRequest` takes
+it; `IntegrationBody` has no field for it. They are different types, so the
+compiler enforces what a careful reading would otherwise have to.
+
+**A binding resolves inside its workspace twice.** The channel must belong to the
+workspace in the path (`store.channel_workspace`), and a named agent must too
+(`store.agent_in_workspace`, because `get_agent` is not scoped). A binding is a
+write path into a channel, so either check missing would be a way to post one
+team's messages into another team's channel.
+
+**A kind with no adapter is stored, listed, and reported.** `supported` on the
+row answers whether *this* server can run it, from the same registry startup uses.
+An operator who created a row before the adapter landed sees why nothing happens
+instead of a toggle that silently does nothing.
+
+### 7. Retired integrations stay readable
 
 `revoke_integration` sets `revoked_at` rather than deleting the row. The bindings
 and principals remain, so an operator can read what a retired bot was connected
@@ -172,5 +199,6 @@ model, a network, or an IM tenant.
   test pins it.
 
 **Follow-ups.** The platform adapters (S2 Mattermost, S3 Telegram, S4 Slack, S6
-Feishu); approvals over IM (S5); attachments (S7); a Settings surface for
-creating and binding an integration; encryption at rest for the configuration.
+Feishu); approvals over IM (S5); attachments (S7); encryption at rest for the
+configuration; a start/stop control per integration, since a created row is only
+picked up by whatever starts the supervisor.

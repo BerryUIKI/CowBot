@@ -235,6 +235,7 @@ reads as `404`.
 | Previews | `GET /runs/{run}/preview?model=…&tools=…` | member |
 | Recorded prompts | `GET /workspaces/{ws}/snapshots`, `GET /snapshots/settings`, `PATCH /snapshots/settings`, `POST /snapshots/purge`, `GET /snapshots/{llm_call_id}`, `GET /runs/{run}/snapshots` | administer |
 | Templates | `GET/POST /workspaces/{ws}/templates`, `GET/DELETE .../{id}`, `GET .../{id}/export`, `POST .../{id}/instantiate` | read: member; write: administer |
+| Integrations | `GET/POST /workspaces/{ws}/integrations`, `DELETE .../{id}`, `GET/POST .../{id}/bindings`, `DELETE .../{id}/bindings/{external}` | read: member; write: administer |
 | Packages | `POST /packages/import` (body: the archive), `GET /workspaces/{ws}/packages/export` | import: any signed-in user; export: administer |
 
 Two details an operator should know:
