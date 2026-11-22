@@ -140,6 +140,29 @@ pub struct Route {
     pub agent_id: Option<AgentId>,
 }
 
+/// How a platform measures a message's length.
+///
+/// Most platforms count characters. Telegram counts UTF-16 code units, so an
+/// emoji costs two — an answer full of them is twice as long as it looks, and a
+/// character budget hands the platform something it refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkLimit {
+    /// Characters, the common case.
+    Characters(usize),
+    /// UTF-16 code units, which is what Telegram's 4 096 is measured in.
+    Units(usize),
+}
+
+impl ChunkLimit {
+    /// Split `text` to this limit, on the same boundaries either way.
+    pub fn split(self, text: &str) -> Vec<String> {
+        match self {
+            ChunkLimit::Characters(limit) => crate::outbound::chunk(text, limit),
+            ChunkLimit::Units(limit) => crate::outbound::chunk_units(text, limit),
+        }
+    }
+}
+
 /// Whether a bound conversation can actually reach the adapter.
 ///
 /// A binding is a row that says "this external conversation feeds that channel".
