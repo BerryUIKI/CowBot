@@ -519,6 +519,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-mattermost"
+version = "0.1.16"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-service",
+ "cowbot-store",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-package"
 version = "0.1.16"
 dependencies = [
@@ -545,6 +566,7 @@ dependencies = [
  "cowbot-core",
  "cowbot-integrations",
  "cowbot-llm",
+ "cowbot-mattermost",
  "cowbot-package",
  "cowbot-service",
  "cowbot-store",
