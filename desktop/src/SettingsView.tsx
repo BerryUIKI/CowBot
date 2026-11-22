@@ -7,6 +7,7 @@ import BotTag from "./BotTag";
 import ModelProviderSettings from "./ModelProviderSettings";
 import MemorySettings from "./MemorySettings";
 import { PromptSnapshotAuditPanel } from "./PromptSnapshotViewer";
+import IntegrationSettings from "./IntegrationSettings";
 import ServerSettings from "./ServerSettings";
 import UpdateProgress from "./UpdateProgress";
 import { errorMessage } from "./errors";
@@ -78,6 +79,7 @@ export type SettingsSection =
   | "approvals"
   | "audit"
   | "projects"
+  | "integrations"
   | "workspace"
   | "server"
   | "about";
@@ -93,6 +95,7 @@ export const settingsSections: {
   { id: "approvals", labelKey: "settings.nav.approvals" },
   { id: "audit", labelKey: "settings.nav.audit" },
   { id: "projects", labelKey: "settings.nav.projects" },
+  { id: "integrations", labelKey: "settings.nav.integrations" },
   { id: "workspace", labelKey: "settings.nav.workspace" },
   { id: "server", labelKey: "settings.nav.server" },
   { id: "about", labelKey: "settings.nav.about" },
@@ -1259,6 +1262,8 @@ export default function SettingsView({
               ) : null}
             </>
           ) : null}
+
+          {section === "integrations" ? <IntegrationSettings /> : null}
 
           {section === "server" ? <ServerSettings /> : null}
 
