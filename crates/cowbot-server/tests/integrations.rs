@@ -570,3 +570,108 @@ async fn a_platform_conversation_id_is_stored_verbatim() {
         .unwrap();
     assert!(binding.is_some(), "the id was not stored verbatim");
 }
+
+#[tokio::test]
+async fn a_mattermost_bind_reports_what_the_adapter_says_about_reaching_it() {
+    // The bind is the moment the operator can still act: a 201 with no verdict
+    // means they bind, see success, and hear nothing until the next restart.
+    let f = fixture().await;
+    let (_, created) = call(
+        f.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/integrations", f.workspace_id),
+        Some(json!({
+            "kind": "mattermost",
+            "label": "Support bot",
+            // Port 1 refuses connections, so the adapter cannot confirm reach.
+            "config": { "base_url": "http://127.0.0.1:1", "bot_token": "abc" },
+        })),
+        Some(&f.owner_token),
+    )
+    .await;
+    let integration_id = created["id"].as_str().unwrap();
+    let channel_id = create_channel(&f, "support").await;
+
+    let (status, binding) = call(
+        f.router.clone(),
+        "POST",
+        &format!(
+            "/api/v1/workspaces/{}/integrations/{integration_id}/bindings",
+            f.workspace_id
+        ),
+        Some(json!({ "external_id": "mm-channel-1", "channel_id": channel_id })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {binding}");
+    // An adapter that cannot reach its server says `unknown`, never `reachable`.
+    assert_eq!(binding["health"], "unknown", "body: {binding}");
+    assert!(binding["health_detail"].is_string(), "body: {binding}");
+}
+
+#[tokio::test]
+async fn a_listed_binding_omits_the_verdict_rather_than_claiming_one() {
+    // Checking every binding on every list would turn a cheap read into N round
+    // trips to the platform; the startup notice is what covers that case.
+    let f = fixture().await;
+    let (_, created) = create_integration(&f, &f.owner_token, "Support bot").await;
+    let integration_id = created["id"].as_str().unwrap();
+    let channel_id = create_channel(&f, "support").await;
+    let _ = call(
+        f.router.clone(),
+        "POST",
+        &format!(
+            "/api/v1/workspaces/{}/integrations/{integration_id}/bindings",
+            f.workspace_id
+        ),
+        Some(json!({ "external_id": "C024", "channel_id": channel_id })),
+        Some(&f.owner_token),
+    )
+    .await;
+
+    let (_, listed) = call(
+        f.router.clone(),
+        "GET",
+        &format!(
+            "/api/v1/workspaces/{}/integrations/{integration_id}/bindings",
+            f.workspace_id
+        ),
+        None,
+        Some(&f.owner_token),
+    )
+    .await;
+    let entry = &listed.as_array().unwrap()[0];
+    assert!(entry.get("health").is_none(), "body: {entry}");
+    assert!(entry.get("health_detail").is_none(), "body: {entry}");
+}
+
+#[tokio::test]
+async fn a_kind_with_no_adapter_binds_without_a_verdict() {
+    // Slack has no adapter in this build; the bind must still succeed, and must
+    // not invent a health it never checked.
+    let f = fixture().await;
+    let (_, created) = call(
+        f.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/integrations", f.workspace_id),
+        Some(json!({ "kind": "slack", "label": "Later", "config": {} })),
+        Some(&f.owner_token),
+    )
+    .await;
+    let integration_id = created["id"].as_str().unwrap();
+    let channel_id = create_channel(&f, "support").await;
+
+    let (status, binding) = call(
+        f.router.clone(),
+        "POST",
+        &format!(
+            "/api/v1/workspaces/{}/integrations/{integration_id}/bindings",
+            f.workspace_id
+        ),
+        Some(json!({ "external_id": "C024", "channel_id": channel_id })),
+        Some(&f.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {binding}");
+    assert!(binding.get("health").is_none(), "body: {binding}");
+}

@@ -331,6 +331,7 @@ export const ko: Catalog = {
       binding: "연결",
       bindingBusy: "연결하는 중…",
       bound: "대화를 연결했습니다.",
+      boundUnreachable: "대화는 연결되었지만 봇이 아직 거기에 도달할 수 없습니다: {reason}",
       unbind: "연결 해제",
       unbinding: "연결 해제 중…",
       error: "작업이 실패했습니다: {error}",

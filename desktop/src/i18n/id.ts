@@ -333,6 +333,7 @@ export const id: Catalog = {
       binding: "Tautkan",
       bindingBusy: "Menautkan…",
       bound: "Percakapan tertaut.",
+      boundUnreachable: "Percakapan tertaut, tetapi bot belum bisa menjangkaunya: {reason}",
       unbind: "Lepas tautan",
       unbinding: "Melepas tautan…",
       error: "Tindakan gagal: {error}",

@@ -44,10 +44,11 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::{
-    AgentUpdate, BindingView, Client, ClientSession, ClientUser, ConversationPreview, EventStream,
-    IntegrationView, MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate,
-    NewBinding, NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave,
-    RecalledMemory, RemoteWorkspace, SessionDecisionView, TaskRunPreview,
+    AgentUpdate, BindingHealthView, BindingView, Client, ClientSession, ClientUser,
+    ConversationPreview, EventStream, IntegrationView, MemoryFilter, MemoryNotes, MemorySave,
+    MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation, NewIntegrationRequest,
+    NewMemory, NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView,
+    TaskRunPreview,
 };
 
 /// First wait before the event socket reconnects after a drop.
@@ -1539,6 +1540,10 @@ struct BindingBody {
     external_id: String,
     channel_id: String,
     agent_id: Option<String>,
+    #[serde(default)]
+    health: Option<String>,
+    #[serde(default)]
+    health_detail: Option<String>,
 }
 
 impl From<BindingBody> for BindingView {
@@ -1548,6 +1553,10 @@ impl From<BindingBody> for BindingView {
             external_id: body.external_id,
             channel_id: ChannelId::new(body.channel_id),
             agent_id: body.agent_id.map(AgentId),
+            health: body.health.map(|status| BindingHealthView {
+                status,
+                detail: body.health_detail,
+            }),
         }
     }
 }

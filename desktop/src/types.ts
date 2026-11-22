@@ -622,4 +622,6 @@ export interface BindingView {
   external_id: string;
   channel_id: string;
   agent_id: string | null;
+  /** What the adapter said on bind; absent on a list. */
+  health?: { status: string; detail: string | null } | null;
 }

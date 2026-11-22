@@ -102,6 +102,21 @@ pub struct BindingView {
     pub external_id: String,
     pub channel_id: ChannelId,
     pub agent_id: Option<AgentId>,
+    /// What the adapter said about reaching this conversation, when a bind asked.
+    ///
+    /// `None` on a list, because checking every binding would turn a cheap read
+    /// into N round trips; the startup check posts a notice into the channel
+    /// instead.
+    pub health: Option<BindingHealthView>,
+}
+
+/// An adapter's verdict on one binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BindingHealthView {
+    /// `"reachable"`, `"unreachable"`, or `"unknown"`.
+    pub status: String,
+    /// Why, for the two that are not reachable.
+    pub detail: Option<String>,
 }
 
 /// A request to create an integration.

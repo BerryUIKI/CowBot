@@ -338,6 +338,7 @@ export const fr: Catalog = {
       binding: "Lier",
       bindingBusy: "Liaison…",
       bound: "Conversation liée.",
+      boundUnreachable: "La conversation est liée, mais le bot ne peut pas encore l’atteindre : {reason}",
       unbind: "Délier",
       unbinding: "Déliaison…",
       error: "L’action a échoué : {error}",

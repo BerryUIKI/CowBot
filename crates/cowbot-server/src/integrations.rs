@@ -53,6 +53,18 @@ pub struct BindingBody {
     pub external_id: String,
     pub channel_id: String,
     pub agent_id: Option<String>,
+    /// What the adapter says about reaching this conversation, when a bind was
+    /// able to ask.
+    ///
+    /// `"reachable"`, `"unreachable"`, or `"unknown"`, with `health_detail`
+    /// carrying the reason for the last two. A list omits it: checking every
+    /// binding on every list would turn a cheap read into N round trips to the
+    /// platform, and the startup check already posts a notice into the CowBot
+    /// channel an operator is looking at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,7 +313,55 @@ pub async fn bind_conversation(
         format!("{}:{}", integration_id.0, binding.external_id),
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(binding_body(binding))))
+
+    // Ask the adapter whether the bot can actually reach this conversation. A
+    // start-of-life check would mean the operator binds a channel, gets a 201,
+    // and hears nothing until the next restart; asking here puts the answer in
+    // the response they are looking at.
+    let health = binding_health(&state, &integration_id, &binding.external_id).await;
+    let mut body = binding_body(binding);
+    if let Some(health) = health {
+        body.health = Some(health_name(&health).to_string());
+        body.health_detail = health.problem().map(str::to_string);
+    }
+    Ok((StatusCode::CREATED, Json(body)))
+}
+
+/// Ask the adapter behind an integration about one conversation.
+///
+/// `None` when the configuration no longer parses — the binding is still stored
+/// and the next startup will report the configuration problem, so failing the
+/// bind over it would tell the caller nothing they can act on here.
+async fn binding_health(
+    state: &AppState,
+    integration_id: &IntegrationId,
+    external_id: &str,
+) -> Option<cowbot_integrations::BindingHealth> {
+    let record = state
+        .store
+        .get_integration(integration_id)
+        .await
+        .ok()
+        .flatten()?;
+    let config = state
+        .store
+        .integration_config(integration_id)
+        .await
+        .ok()
+        .flatten()?;
+    let adapter = crate::adapters::registry()
+        .build(record.kind, &config)
+        .ok()
+        .flatten()?;
+    Some(adapter.check_binding(external_id).await)
+}
+
+fn health_name(health: &cowbot_integrations::BindingHealth) -> &'static str {
+    match health {
+        cowbot_integrations::BindingHealth::Reachable => "reachable",
+        cowbot_integrations::BindingHealth::Unreachable(_) => "unreachable",
+        cowbot_integrations::BindingHealth::Unknown(_) => "unknown",
+    }
 }
 
 /// Remove one binding.
@@ -358,5 +418,7 @@ fn binding_body(binding: IntegrationBinding) -> BindingBody {
         external_id: binding.external_id,
         channel_id: binding.channel_id.0,
         agent_id: binding.agent_id.map(|agent| agent.0),
+        health: None,
+        health_detail: None,
     }
 }
