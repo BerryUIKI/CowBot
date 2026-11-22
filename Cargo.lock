@@ -543,6 +543,7 @@ dependencies = [
  "chrono",
  "cowbot-bus",
  "cowbot-core",
+ "cowbot-integrations",
  "cowbot-llm",
  "cowbot-package",
  "cowbot-service",

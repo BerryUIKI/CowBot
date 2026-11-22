@@ -17,6 +17,7 @@ use crate::channels;
 use crate::conversation_list;
 use crate::conversations;
 use crate::error::ApiError;
+use crate::integrations;
 use crate::memory;
 use crate::packages;
 use crate::snapshots;
@@ -348,6 +349,23 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/v1/workspaces/{workspace_id}/templates/{template_id}/instantiate",
             post(templates::instantiate_template),
+        )
+        // IM integrations (ADR-0056)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations",
+            get(integrations::list_integrations).post(integrations::create_integration),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}",
+            delete(integrations::revoke_integration),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings",
+            get(integrations::list_bindings).post(integrations::bind_conversation),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings/{external_id}",
+            delete(integrations::unbind_conversation),
         );
 
     // Package transfer is workspace-level, not inside one workspace, so it

@@ -15,6 +15,9 @@ cowbot-bus = { workspace = true }
 # needs a provider and a tool set the way the desktop's runtime does (ADR-0055).
 cowbot-llm = { workspace = true }
 cowbot-tools = { workspace = true }
+# The integration routes resolve bindings and report which adapter kinds this
+# build can start (ADR-0056).
+cowbot-integrations = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
