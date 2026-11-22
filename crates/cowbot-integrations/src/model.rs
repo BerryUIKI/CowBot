@@ -140,6 +140,44 @@ pub struct Route {
     pub agent_id: Option<AgentId>,
 }
 
+/// Whether a bound conversation can actually reach the adapter.
+///
+/// A binding is a row that says "this external conversation feeds that channel".
+/// It does not say the platform will deliver anything, and every platform has a
+/// requirement the row cannot express: Mattermost delivers posts only for
+/// channels the bot has joined. A binding that fails that requirement is the most
+/// likely first support question — nothing is broken, nothing is logged, and the
+/// channel is simply silent — so an adapter is asked to check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingHealth {
+    /// The adapter can deliver and receive on this conversation.
+    Reachable,
+    /// It cannot, and why. The reason is shown to an operator as written, so it
+    /// should name the fix rather than the symptom.
+    Unreachable(String),
+    /// The adapter cannot tell — an unreachable server, or a platform with no
+    /// way to ask.
+    ///
+    /// Distinct from [`BindingHealth::Reachable`] on purpose: reporting "fine"
+    /// when the check itself failed is the failure mode this whole type exists
+    /// to avoid.
+    Unknown(String),
+}
+
+impl BindingHealth {
+    pub fn is_reachable(&self) -> bool {
+        matches!(self, BindingHealth::Reachable)
+    }
+
+    /// A short reason, when the binding is not confirmed reachable.
+    pub fn problem(&self) -> Option<&str> {
+        match self {
+            BindingHealth::Reachable => None,
+            BindingHealth::Unreachable(reason) | BindingHealth::Unknown(reason) => Some(reason),
+        }
+    }
+}
+
 /// Why the pipeline did nothing with a delivery.
 ///
 /// Returned rather than logged so a caller — a test, or a supervisor deciding
@@ -208,6 +246,16 @@ mod tests {
     fn a_single_chunk_is_not_labelled_as_part_of_an_answer() {
         assert!(!ChunkPart { index: 0, total: 1 }.is_multi());
         assert!(ChunkPart { index: 1, total: 2 }.is_multi());
+    }
+
+    #[test]
+    fn unknown_is_not_reachable() {
+        // The distinction the type exists for: a check that could not run must
+        // not read as a green light.
+        assert!(!BindingHealth::Unknown("the server did not answer".into()).is_reachable());
+        assert!(!BindingHealth::Unreachable("not a member".into()).is_reachable());
+        assert!(BindingHealth::Reachable.is_reachable());
+        assert_eq!(BindingHealth::Reachable.problem(), None);
     }
 
     #[test]

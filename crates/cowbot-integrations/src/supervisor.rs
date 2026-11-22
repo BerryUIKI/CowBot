@@ -115,6 +115,7 @@ pub fn start(
     let cancel = CancelSignal::new();
     let context = IntegrationContext {
         store: store.clone(),
+        bus: bus.clone(),
         integration: record.clone(),
         sink,
     };

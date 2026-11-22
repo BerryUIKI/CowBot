@@ -28,8 +28,8 @@ pub mod supervisor;
 
 pub use adapter::{Factory, Integration, IntegrationContext, MessageSink, Registry};
 pub use model::{
-    ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested, OutboundContent,
-    OutboundTarget, Route, Skipped,
+    BindingHealth, ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested,
+    OutboundContent, OutboundTarget, Route, Skipped,
 };
 pub use principal::{resolve_principal, Principal};
 pub use route::resolve_route;
