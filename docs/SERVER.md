@@ -88,14 +88,48 @@ turn settles), and a turn cannot be cancelled through the API.
 
 ### IM integrations
 
-`cowbot-integrations` is the shared layer every IM adapter sits on: channel
+``cowbot-integrations` is the shared layer every IM adapter sits on: channel
 bindings, an inbound pipeline that dedupes a platform's retried delivery and
 attributes the message to the person who wrote it, and an outbound mirror that
 posts an agent's reply back into the IM
-([ADR-0056](ADR/0056-im-integrations.md)). **No platform adapter ships yet**, and
-there is no Settings surface or API route to create or bind an integration, so a
-deployment cannot currently connect one. The four tables the layer uses are
-created by migration `0021` and stay empty until one binds.
+([ADR-0056](ADR-0056-im-integrations.md)).
+
+An Owner or Admin configures one from the desktop's **Settings → Integrations**,
+or directly:
+
+```
+POST   /api/v1/workspaces/{ws}/integrations                    create
+GET    /api/v1/workspaces/{ws}/integrations                    list (any member)
+DELETE /api/v1/workspaces/{ws}/integrations/{id}               retire
+GET    /api/v1/workspaces/{ws}/integrations/{id}/bindings      list
+POST   /api/v1/workspaces/{ws}/integrations/{id}/bindings      bind
+DELETE /api/v1/workspaces/{ws}/integrations/{id}/bindings/{external}
+```
+
+The configuration — endpoint, bot token, signing secret — is sent once on create
+and **never returned**. It is stored as JSON in the database with no encryption at
+rest, so a reader of that file sees a bot token.
+
+**Mattermost is the one platform this build can run**
+([ADR-0057](ADR-0057-mattermost-adapter.md)). Its configuration is:
+
+```json
+{ "base_url": "https://chat.example.com", "bot_token": "…" }
+```
+
+The bot's own user id and the server's post size limit are read from the server,
+so those are the only two values to supply. Telegram, Slack, and Feishu report
+`supported: false` — a row can be created for them and a conversation bound, but
+nothing runs it.
+
+An integration starts with the server, and only when a model provider is
+configured: a bot that stores a question and cannot answer it is worse than one
+that is not running. Retire one through the API and restart to stop it.
+
+**The bot must be a member of the channels it is bound to.** Mattermost delivers
+posts only for channels the bot has joined, so a binding to a channel it is not in
+receives nothing and says nothing. This is the first thing to check when a bound
+channel stays silent.
 
 Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
 whose branch no longer fits is then skipped with a notice instead of being sent

@@ -50,10 +50,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = AppState::new(store.clone(), auth, cowbot_bus::EventBus::default_bus());
+    // The running integrations outlive this scope so a later stop control could
+    // reach them; nothing holds a lock while the server serves requests.
+    let integrations = tokio::sync::Mutex::new(None);
     let state = match &config.llm {
         Some(llm) => {
             let executor = cowbot_server::TurnExecutor::new(
-                store,
+                store.clone(),
                 state.bus.clone(),
                 llm,
                 &config.workspace_dir,
@@ -65,11 +68,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace_dir = %config.workspace_dir.display(),
                 "Server will answer channel turns"
             );
+            // A bot has to be running before anyone messages it, so the
+            // integrations start here rather than from a route. They are only
+            // started when a provider exists: a bot that stores a question and
+            // never answers is worse than one that is not running, because the
+            // IM user sees their message accepted and waits (ADR-0057).
+            //
+            // The handles are kept for the life of the process. Dropping one does
+            // not stop the tasks — the cancel signal is owned, not a guard — but
+            // a handle that is reachable is one an operator-facing stop control
+            // could later act on.
+            match cowbot_server::integration_startup::start_all(
+                &store,
+                &state.bus,
+                executor.clone(),
+            )
+            .await
+            {
+                Ok(started) => {
+                    *integrations.lock().await = Some(started);
+                }
+                Err(error) => {
+                    // A database read that fails here must not stop the HTTP
+                    // surface: a server that cannot start its bots still serves
+                    // the workspace.
+                    tracing::warn!(%error, "IM integrations did not start");
+                }
+            }
             state.with_turns(executor)
         }
         None => {
             tracing::info!(
-                "No COWBOT_SERVER_LLM_* variables set: channel turns are stored but not answered"
+                "No COWBOT_SERVER_LLM_* variables set: channel turns are stored but not answered, \
+                 so no IM integration is started either"
             );
             state
         }

@@ -17,6 +17,7 @@ pub mod config;
 pub mod conversation_list;
 pub mod conversations;
 pub mod error;
+pub mod integration_startup;
 pub mod integrations;
 pub mod memory;
 pub mod packages;
