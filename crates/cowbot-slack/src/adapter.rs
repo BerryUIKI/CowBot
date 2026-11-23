@@ -11,7 +11,7 @@ use chrono::{TimeZone, Utc};
 use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::integration::IntegrationKind;
-use cowbot_integrations::adapter::{Integration, IntegrationContext};
+use cowbot_integrations::adapter::{InboundRequest, Integration, IntegrationContext, WebhookReply};
 use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt, Refused};
 use cowbot_integrations::model::{
     Attachment, AttachmentKind, BindingHealth, DeliveredId, ExternalAuthor, OutboundContent,
@@ -21,7 +21,7 @@ use cowbot_integrations::notice::report_binding_health;
 use tracing::{debug, info, warn};
 
 use crate::api::{Api, FileInfo, Identity, SlackError};
-use crate::config::SlackConfig;
+use crate::config::{SlackConfig, Transport};
 
 /// One bot connection to one Slack workspace.
 pub struct SlackIntegration {
@@ -319,6 +319,19 @@ impl Integration for SlackIntegration {
 
         report_binding_health(&ctx, self).await;
 
+        if self.api.config().transport == Transport::EventsApi {
+            // Nothing to read: deliveries arrive at the server's webhook route,
+            // which verifies each one and calls `webhook` below. The task still
+            // has to stay alive so the integration reads as running, and so a
+            // stop cancels it like any other.
+            info!(
+                integration = %ctx.integration.id,
+                "the Slack adapter is waiting for Events API deliveries"
+            );
+            cancel.cancelled().await;
+            return Ok(());
+        }
+
         let sink = ctx.sink.clone();
         let ctx = ctx.clone();
         let adapter = self.clone();
@@ -392,6 +405,75 @@ impl Integration for SlackIntegration {
 
     async fn check_binding(&self, external_id: &str) -> BindingHealth {
         binding_health(&self.api, self.identity().as_ref(), external_id).await
+    }
+
+    fn accepts_webhook(&self) -> bool {
+        self.api.config().transport == Transport::EventsApi
+    }
+
+    /// Verify one Events API request and hand it to the pipeline.
+    ///
+    /// The signature is checked against the **raw** body before anything parses
+    /// it, because Slack signs the bytes that arrived. Only then is the body
+    /// read, and it is read with the same translation the socket transport uses
+    /// — this is a different transport for the same events, not a second
+    /// implementation.
+    async fn webhook(
+        &self,
+        ctx: &IntegrationContext,
+        request: InboundRequest<'_>,
+    ) -> CowResult<WebhookReply> {
+        let now = Utc::now().timestamp();
+        crate::verify::verify(
+            self.api
+                .config()
+                .signing_secret
+                .as_deref()
+                .unwrap_or_default(),
+            request.header("x-slack-request-timestamp"),
+            request.header("x-slack-signature"),
+            request.body,
+            now,
+        )
+        .map_err(|refusal| CowError::Config(format!("Slack refused the delivery: {refusal}")))?;
+
+        let body: serde_json::Value = serde_json::from_slice(request.body)
+            .map_err(|error| CowError::Config(format!("a Slack delivery was not JSON: {error}")))?;
+
+        // The handshake Slack sends when an operator saves the request URL. It
+        // is answered before the app is live, so it cannot need anything else.
+        if body.get("type").and_then(|value| value.as_str()) == Some("url_verification") {
+            let challenge = body
+                .get("challenge")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            return Ok(WebhookReply::Challenge(
+                serde_json::json!({ "challenge": challenge }).to_string(),
+            ));
+        }
+
+        match body.get("type").and_then(|value| value.as_str()) {
+            Some("event_callback") => {
+                let Some(event) = body.get("event") else {
+                    return Ok(WebhookReply::Ack);
+                };
+                let bot = self
+                    .identity()
+                    .map(|identity| identity.user_id)
+                    .unwrap_or_default();
+                if let Some(message) = self.inbound(event, &bot) {
+                    ctx.sink.accept(message).await?;
+                }
+                Ok(WebhookReply::Ack)
+            }
+            // A button press. Slack expects any 200; the card is revised through
+            // the shared mirror once the decision lands.
+            Some("block_actions") => {
+                handle_interaction(ctx, &body).await?;
+                Ok(WebhookReply::Interaction(None))
+            }
+            _ => Ok(WebhookReply::Ack),
+        }
     }
 
     async fn fetch_attachment(
