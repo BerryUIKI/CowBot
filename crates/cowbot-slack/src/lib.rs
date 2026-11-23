@@ -19,6 +19,7 @@ pub mod api;
 pub mod blocks;
 pub mod config;
 pub mod socket;
+pub mod verify;
 
 pub use adapter::SlackIntegration;
 pub use config::SlackConfig;
