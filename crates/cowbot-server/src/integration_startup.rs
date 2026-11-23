@@ -235,13 +235,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mattermost_and_telegram_are_supported_kinds_in_this_build() {
+    async fn three_platforms_are_supported_kinds_in_this_build() {
         let kinds = crate::adapters::registry().kinds();
         assert!(kinds.contains(&IntegrationKind::Mattermost));
         assert!(kinds.contains(&IntegrationKind::Telegram));
-        // Slack and Feishu adapters land in their own changes, which extend this
-        // assertion to every kind the roadmap names.
-        assert!(!kinds.contains(&IntegrationKind::Slack));
+        assert!(kinds.contains(&IntegrationKind::Slack));
+        // Feishu's adapter lands in its own change.
         assert!(!kinds.contains(&IntegrationKind::Feishu));
     }
 }

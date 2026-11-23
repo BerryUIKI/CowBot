@@ -50,4 +50,14 @@ fn register_adapters(registry: &mut Registry) {
             )
         }),
     );
+    registry.register(
+        cowbot_core::integration::IntegrationKind::Slack,
+        std::sync::Arc::new(|config| {
+            let config = cowbot_slack::SlackConfig::from_json(config)?;
+            Ok(
+                std::sync::Arc::new(cowbot_slack::SlackIntegration::new(config))
+                    as std::sync::Arc<dyn cowbot_integrations::Integration>,
+            )
+        }),
+    );
 }
