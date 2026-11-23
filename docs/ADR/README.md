@@ -62,6 +62,9 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0056](0056-im-integrations.md) | IM integrations: the adapter contract, identity mapping, and outbound mirror |
 | [0057](0057-mattermost-adapter.md) | The Mattermost adapter: in-band socket auth, discovered identity, mention translation |
 | [0058](0058-telegram-adapter.md) | The Telegram adapter: long polling, UTF-16 entity offsets, HTML rendering |
+| [0059](0059-slack-adapter.md) | The Slack adapter: Socket Mode, envelope acknowledgment, mrkdwn translation |
+| [0060](0060-im-approvals.md) | IM approvals and attachments: the decider is checked, files land under the tool root |
+| [0061](0061-feishu-adapter.md) | The Feishu adapter: long connection, hand-written protobuf frames, message-id dedupe |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

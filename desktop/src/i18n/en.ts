@@ -315,7 +315,7 @@ export const en = {
       labelHint: "A name you recognise in this list, for example “Support bot”.",
       labelPlaceholder: "Support bot",
       config: "Configuration",
-      configHint: "Adapter configuration as a JSON object: endpoint, bot token, signing secret. Its shape depends on the platform.",
+      configHint: "Adapter configuration as a JSON object. Its shape depends on the platform: Mattermost takes base_url and bot_token, Telegram bot_token, Slack bot_token and app_token, Feishu app_id and app_secret. No platform needs an inbound URL.",
       creating: "Creating…",
       create: "Create integration",
       created: "The integration was created. Bind a conversation to a channel to start it.",

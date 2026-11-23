@@ -110,9 +110,11 @@ The configuration — endpoint, bot token, signing secret — is sent once on cr
 and **never returned**. It is stored as JSON in the database with no encryption at
 rest, so a reader of that file sees a bot token.
 
-**Mattermost and Telegram are the platforms this build can run**
-([ADR-0057](ADR-0057-mattermost-adapter.md), [ADR-0058](ADR-0058-telegram-adapter.md)).
-Their configurations are:
+**All four platforms this build names are supported**
+([ADR-0057](ADR-0057-mattermost-adapter.md),
+[ADR-0058](ADR-0058-telegram-adapter.md),
+[ADR-0059](ADR-0059-slack-adapter.md),
+[ADR-0061](ADR-0061-feishu-adapter.md)). Their configurations are:
 
 ```json
 { "base_url": "https://chat.example.com", "bot_token": "…" }
@@ -122,20 +124,52 @@ Their configurations are:
 { "bot_token": "123456:ABC-DEF…" }
 ```
 
+```json
+{ "bot_token": "xoxb-…", "app_token": "xapp-…" }
+```
+
+```json
+{ "app_id": "cli_…", "app_secret": "…", "domain": "feishu" }
+```
+
 The Mattermost bot's own user id and the server's post size limit are read from
 the server, so those are the only two values to supply. Telegram needs only the
 token BotFather issued; `api_base` is optional and points a deployment at a
-self-hosted Bot API server. Slack and Feishu report `supported: false` — a row can
-be created for them and a conversation bound, but nothing runs it.
+self-hosted Bot API server. Slack needs two tokens — the `xoxb-` bot token for the
+Web API and an `xapp-` app token with `connections:write` for Socket Mode — and
+its signing secret is **not** required, because Socket Mode has no inbound
+request to verify. Feishu needs the app id and secret; `domain` selects
+`feishu` (default) or `lark`, and an encrypt key is neither accepted nor needed,
+because this build uses Feishu's long connection rather than its webhook.
 
-**Neither adapter needs an inbound surface.** A Mattermost bot opens a WebSocket
-to its own server; a Telegram bot long-polls `getUpdates`. Neither needs a public
-DNS name, a reverse proxy, or TLS termination in front of CowBot, which also means
-neither needs a signature check or a replay window.
+**No adapter needs an inbound surface.** A Mattermost bot opens a WebSocket to its
+own server; a Telegram bot long-polls `getUpdates`; a Slack app opens a Socket
+Mode WebSocket; a Feishu app opens its long connection. None needs a public DNS
+name, a reverse proxy, or TLS termination in front of CowBot, which also means
+none needs a signature check or a replay window.
+
+**One Slack or Feishu app, one CowBot process.** Slack reports the number of
+connections an app holds and Feishu delivers each event to one connection at
+random, so two servers started on the same app token each receive a subset of the
+events — and answer with the wrong binding table or twice. Run one process per
+app. Telegram has the same rule for a different reason: `getUpdates` returns `409`
+to a second poller, which the adapter reports rather than retries.
 
 **A Telegram binding is a chat id, which is a signed integer.** Get it from the
 group or channel, or from the person's first message to the bot. A bot cannot open
-a private chat: the person has to message it once before the binding can post.
+a private chat: the person has to message it once before the binding can post. A
+Slack binding is a channel id beginning `C`, `G`, or `D`, and the bot has to be
+invited with `/invite`. A Feishu binding is a `oc_…` chat id, and the bot has to
+be added to the chat.
+
+**An agent that needs approval asks in the IM**
+([ADR-0060](ADR-0060-im-approvals.md)). Telegram gets an inline keyboard, Slack a
+Block Kit message, Feishu an interactive card; Mattermost gets a post whose reply
+is read as the answer, because it has no native buttons outside an interactive
+integration. Only the person who asked and a workspace administrator may decide;
+anyone else is refused, and the refusal is shown to them. The card is revised once
+decided. `COWBOT_SERVER_APPROVAL_TIMEOUT_SECS` sets how long a request waits
+(default `900`) — the desktop's five minutes is one meeting away from expiring.
 
 An integration starts with the server, and only when a model provider is
 configured: a bot that stores a question and cannot answer it is worse than one
@@ -144,7 +178,8 @@ that is not running. Retire one through the API and restart to stop it.
 **The bot must be able to reach the conversation it is bound to.** Mattermost
 delivers posts only for channels the bot has joined; Telegram delivers only from
 chats the bot was added to, and in a Telegram channel it must be an administrator
-to post at all. Either way a binding that misses the requirement is silent rather
+to post at all; Slack needs the bot invited and `conversations.members` to list
+it; Feishu needs `is_in_chat` to answer true. Either way a binding that misses the requirement is silent rather
 than broken. Two things check it: a bind responds with a `health` of `reachable`,
 `unreachable`, or `unknown` and the reason, and startup posts a notice into the
 CowBot channel of any binding that cannot receive. `unknown` means the check could
