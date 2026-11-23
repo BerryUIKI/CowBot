@@ -60,4 +60,14 @@ fn register_adapters(registry: &mut Registry) {
             )
         }),
     );
+    registry.register(
+        cowbot_core::integration::IntegrationKind::Feishu,
+        std::sync::Arc::new(|config| {
+            let config = cowbot_feishu::FeishuConfig::from_json(config)?;
+            Ok(
+                std::sync::Arc::new(cowbot_feishu::FeishuIntegration::new(config))
+                    as std::sync::Arc<dyn cowbot_integrations::Integration>,
+            )
+        }),
+    );
 }
