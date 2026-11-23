@@ -28,6 +28,7 @@ pub mod tasks;
 pub mod templates;
 pub mod tokens;
 pub mod turn_executor;
+pub mod webhooks;
 pub mod workspaces;
 
 pub use auth::{AuthService, AuthenticatedUser, IssuedSession};
