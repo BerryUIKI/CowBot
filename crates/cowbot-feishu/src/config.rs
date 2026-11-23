@@ -65,6 +65,41 @@ pub struct FeishuConfig {
     pub app_secret: String,
     #[serde(default)]
     pub domain: Domain,
+    #[serde(default)]
+    pub transport: Transport,
+    /// The Verification Token from the app's console.
+    ///
+    /// Required for [`Transport::Webhook`], where it is what a card callback is
+    /// signed with. Unread by the long connection, which carries no token at all.
+    #[serde(default)]
+    pub verification_token: Option<String>,
+    /// The Encrypt Key, when the app has one configured.
+    ///
+    /// A webhook delivery is encrypted with it and refused unsigned otherwise.
+    /// Optional even in webhook mode: an app that left the Encrypt Key blank
+    /// receives plaintext, and refusing to start would break a working setup.
+    #[serde(default)]
+    pub encrypt_key: Option<String>,
+}
+
+/// How Feishu delivers events (ADR-0062).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    /// An outbound WebSocket, the default: no public URL, no crypto.
+    #[default]
+    LongConnection,
+    /// An inbound HTTPS endpoint, which needs decryption and a signature.
+    Webhook,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transport::LongConnection => "long_connection",
+            Transport::Webhook => "webhook",
+        }
+    }
 }
 
 impl FeishuConfig {
@@ -79,6 +114,27 @@ impl FeishuConfig {
             return Err(CowError::Config(
                 "app_id must be the app's id from the developer console, which starts with \
                  `cli_`"
+                    .into(),
+            ));
+        }
+        parsed.verification_token = parsed
+            .verification_token
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        parsed.encrypt_key = parsed
+            .encrypt_key
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty());
+
+        // The verification token is what a card callback is signed with. Without
+        // it that delivery kind cannot be authenticated at all, so a webhook
+        // configuration that omitted it is refused here rather than dropping
+        // every button press at runtime.
+        if parsed.transport == Transport::Webhook && parsed.verification_token.is_none() {
+            return Err(CowError::Config(
+                "verification_token is required when transport is 'webhook': it is what signs \
+                 a card callback. Use transport 'long_connection', or copy the token from the \
+                 app's Event Subscriptions page"
                     .into(),
             ));
         }
@@ -102,6 +158,15 @@ impl std::fmt::Debug for FeishuConfig {
             .field("app_id", &self.app_id)
             .field("app_secret", &"[sealed]")
             .field("domain", &self.domain)
+            .field("transport", &self.transport)
+            .field(
+                "verification_token",
+                &self.verification_token.as_ref().map(|_| "[sealed]"),
+            )
+            .field(
+                "encrypt_key",
+                &self.encrypt_key.as_ref().map(|_| "[sealed]"),
+            )
             .finish()
     }
 }
