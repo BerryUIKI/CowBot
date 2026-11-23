@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::integration::IntegrationKind;
-use cowbot_integrations::adapter::{Integration, IntegrationContext};
+use cowbot_integrations::adapter::{InboundRequest, Integration, IntegrationContext, WebhookReply};
 use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt, Refused};
 use cowbot_integrations::model::{
     Attachment, BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
@@ -19,7 +19,7 @@ use cowbot_integrations::notice::report_binding_health;
 use tracing::{debug, info, warn};
 
 use crate::api::{Api, BotInfo};
-use crate::config::FeishuConfig;
+use crate::config::{FeishuConfig, Transport};
 use crate::event::{mentions_bot, CardAction, Envelope, MessageEvent};
 use crate::frame::Frame;
 
@@ -210,6 +210,20 @@ impl Integration for FeishuIntegration {
 
         report_binding_health(&ctx, self).await;
 
+        if self.api.config().transport == Transport::Webhook {
+            // Nothing to read: deliveries arrive at the server's webhook route,
+            // which decrypts and verifies each one and calls `webhook` below. The
+            // task stays alive so the integration reads as running (ADR-0062).
+            info!(
+                integration = %ctx.integration.id,
+                "the Feishu adapter is waiting for webhook deliveries; register \
+                 /api/v1/integrations/{}/webhook in the app console",
+                ctx.integration.id
+            );
+            cancel.cancelled().await;
+            return Ok(());
+        }
+
         let adapter = self.clone();
         let ctx = ctx.clone();
         crate::socket::run(self.api.clone(), cancel, move |frame| {
@@ -250,6 +264,128 @@ impl Integration for FeishuIntegration {
 
     async fn check_binding(&self, external_id: &str) -> BindingHealth {
         binding_health(&self.api, self.bot().as_ref(), external_id).await
+    }
+
+    fn accepts_webhook(&self) -> bool {
+        self.api.config().transport == Transport::Webhook
+    }
+
+    /// Decrypt, verify, and hand one delivery to the pipeline.
+    ///
+    /// Order matters and is Feishu's: a delivery with an Encrypt Key configured
+    /// arrives as `{"encrypt": "…"}` and nothing can be read, including its
+    /// signature, until it is decrypted. The decrypted body is then verified with
+    /// the scheme its kind uses — SHA-256 over the Encrypt Key for an event,
+    /// SHA-1 over the Verification Token for a card callback — and only then
+    /// parsed.
+    ///
+    /// The handshake is the exception: Feishu answers `url_verification` with the
+    /// challenge in plaintext even when the request was encrypted, and it arrives
+    /// before an operator has saved anything, so it is answered as soon as the
+    /// envelope is readable.
+    async fn webhook(
+        &self,
+        ctx: &IntegrationContext,
+        request: InboundRequest<'_>,
+    ) -> CowResult<WebhookReply> {
+        let config = self.api.config();
+        let envelope: serde_json::Value =
+            serde_json::from_slice(request.body).map_err(|error| {
+                CowError::Config(format!("a Feishu delivery was not JSON: {error}"))
+            })?;
+
+        // The plaintext body: either what arrived, or what the `encrypt` field
+        // decrypts to.
+        let body: Vec<u8> = match envelope.get("encrypt").and_then(|value| value.as_str()) {
+            Some(sealed) => {
+                let key = config.encrypt_key.as_deref().unwrap_or_default();
+                crate::crypto::decrypt(key, sealed)
+                    .map_err(|refusal| {
+                        CowError::Config(format!("Feishu refused the delivery: {refusal}"))
+                    })?
+                    .into_bytes()
+            }
+            // An app with no Encrypt Key configured receives plaintext. An app
+            // WITH one that receives plaintext is a misconfiguration worth
+            // refusing, because the signature check below would be the only thing
+            // left.
+            None => {
+                if config.encrypt_key.is_some() {
+                    return Err(CowError::Config(
+                        "this app has an Encrypt Key configured but the delivery was not \
+                         encrypted"
+                            .into(),
+                    ));
+                }
+                request.body.to_vec()
+            }
+        };
+
+        let parsed: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
+            CowError::Config(format!("a Feishu delivery was not JSON: {error}"))
+        })?;
+
+        // The handshake, before anything else: it is how an operator saves the
+        // URL, so it must work before the app is otherwise reachable.
+        if parsed.get("type").and_then(|value| value.as_str()) == Some("url_verification") {
+            let challenge = parsed
+                .get("challenge")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            return Ok(WebhookReply::Challenge(
+                serde_json::json!({ "challenge": challenge }).to_string(),
+            ));
+        }
+
+        let event_type = parsed
+            .get("header")
+            .and_then(|header| header.get("event_type"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let is_card = event_type.starts_with("card.action");
+
+        // Each kind has its own hash and its own secret: an event is signed with
+        // the Encrypt Key and SHA-256, a card callback with the Verification
+        // Token and SHA-1. Using one for the other refuses every delivery of
+        // that kind with no clue why.
+        let timestamp = request
+            .header("x-lark-request-timestamp")
+            .unwrap_or_default();
+        let nonce = request.header("x-lark-request-nonce").unwrap_or_default();
+        let expected = if is_card {
+            let token = config.verification_token.as_deref().unwrap_or_default();
+            crate::crypto::sign_card(token, timestamp, nonce, &body)
+        } else {
+            let key = config.encrypt_key.as_deref().unwrap_or_default();
+            crate::crypto::sign_event(key, timestamp, nonce, &body)
+        };
+        crate::crypto::verify(
+            &expected,
+            request.header("x-lark-signature"),
+            request.header("x-lark-request-timestamp"),
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|refusal| CowError::Config(format!("Feishu refused the delivery: {refusal}")))?;
+
+        // Now that it is genuine, hand it to the same handler the long
+        // connection uses.
+        let mut frame = crate::frame::Frame {
+            service: 0,
+            method: crate::frame::METHOD_DATA,
+            headers: vec![(crate::frame::HEADER_TYPE.to_string(), "event".to_string())],
+            payload_encoding: "json".to_string(),
+            payload: body.clone(),
+            ..crate::frame::Frame::default()
+        };
+        frame
+            .headers
+            .push(("type".to_string(), "event".to_string()));
+
+        let bot_open_id = self.bot().map(|bot| bot.open_id).unwrap_or_default();
+        match self.handle_frame(ctx, &frame, &bot_open_id).await? {
+            Some(response) if is_card => Ok(WebhookReply::Interaction(Some(response))),
+            _ => Ok(WebhookReply::Ack),
+        }
     }
 
     async fn fetch_attachment(
