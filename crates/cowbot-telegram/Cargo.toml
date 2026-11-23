@@ -15,6 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
+subtle = { workspace = true }
 
 [dev-dependencies]
 cowbot-store = { workspace = true }
