@@ -162,6 +162,46 @@ Slack binding is a channel id beginning `C`, `G`, or `D`, and the bot has to be
 invited with `/invite`. A Feishu binding is a `oc_…` chat id, and the bot has to
 be added to the chat.
 
+**A webhook transport is the alternative to dialling out**
+([ADR-0062](ADR/0062-webhook-transports.md)). Each adapter's `transport` field
+chooses, and the default for every one of them is the outbound transport that
+needs no public URL:
+
+```json
+{ "bot_token": "xoxb-…", "app_token": "xapp-…",
+  "transport": "events_api", "signing_secret": "…" }
+```
+
+```json
+{ "bot_token": "123456:ABC…", "transport": "webhook", "secret_token": "…" }
+```
+
+```json
+{ "app_id": "cli_…", "app_secret": "…", "transport": "webhook",
+  "verification_token": "…", "encrypt_key": "…" }
+```
+
+Each secret is required by the transport that reads it and refused at create time
+when it is missing: an endpoint that accepts unsigned traffic is an endpoint
+anyone can drive.
+
+The URL to register with the platform is
+`https://<your-host>/api/v1/integrations/<integration id>/webhook`. Telegram and
+Slack both take it in their own console; Feishu wants it under Event Subscriptions
+with the transport set to a request URL rather than a long connection.
+
+**A webhook deployment must be reachable from the internet.** That means a public
+hostname and TLS in front of CowBot — `deploy/` already runs Caddy for this — and
+it means the reverse proxy's request-size limit is the only bound on what an
+unauthenticated caller can make CowBot read. Set one. The endpoint itself verifies
+every request before parsing it, and answers 404 for any integration id it does not
+serve, so an id that was revoked or never existed is indistinguishable from one
+this build cannot run.
+
+Telegram cannot poll and receive a webhook at the same time: `getUpdates` answers
+`409 Conflict` to whichever asks second, so choosing the webhook transport stops
+polling rather than racing it.
+
 **An agent that needs approval asks in the IM**
 ([ADR-0060](ADR-0060-im-approvals.md)). Telegram gets an inline keyboard, Slack a
 Block Kit message, Feishu an interactive card; Mattermost gets a post whose reply

@@ -396,9 +396,9 @@ is to omit all four and let an operator re-bind.
 | S1 | `cowbot-integrations` crate, adapter trait, bindings table, outbound mirror | S0 |
 | S2 | Mattermost inbound (WebSocket bot), mention translation, dedupe, principal provisioning | S1 |
 | S3 | Telegram inbound (`getUpdates` long polling, private chat → direct channel, group → mention turn). **Built** ([ADR-0058](../ADR/0058-telegram-adapter.md)); inline keyboards move to S5 with the other platforms' approval actions | S2 |
-| S4 | Slack via Socket Mode. **Built** ([ADR-0059](../ADR/0059-slack-adapter.md)); the Events API remains a later deployment option | S3 |
+| S4 | Slack via Socket Mode, and the **Events API** as the alternative transport ([ADR-0062](../ADR/0062-webhook-transports.md)). **Built** ([ADR-0059](../ADR/0059-slack-adapter.md)) | S3 |
 | S5 | Approvals over IM. **Built** ([ADR-0060](../ADR/0060-im-approvals.md)); no change to the approval wait, but the decider is authorised | S3 |
-| S6 | Feishu. **Built** ([ADR-0061](../ADR/0061-feishu-adapter.md)) over the long connection, so no AES and no signature | S5 |
+| S6 | Feishu. **Built** ([ADR-0061](../ADR/0061-feishu-adapter.md)) over the long connection, and over a **webhook** with the AES and signature work the plan expected ([ADR-0062](../ADR/0062-webhook-transports.md)) | S5 |
 | S7 | Attachments inbound. **Built** ([ADR-0060](../ADR/0060-im-approvals.md)) as files under the tool root; images are stored and named, not understood | S6 |
 
 S0 deserves its own ADR; it is a topology change to the server, not an
