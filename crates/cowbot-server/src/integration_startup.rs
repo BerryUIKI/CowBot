@@ -235,12 +235,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn three_platforms_are_supported_kinds_in_this_build() {
+    async fn every_kind_the_roadmap_names_has_an_adapter_in_this_build() {
         let kinds = crate::adapters::registry().kinds();
-        assert!(kinds.contains(&IntegrationKind::Mattermost));
-        assert!(kinds.contains(&IntegrationKind::Telegram));
-        assert!(kinds.contains(&IntegrationKind::Slack));
-        // Feishu's adapter lands in its own change.
-        assert!(!kinds.contains(&IntegrationKind::Feishu));
+        for kind in IntegrationKind::ALL {
+            assert!(kinds.contains(kind), "{kind} has no adapter");
+        }
     }
 }
