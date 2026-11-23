@@ -103,6 +103,16 @@ tracked.
   [ADR-0058](ADR-0058-telegram-adapter.md),
   [ADR-0059](ADR-0059-slack-adapter.md),
   [ADR-0061](ADR-0061-feishu-adapter.md)).
+- **A webhook transport means exposing CowBot to the internet**
+  ([ADR-0062](ADR/0062-webhook-transports.md)). Every adapter defaults to an
+  outbound transport precisely so that is not required; choosing a webhook trades
+  that away for a public hostname, a certificate, and a reverse proxy. The
+  endpoint verifies every request before parsing it, but the proxy's request-size
+  limit is the only bound on an unauthenticated caller.
+- **The three webhook transports are not tested against the live platforms.** The
+  signing and decryption schemes are covered by unit tests, a published AES test
+  vector, and route tests; a deployment is the first place a real platform's
+  signature is checked end to end.
 - **One process per Slack or Feishu app.** Slack reports how many connections an
   app holds and Feishu delivers each event to one connection at random, so two
   servers on the same app token each see a subset of the traffic and answer with
