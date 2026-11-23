@@ -34,6 +34,7 @@ pub mod adapter;
 pub mod api;
 pub mod card;
 pub mod config;
+pub mod crypto;
 pub mod event;
 pub mod frame;
 pub mod socket;
