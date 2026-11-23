@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 
 use cowbot_core::cancel::CancelSignal;
-use cowbot_core::error::CowResult;
+use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::integration::IntegrationKind;
 use cowbot_store::Store;
 
@@ -186,6 +186,81 @@ pub trait Integration: Send + Sync {
     ) -> CowResult<()> {
         Ok(())
     }
+
+    /// Whether this adapter is running on a webhook transport (ADR-0062).
+    ///
+    /// Default `false`. Every adapter predating the webhook work dials out, and
+    /// one that only dials out must never be asked to accept an inbound request
+    /// — the route reports a deployment that asks for it as a misconfiguration
+    /// rather than accepting a body it cannot verify.
+    fn accepts_webhook(&self) -> bool {
+        false
+    }
+
+    /// Verify one inbound HTTP request and hand it to the pipeline.
+    ///
+    /// Everything a platform forces — a signature, a secret header, a
+    /// challenge, a decryption — belongs here, and it are verified against the
+    /// **raw** body before anything parses it. Everything after verification
+    /// belongs to the shared pipeline, which is why an implementation is a thin
+    /// adapter over the translation the socket transport already uses.
+    ///
+    /// The default refuses. Reaching it means a caller ignored
+    /// [`Self::accepts_webhook`], and saying so is better than answering a
+    /// platform with a success it will not retry.
+    async fn webhook(
+        &self,
+        _ctx: &IntegrationContext,
+        _request: InboundRequest<'_>,
+    ) -> CowResult<WebhookReply> {
+        Err(CowError::Config(format!(
+            "this {} adapter does not accept webhooks",
+            self.kind().as_str()
+        )))
+    }
+}
+
+/// One inbound HTTP request, before it has been trusted.
+///
+/// The body is the raw bytes because a signature is computed over what arrived,
+/// not over what a parser would produce from it. A platform's JSON is parsed
+/// only after [`Integration::webhook`] has decided the request is genuine.
+pub struct InboundRequest<'a> {
+    /// Every request header, lower-cased.
+    pub headers: &'a [(String, String)],
+    /// The body exactly as it arrived.
+    pub body: &'a [u8],
+}
+
+impl InboundRequest<'_> {
+    /// One header's value, matched case-insensitively.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// What a platform's webhook does with one request.
+///
+/// Each variant is a response a platform actually expects, so the route can
+/// answer correctly without knowing which platform it is serving.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebhookReply {
+    /// Accepted and handled: 200 with an empty body.
+    Ack,
+    /// The platform's own handshake challenge, echoed back verbatim.
+    ///
+    /// Slack wants `{"challenge": …}` and Feishu wants the same shape; the
+    /// variant carries the whole body so each adapter answers with what its
+    /// platform documents rather than a shape the route invented.
+    Challenge(String),
+    /// A button press, answered in place.
+    ///
+    /// The body is optional because a platform that only needs an
+    /// acknowledgement sends nothing, and one that shows a toast sends the JSON.
+    Interaction(Option<String>),
 }
 
 /// The adapters a deployment can start, by kind.

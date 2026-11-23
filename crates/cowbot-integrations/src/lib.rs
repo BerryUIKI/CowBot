@@ -17,6 +17,10 @@
 //! * [`attachments`] — a file somebody sent, on disk where a tool can reach it;
 //! * [`supervisor`] — running an adapter's inbound loop beside its mirror.
 //!
+//! An adapter that prefers an inbound HTTP surface to a socket overrides
+//! [`adapter::Integration::webhook`]; the route that calls it lives in the server
+//! (ADR-0062).
+//!
 //! The four platform crates (S2–S6) implement [`adapter::Integration`] and
 //! nothing else. Splitting it this way means the rules that are easy to get
 //! wrong — a duplicate that runs a second turn, an echo loop between two bots, a
@@ -34,7 +38,9 @@ pub mod route;
 pub mod sink;
 pub mod supervisor;
 
-pub use adapter::{Factory, Integration, IntegrationContext, MessageSink, Registry};
+pub use adapter::{
+    Factory, InboundRequest, Integration, IntegrationContext, MessageSink, Registry, WebhookReply,
+};
 pub use approvals::{ApprovalPosting, ApprovalPrompt, Decided, Refused};
 pub use model::{
     Attachment, AttachmentKind, BindingHealth, ChunkLimit, ChunkPart, DeliveredId, ExternalAuthor,

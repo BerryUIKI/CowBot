@@ -39,6 +39,13 @@ pub struct AppState {
     /// configured no LLM, in which case a posted message is stored and no
     /// answer arrives — the behaviour every server release had before ADR-0055.
     pub turns: Option<Arc<crate::TurnExecutor>>,
+    /// Serves the inbound surface a webhook transport needs (ADR-0062).
+    ///
+    /// `None` for every deployment that runs a socket or a poll, and for one with
+    /// no model provider. The route answers 404 in that case, which is the same
+    /// "nothing is running here" a caller gets from an integration this build
+    /// cannot start.
+    pub webhooks: Option<Arc<crate::webhooks::WebhookReceiver>>,
 }
 
 impl AppState {
@@ -49,12 +56,19 @@ impl AppState {
             bus,
             session_decisions: cowbot_service::SessionDecisions::new(),
             turns: None,
+            webhooks: None,
         }
     }
 
     /// Attach a turn executor, enabling server-side answers (ADR-0055).
     pub fn with_turns(mut self, turns: Arc<crate::TurnExecutor>) -> Self {
         self.turns = Some(turns);
+        self
+    }
+
+    /// Attach the webhook receiver, enabling the inbound surface (ADR-0062).
+    pub fn with_webhooks(mut self, webhooks: Arc<crate::webhooks::WebhookReceiver>) -> Self {
+        self.webhooks = Some(webhooks);
         self
     }
 
@@ -130,7 +144,14 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(api::health))
-        .route("/api/v1/auth/sign-in", post(api::sign_in));
+        .route("/api/v1/auth/sign-in", post(api::sign_in))
+        // A webhook endpoint authenticates by verifying the body, never by a
+        // session, so it sits on the public router (ADR-0062). The integration
+        // id in the path chooses whose secret is used.
+        .route(
+            "/api/v1/integrations/{integration_id}/webhook",
+            post(crate::webhooks::receive),
+        );
 
     let authenticated = Router::new()
         .route("/api/v1/me", get(api::me))
