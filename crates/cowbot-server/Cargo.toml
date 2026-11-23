@@ -24,6 +24,8 @@ cowbot-mattermost = { workspace = true }
 cowbot-telegram = { workspace = true }
 # Slack is the third, over Socket Mode (ADR-0059).
 cowbot-slack = { workspace = true }
+# Feishu is the fourth, over its long connection (ADR-0061).
+cowbot-feishu = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
