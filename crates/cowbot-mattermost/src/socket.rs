@@ -88,6 +88,12 @@ pub struct Post {
     pub kind: String,
     #[serde(default)]
     pub create_at: i64,
+    /// Files attached to this post (ADR-0060).
+    ///
+    /// Ids only: the post event carries the upload's identity, and the bytes come
+    /// from a second, authenticated call. Empty for a post with no attachment.
+    #[serde(default)]
+    pub file_ids: Vec<String>,
 }
 
 impl Post {

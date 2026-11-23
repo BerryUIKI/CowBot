@@ -11,7 +11,7 @@
 //! all three itself. What was missing was a place to run it.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cowbot_bus::EventBus;
@@ -55,6 +55,14 @@ pub struct TurnExecutor {
     /// rooted at one directory the server owns.
     tools: ToolRegistry,
     session_decisions: Arc<SessionDecisions>,
+    /// The directory the file tools and the sandbox are rooted at.
+    ///
+    /// Kept as well as used, because an inbound attachment has to land under the
+    /// same root for the path the message names to be one a tool can open
+    /// (ADR-0060).
+    root: PathBuf,
+    /// How long an approval waits for a person before it lapses (ADR-0060).
+    approval_timeout: std::time::Duration,
     services: Mutex<HashMap<WorkspaceId, Arc<ChannelAgentService>>>,
 }
 
@@ -80,6 +88,28 @@ impl TurnExecutor {
         config: &ServerLlmConfig,
         workspace_dir: &Path,
     ) -> std::io::Result<Arc<Self>> {
+        Self::with_approval_timeout(
+            store,
+            bus,
+            config,
+            workspace_dir,
+            std::time::Duration::from_secs(300),
+        )
+        .await
+    }
+
+    /// Build an executor whose approvals wait `approval_timeout`.
+    ///
+    /// A server that asks over a messaging app needs longer than the desktop's
+    /// five minutes: the card is on somebody's phone, and an approval that lapses
+    /// while they are reading it denies a tool call for no reason they can see.
+    pub async fn with_approval_timeout(
+        store: Store,
+        bus: EventBus,
+        config: &ServerLlmConfig,
+        workspace_dir: &Path,
+        approval_timeout: std::time::Duration,
+    ) -> std::io::Result<Arc<Self>> {
         std::fs::create_dir_all(workspace_dir)?;
         let root = workspace_dir.to_path_buf();
 
@@ -87,7 +117,7 @@ impl TurnExecutor {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CodeExecutionTool::new(sandbox)));
         tools.register(Arc::new(ReadFileTool::new(Some(root.clone()))));
-        tools.register(Arc::new(WriteFileTool::new(Some(root))));
+        tools.register(Arc::new(WriteFileTool::new(Some(root.clone()))));
 
         Ok(Arc::new(Self {
             store,
@@ -100,6 +130,8 @@ impl TurnExecutor {
             ),
             tools,
             session_decisions: SessionDecisions::new(),
+            root,
+            approval_timeout,
             services: Mutex::new(HashMap::new()),
         }))
     }
@@ -107,6 +139,16 @@ impl TurnExecutor {
     /// The model every turn is answered with.
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// The directory this deployment's file tools and sandbox are rooted at.
+    pub fn workspace_root(&self) -> &Path {
+        &self.root
+    }
+
+    /// How long an approval waits for a person.
+    pub fn approval_timeout(&self) -> std::time::Duration {
+        self.approval_timeout
     }
 
     /// The input window the capacity check enforces, when one was configured.
@@ -219,6 +261,7 @@ impl TurnExecutor {
                 &self.model,
                 &ChannelTurnOptions {
                     participant_capacity: capacity,
+                    approval_timeout: Some(self.approval_timeout),
                     ..ChannelTurnOptions::default()
                 },
             )

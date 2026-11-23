@@ -44,7 +44,75 @@ pub struct InboundMessage {
     /// messages that do not address the bot), an adapter infers it and says so
     /// in its own documentation rather than leaving the pipeline to guess.
     pub addresses_bot: bool,
+    /// Files the platform delivered with this message (ADR-0060).
+    ///
+    /// Described, not downloaded: the pipeline claims the event id first and
+    /// fetches afterwards, because a retry that downloaded first would pay for
+    /// the same file twice. Empty for a platform whose messages carry none.
+    pub attachments: Vec<Attachment>,
     pub created_at: DateTime<Utc>,
+}
+
+/// One file a platform delivered, as the adapter describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// The platform's own file id, which is what a download request needs.
+    ///
+    /// An id rather than a URL: a URL from an event is untrusted input to an
+    /// HTTP client, and the adapter is the only thing that should decide what
+    /// host to call.
+    pub external_id: String,
+    pub kind: AttachmentKind,
+    /// The name the sender gave it.
+    ///
+    /// **Untrusted and display-only.** It appears in the message text; it never
+    /// becomes part of a filesystem path, which is why
+    /// [`crate::attachments::file_name`] generates one instead.
+    pub file_name: Option<String>,
+    pub mime_type: Option<String>,
+    /// The size the platform declared, before any download.
+    ///
+    /// Used to refuse an oversized file without fetching it. `None` means the
+    /// platform did not say, in which case the adapter's own cap is what stops
+    /// the read.
+    pub size_bytes: Option<u64>,
+}
+
+/// What a platform said the file is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Image,
+    File,
+    Audio,
+    Video,
+}
+
+impl AttachmentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AttachmentKind::Image => "image",
+            AttachmentKind::File => "file",
+            AttachmentKind::Audio => "audio",
+            AttachmentKind::Video => "video",
+        }
+    }
+
+    /// Guess from a MIME type, which is more reliable than an extension.
+    pub fn from_mime(mime: Option<&str>) -> Self {
+        let Some(mime) = mime else {
+            return AttachmentKind::File;
+        };
+        let mime = mime.to_ascii_lowercase();
+        if mime.starts_with("image/") {
+            AttachmentKind::Image
+        } else if mime.starts_with("audio/") {
+            AttachmentKind::Audio
+        } else if mime.starts_with("video/") {
+            AttachmentKind::Video
+        } else {
+            AttachmentKind::File
+        }
+    }
 }
 
 /// A platform account, as the platform names it.

@@ -697,6 +697,7 @@ impl ConversationService {
             max_concurrency: options.max_concurrency,
             use_model_permissions: options.use_model_permissions,
             capture_plan_task: None,
+            approval_timeout: options.approval_timeout,
         };
         if options.approval_level == ApprovalLevel::PlanOnly {
             run_options.capture_plan_task = Some(task.id.clone());
@@ -1068,6 +1069,7 @@ impl ConversationService {
             max_concurrency,
             use_model_permissions: options.use_model_permissions,
             capture_plan_task: None,
+            approval_timeout: options.approval_timeout,
         };
         let platform = options.platform_context.as_deref();
 

@@ -16,6 +16,12 @@ use crate::config::MattermostConfig;
 /// answer usefully for this message; the next one can try.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a file download may take.
+///
+/// Longer than a JSON call: a 20 MB attachment over a slow link is not a broken
+/// server, and the size cap is what bounds this rather than the clock.
+const FILE_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// The largest post the server accepts, in bytes of UTF-8.
 ///
 /// A value used only when the server does not report one. Mattermost's own
@@ -59,6 +65,18 @@ pub struct CreatedPost {
     pub id: String,
 }
 
+/// An uploaded file, as `GET /files/{id}/info` describes it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub mime_type: String,
+}
+
 /// The request body for a new post.
 #[derive(Debug, Serialize)]
 struct CreatePost<'a> {
@@ -66,6 +84,17 @@ struct CreatePost<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     root_id: Option<&'a str>,
+}
+
+/// The request body for editing an existing post (ADR-0060).
+///
+/// Only the message is sent. Mattermost's update call replaces the whole post,
+/// and sending back fields the adapter did not read would drop the ones it did
+/// not know about.
+#[derive(Debug, Serialize)]
+struct UpdatePost<'a> {
+    id: &'a str,
+    message: &'a str,
 }
 
 /// The calls one adapter makes.
@@ -154,6 +183,55 @@ impl Rest {
         self.get_json("/config/client?format=json").await
     }
 
+    /// One uploaded file's metadata (ADR-0060).
+    ///
+    /// The post event names only the id, so this is how the size is learned
+    /// before the bytes are asked for.
+    pub async fn file_info(&self, file_id: &str) -> CowResult<FileInfo> {
+        self.get_json(&format!("/files/{file_id}/info")).await
+    }
+
+    /// One uploaded file's bytes, read with a hard cap.
+    ///
+    /// The cap is enforced while reading rather than after: buffering a file the
+    /// deployment will refuse is exactly the denial of service the cap prevents.
+    /// A file that grows past the cap mid-read is an error, not a truncated save.
+    pub async fn file_bytes(&self, file_id: &str, max_bytes: u64) -> CowResult<Vec<u8>> {
+        let response = self
+            .http
+            .get(self.config.api(&format!("/files/{file_id}")))
+            .bearer_auth(self.token())
+            .timeout(FILE_TIMEOUT)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejected("downloading a file", status, response).await);
+        }
+        // A `Content-Length` above the cap is refused before any body is read.
+        if let Some(length) = response.content_length() {
+            if length > max_bytes {
+                return Err(CowError::Config(format!(
+                    "the file is {length} bytes, above the {max_bytes}-byte limit"
+                )));
+            }
+        }
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(transport)?;
+            if (body.len() + chunk.len()) as u64 > max_bytes {
+                return Err(CowError::Config(format!(
+                    "the file grew past the {max_bytes}-byte limit and was not kept"
+                )));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
     /// Post a message, optionally in a thread.
     pub async fn create_post(
         &self,
@@ -179,6 +257,30 @@ impl Rest {
             return Err(rejected("posting a message", status, response).await);
         }
         response.json().await.map_err(transport)
+    }
+
+    /// Replace a post's message.
+    ///
+    /// Used to strike out an approval card once it is decided, so a person
+    /// scrolling back does not tap a button whose decision already landed.
+    pub async fn update_post(&self, post_id: &str, message: &str) -> CowResult<()> {
+        let response = self
+            .http
+            .put(self.config.api(&format!("/posts/{post_id}")))
+            .bearer_auth(self.token())
+            .timeout(REQUEST_TIMEOUT)
+            .json(&UpdatePost {
+                id: post_id,
+                message,
+            })
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejected("updating a post", status, response).await);
+        }
+        Ok(())
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> CowResult<T> {

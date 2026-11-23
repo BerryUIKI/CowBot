@@ -39,6 +39,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::connect(&config.database).await?;
     store.migrate().await?;
 
+    // Expire approvals a previous process left pending. The desktop does this on
+    // open and the server never did, so a row whose waiting turn died stayed
+    // actionable: a card left in an IM could still be tapped into a decision that
+    // woke nobody (ADR-0060).
+    match store.list_workspaces().await {
+        Ok(workspaces) => {
+            for workspace in workspaces {
+                let service = cowbot_service::ApprovalService::new(
+                    store.clone(),
+                    cowbot_bus::EventBus::default_bus(),
+                    workspace.id.clone(),
+                );
+                match service.reconcile_on_startup().await {
+                    Ok(0) => {}
+                    Ok(expired) => {
+                        tracing::info!(expired, "Expired approvals left pending by an earlier run")
+                    }
+                    Err(error) => {
+                        // A database fault here must not stop the server: the
+                        // approvals stay pending, which is the state it found.
+                        tracing::warn!(%error, "Could not expire leftover approvals")
+                    }
+                }
+            }
+        }
+        Err(error) => tracing::warn!(%error, "Could not list workspaces to expire approvals"),
+    }
+
     let auth = Arc::new(AuthService::new(store.clone(), config.clone()));
     let password = generated_password();
     if let Some(owner) = auth.bootstrap(&password).await? {
@@ -55,11 +83,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let integrations = tokio::sync::Mutex::new(None);
     let state = match &config.llm {
         Some(llm) => {
-            let executor = cowbot_server::TurnExecutor::new(
+            let executor = cowbot_server::TurnExecutor::with_approval_timeout(
                 store.clone(),
                 state.bus.clone(),
                 llm,
                 &config.workspace_dir,
+                std::time::Duration::from_secs(config.approval_timeout_secs),
             )
             .await?;
             tracing::info!(

@@ -52,6 +52,12 @@ pub struct ChannelTurnOptions {
     pub max_concurrency: usize,
     /// Let Auto mode ask the active model for permission decisions.
     pub use_model_permissions: bool,
+    /// How long an approval may wait for a person (ADR-0060).
+    ///
+    /// `None` keeps the service's five-minute default. A turn started from an IM
+    /// sets longer: the card is on somebody's phone, not on the screen in front
+    /// of them.
+    pub approval_timeout: Option<std::time::Duration>,
     /// Extra environment text appended to the platform context, for example
     /// registered projects the desktop can target with workspace tools.
     pub platform_context: Option<String>,
@@ -68,6 +74,7 @@ impl Default for ChannelTurnOptions {
             approval_level: ApprovalLevel::Ask,
             max_concurrency: 4,
             use_model_permissions: false,
+            approval_timeout: None,
             platform_context: None,
             participant_capacity: Vec::new(),
         }
@@ -336,6 +343,7 @@ impl ChannelAgentService {
         .with_scope()
         .with_model_permissions(options.use_model_permissions)
         .with_session_decisions(self.session_decisions.clone())
+        .with_approval_timeout(options.approval_timeout)
         .with_turns(self.turns.clone());
         let run_options = CrewRunOptions {
             approval_level: options.approval_level,
@@ -343,6 +351,7 @@ impl ChannelAgentService {
             max_concurrency: options.max_concurrency,
             use_model_permissions: options.use_model_permissions,
             capture_plan_task: None,
+            approval_timeout: options.approval_timeout,
         };
 
         // History excludes this turn's own notices, so an "@Nobody" notice

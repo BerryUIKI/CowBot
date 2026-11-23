@@ -591,6 +591,9 @@ async fn reply_to_mentions(
                 approval_level: settings.approval.into(),
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
+                // A CLI approval waits at the terminal, which is faster than an
+                // IM card; the service default is right for it.
+                approval_timeout: None,
                 platform_context: None,
                 participant_capacity: Vec::new(),
             },
@@ -868,6 +871,7 @@ async fn run_crew(
                 max_concurrency: settings.concurrency,
                 use_model_permissions,
                 capture_plan_task: None,
+                approval_timeout: None,
             },
         )
         .await?;

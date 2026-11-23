@@ -328,6 +328,10 @@ impl ApprovalService {
                         risk: assessment.level,
                         reason,
                         rule,
+                        // The call, so a surface that did not cache
+                        // `ToolCallRequested` can still name the tool and show
+                        // what it would do (ADR-0060).
+                        call: Some(call.clone()),
                     }));
                 self.record_audit(
                     &agent_id.0,

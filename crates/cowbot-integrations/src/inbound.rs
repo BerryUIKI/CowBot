@@ -43,6 +43,7 @@ pub async fn ingest(
     channels: &ChannelService,
     integration: &IntegrationRecord,
     message: &InboundMessage,
+    attachments: Option<&crate::attachments::Inbound<'_>>,
 ) -> CowResult<Ingested> {
     // A bot, including this one, must not be answered. A platform delivers
     // another bot's message happily, and two bots mentioning each other is an
@@ -76,8 +77,19 @@ pub async fn ingest(
         return Ok(Ingested::Skipped(Skipped::Duplicate));
     }
 
+    // The attachments are fetched here, after the claim, so a platform retry
+    // downloads nothing (ADR-0060). A file that cannot be stored is named as not
+    // kept rather than dropping the message.
+    let files = crate::attachments::store_all(message, attachments).await;
+
     let principal = resolve_principal(store, integration, &message.author).await?;
-    let content = attribute_mention(store, route.agent_id.as_ref(), message).await?;
+    let mut content = attribute_mention(store, route.agent_id.as_ref(), message).await?;
+    if let Some(files) = files {
+        content.push_str(&files);
+    }
+    // The check runs on the composed text: a photo sent with no caption reaches
+    // the agent as the path it was written to, and dropping it as empty would
+    // lose the only thing the sender meant to say.
     if content.trim().is_empty() {
         // Nothing worth storing. The claim is released so the platform's retry
         // is not swallowed: this delivery was declined, not handled.
@@ -191,6 +203,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "Hello there", true),
+            None,
         )
         .await
         .unwrap();
@@ -219,16 +232,26 @@ mod tests {
         let channels = fixture.channels();
         let message = sample("evt-1", "Hello", true);
 
-        assert!(
-            ingest(&fixture.store, &channels, &fixture.integration, &message)
-                .await
-                .unwrap()
-                .is_posted()
-        );
+        assert!(ingest(
+            &fixture.store,
+            &channels,
+            &fixture.integration,
+            &message,
+            None,
+        )
+        .await
+        .unwrap()
+        .is_posted());
         assert_eq!(
-            ingest(&fixture.store, &channels, &fixture.integration, &message)
-                .await
-                .unwrap(),
+            ingest(
+                &fixture.store,
+                &channels,
+                &fixture.integration,
+                &message,
+                None,
+            )
+            .await
+            .unwrap(),
             Ingested::Skipped(Skipped::Duplicate)
         );
 
@@ -254,9 +277,15 @@ mod tests {
         };
 
         assert_eq!(
-            ingest(&fixture.store, &channels, &fixture.integration, &message)
-                .await
-                .unwrap(),
+            ingest(
+                &fixture.store,
+                &channels,
+                &fixture.integration,
+                &message,
+                None,
+            )
+            .await
+            .unwrap(),
             Ingested::Skipped(Skipped::FromBot)
         );
         // Nothing was claimed either, so a human event with that id still works.
@@ -275,9 +304,15 @@ mod tests {
         message.external_conversation_id = "C-unknown".into();
 
         assert_eq!(
-            ingest(&fixture.store, &channels, &fixture.integration, &message)
-                .await
-                .unwrap(),
+            ingest(
+                &fixture.store,
+                &channels,
+                &fixture.integration,
+                &message,
+                None,
+            )
+            .await
+            .unwrap(),
             Ingested::Skipped(Skipped::Unbound)
         );
         assert!(!fixture
@@ -305,6 +340,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "Hello", true),
+            None,
         )
         .await
         .unwrap();
@@ -336,7 +372,8 @@ mod tests {
                 &fixture.store,
                 &channels,
                 &fixture.integration,
-                &sample("evt-1", "Hello", true)
+                &sample("evt-1", "Hello", true),
+                None,
             )
             .await
             .unwrap(),
@@ -354,7 +391,8 @@ mod tests {
                 &fixture.store,
                 &channels,
                 &fixture.integration,
-                &sample("evt-1", "   ", true)
+                &sample("evt-1", "   ", true),
+                None,
             )
             .await
             .unwrap(),
@@ -374,9 +412,15 @@ mod tests {
         let mut message = sample("evt-1", "Hello", true);
         message.external_thread_id = Some("topic-9".into());
 
-        ingest(&fixture.store, &channels, &fixture.integration, &message)
-            .await
-            .unwrap();
+        ingest(
+            &fixture.store,
+            &channels,
+            &fixture.integration,
+            &message,
+            None,
+        )
+        .await
+        .unwrap();
 
         let messages = fixture
             .store
@@ -409,6 +453,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "what is the deploy status?", true),
+            None,
         )
         .await
         .unwrap();
@@ -443,6 +488,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "@cowbot deploy status?", true),
+            None,
         )
         .await
         .unwrap();
@@ -476,6 +522,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "lunch at noon?", false),
+            None,
         )
         .await
         .unwrap();
@@ -495,6 +542,7 @@ mod tests {
             &channels,
             &fixture.integration,
             &sample("evt-1", "hi", true),
+            None,
         )
         .await
         .unwrap();

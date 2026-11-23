@@ -17,13 +17,14 @@ use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::integration::IntegrationKind;
 use cowbot_integrations::adapter::{Integration, IntegrationContext};
+use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt, Refused};
 use cowbot_integrations::model::{
-    BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
+    Attachment, BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
 };
 use cowbot_integrations::notice::report_binding_health;
 use tracing::{debug, info, warn};
 
-use crate::api::{chat_unreachable_reason, Api, ApiError};
+use crate::api::{chat_unreachable_reason, parse_callback_data, Api, ApiError};
 
 /// Telegram's documented `sendMessage` limit, in UTF-16 code units.
 pub const MAX_MESSAGE_UNITS: usize = 4_096;
@@ -135,6 +136,7 @@ impl TelegramIntegration {
             // direct-conversation mode. In a group, privacy mode means the bot
             // sees only what addresses it, and the entity check says so.
             addresses_bot: message.chat.is_private() || addressed,
+            attachments: message.attachments(),
             created_at: moment(message.date),
         })
     }
@@ -243,6 +245,13 @@ impl TelegramIntegration {
 /// A refused message is logged and the poll continues: one message the pipeline
 /// would not store must not stop the bot.
 async fn dispatch(integration: &TelegramIntegration, ctx: &IntegrationContext, update: &Update) {
+    // A button press is a decision, not a message (ADR-0060). It is answered in
+    // every path, including a refusal: an unanswered callback leaves the person
+    // looking at a spinner until the client gives up.
+    if let Some(query) = &update.callback_query {
+        dispatch_callback(integration, ctx, query).await;
+        return;
+    }
     let Some(message) = integration.inbound(update) else {
         return;
     };
@@ -259,6 +268,97 @@ async fn dispatch(integration: &TelegramIntegration, ctx: &IntegrationContext, u
             %error,
             "the pipeline refused a Telegram message"
         ),
+    }
+}
+
+/// Turn one button press into an approval decision, and answer it.
+///
+/// Everything that can go wrong is reported back to the person who tapped,
+/// because that is the only human in the loop: a refusal, an expired request, and
+/// a card from somebody else's message all look the same from a chat window.
+async fn dispatch_callback(
+    integration: &TelegramIntegration,
+    ctx: &IntegrationContext,
+    query: &crate::update::CallbackQuery,
+) {
+    let Some(author) = query.from.as_ref() else {
+        // Telegram always sends one; without it there is nobody to attribute a
+        // decision to.
+        return;
+    };
+    let chat_id = query
+        .message
+        .as_ref()
+        .map(|message| message.chat.id.to_string())
+        .unwrap_or_default();
+
+    let outcome = match query.data.as_deref().and_then(parse_callback_data) {
+        Some((approved, approval_id)) => {
+            let external = ExternalAuthor {
+                external_id: author.id.to_string(),
+                display_name: author.display_name(),
+                is_bot: author.is_bot,
+            };
+            Some(
+                cowbot_integrations::approvals::decide_from_im(
+                    ctx,
+                    approval_id,
+                    approved,
+                    &external,
+                )
+                .await,
+            )
+        }
+        // A button this adapter did not compose. Answering quietly is better
+        // than reporting a failure the person cannot act on.
+        None => None,
+    };
+
+    let (text, alert, settled) = match &outcome {
+        Some(Ok(decided)) => (
+            format!(
+                "{}.",
+                cowbot_integrations::approvals::decision_summary(&decided.approval)
+            ),
+            false,
+            Some(cowbot_integrations::approvals::decision_summary(
+                &decided.approval,
+            )),
+        ),
+        Some(Err(Refused::NotPending(reason))) => {
+            (format!("This is already settled: {reason}."), true, None)
+        }
+        Some(Err(Refused::NotAllowed(reason))) => (reason.clone(), true, None),
+        None => (
+            "This button is not one I know about.".to_string(),
+            false,
+            None,
+        ),
+    };
+
+    // Revise the card, so a second person does not tap buttons whose decision
+    // already landed. Only when the callback names the message it belongs to.
+    if let (Some(summary), Some(message_id)) = (
+        settled,
+        query.message.as_ref().map(|message| message.message_id),
+    ) {
+        if let Err(error) = integration
+            .api
+            .edit_message(&chat_id, message_id, &to_html(&summary))
+            .await
+        {
+            debug!(%error, "could not revise an approval card");
+        }
+    }
+
+    if let Err(error) = integration
+        .api
+        .answer_callback(&query.id, &text, alert)
+        .await
+    {
+        // The decision already landed; failing to answer only means the client
+        // spinner times out. Worth a log line, not a retry.
+        debug!(%error, "could not answer a Telegram callback");
     }
 }
 
@@ -382,6 +482,78 @@ impl Integration for TelegramIntegration {
 
     async fn check_binding(&self, external_id: &str) -> BindingHealth {
         binding_health(&self.api, self.bot().as_ref(), external_id).await
+    }
+
+    async fn fetch_attachment(
+        &self,
+        attachment: &Attachment,
+        max_bytes: u64,
+    ) -> cowbot_core::error::CowResult<Vec<u8>> {
+        // Two calls: `getFile` names a path, and the path is what the download
+        // address is built from. Telegram refuses `getFile` above 20 MB, so a
+        // larger file fails here with Telegram's own reason.
+        let reference = self
+            .api
+            .get_file(&attachment.external_id)
+            .await
+            .map_err(cowbot_core::error::CowError::from)?;
+        let Some(path) = reference.file_path else {
+            return Err(cowbot_core::error::CowError::Config(
+                "Telegram did not say where the file is".into(),
+            ));
+        };
+        self.api
+            .download_file(&path, max_bytes)
+            .await
+            .map_err(cowbot_core::error::CowError::from)
+    }
+
+    /// Post an approval request with two inline-keyboard buttons.
+    ///
+    /// The card carries the approval id and nothing else: Telegram caps
+    /// `callback_data` at 64 bytes, so the payload stays in CowBot and the button
+    /// is a pointer to it.
+    async fn post_approval(
+        &self,
+        target: &OutboundTarget,
+        prompt: &ApprovalPrompt,
+    ) -> cowbot_core::error::CowResult<ApprovalPosting> {
+        let html = to_html(&prompt.describe());
+        let sent = self
+            .api
+            .send_approval(
+                &target.external_conversation_id,
+                &html,
+                &prompt.approval_id,
+                target.thread_id.as_deref(),
+            )
+            .await
+            .map_err(cowbot_core::error::CowError::from)?;
+        Ok(ApprovalPosting {
+            delivered: DeliveredId(sent.0.to_string()),
+            buttons: true,
+        })
+    }
+
+    async fn update_approval(
+        &self,
+        target: &OutboundTarget,
+        posting: &ApprovalPosting,
+        summary: &str,
+    ) -> cowbot_core::error::CowResult<()> {
+        let Ok(message_id) = posting.delivered.0.parse::<i64>() else {
+            // A delivery id that is not a Telegram message id means the posting
+            // came from somewhere else; there is nothing to edit.
+            return Ok(());
+        };
+        self.api
+            .edit_message(
+                &target.external_conversation_id,
+                message_id,
+                &to_html(summary),
+            )
+            .await
+            .map_err(cowbot_core::error::CowError::from)
     }
 }
 

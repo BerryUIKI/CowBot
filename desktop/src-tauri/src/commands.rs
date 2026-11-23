@@ -310,6 +310,9 @@ pub async fn post_message(
                     approval_level,
                     max_concurrency: 4,
                     use_model_permissions,
+                    // The desktop draws the approval card on screen, so the
+                    // service's five-minute default is right for it (ADR-0060).
+                    approval_timeout: None,
                     platform_context,
                     participant_capacity,
                 },
@@ -3652,6 +3655,7 @@ pub async fn ask_side_question(
                 approval_level: approval_level.unwrap_or(ApprovalLevel::Ask),
                 max_concurrency: 4,
                 use_model_permissions: state.uses_remote_model(),
+                approval_timeout: None,
                 platform_context: project_platform_context(&state),
                 participant_capacity: Vec::new(),
             },

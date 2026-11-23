@@ -118,6 +118,7 @@ pub fn start(
         bus: bus.clone(),
         integration: record.clone(),
         sink,
+        attachments_dir: None,
     };
 
     let inbound_adapter = adapter.clone();
@@ -152,6 +153,7 @@ pub fn start(
         events: bus.subscribe(),
         integration: record.clone(),
         adapter: adapter.clone(),
+        cards: std::collections::HashMap::new(),
     };
     let mirror_cancel = cancel.clone();
     tokio::spawn(async move {
@@ -176,6 +178,18 @@ struct Mirror {
     events: tokio::sync::broadcast::Receiver<cowbot_core::event::Event>,
     integration: IntegrationRecord,
     adapter: Arc<dyn Integration>,
+    /// Approval cards this mirror posted, so a decision can revise the right one.
+    ///
+    /// In memory rather than in the store: a card is a message in a chat, and a
+    /// restart cannot revise one it has forgotten — the same limitation a
+    /// platform without an edit call has permanently.
+    cards: std::collections::HashMap<
+        cowbot_core::approval::ApprovalId,
+        (
+            crate::model::OutboundTarget,
+            crate::approvals::ApprovalPosting,
+        ),
+    >,
 }
 
 impl Mirror {
@@ -211,7 +225,58 @@ impl Mirror {
         }
     }
 
-    async fn mirror_one(&self, payload: &cowbot_core::event::EventPayload) -> CowResult<()> {
+    async fn mirror_one(&mut self, payload: &cowbot_core::event::EventPayload) -> CowResult<()> {
+        // An approval request for a conversation this integration serves is a
+        // question for a person, not a reply to mirror (ADR-0060). The prompt is
+        // posted and the call returns: the waiting turn polls the row, so nothing
+        // here blocks on a human.
+        if let Some((prompt, external)) =
+            crate::approvals::prompt_for(&self.store, &self.integration, payload).await?
+        {
+            let target = crate::model::OutboundTarget::new(&self.integration.id, external);
+            match self.adapter.post_approval(&target, &prompt).await {
+                Ok(posting) => {
+                    self.cards.insert(
+                        cowbot_core::approval::ApprovalId::new(&prompt.approval_id),
+                        (target, posting),
+                    );
+                }
+                Err(error) => warn!(
+                    integration = %self.integration.id,
+                    approval = %prompt.approval_id,
+                    %error,
+                    "Failed to post an approval request to the IM"
+                ),
+            }
+            return Ok(());
+        }
+
+        // A decision, for a card this integration posted. Revising it is what
+        // stops a tap on a stale card from looking like it did something.
+        if let Some(approval) =
+            crate::approvals::decided_for(&self.store, &self.integration, payload).await?
+        {
+            if let Some((target, posting)) = self
+                .cards
+                .remove(&cowbot_core::approval::ApprovalId::new(&approval.id.0))
+            {
+                let summary = crate::approvals::decision_summary(&approval);
+                if let Err(error) = self
+                    .adapter
+                    .update_approval(&target, &posting, &summary)
+                    .await
+                {
+                    warn!(
+                        integration = %self.integration.id,
+                        approval = %approval.id.0,
+                        %error,
+                        "Failed to revise an approval card in the IM"
+                    );
+                }
+            }
+            return Ok(());
+        }
+
         let Some(message) = outbound::mirrorable(payload) else {
             return Ok(());
         };

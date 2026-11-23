@@ -10,6 +10,7 @@ use std::time::Duration;
 use cowbot_core::error::CowError;
 use reqwest::Client as HttpClient;
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::TelegramConfig;
@@ -21,6 +22,9 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(15);
 /// Slack on top of the long-poll timeout, so a poll that returns empty at its
 /// own deadline is not also killed by the HTTP client at the same instant.
 const POLL_GRACE: Duration = Duration::from_secs(10);
+
+/// How long a file download may take. The size cap bounds it, not the clock.
+const FILE_TIMEOUT_SECS: u64 = 120;
 
 /// A failed call, kept richer than [`CowError`].
 ///
@@ -73,6 +77,12 @@ impl From<ApiError> for CowError {
         CowError::Llm(error.to_string())
     }
 }
+
+/// The update kinds this adapter asks Telegram for.
+///
+/// A typo here removes a whole feature without an error: the poll simply never
+/// delivers that kind.
+const ALLOWED_UPDATES: &[&str] = &["message", "callback_query"];
 
 /// The calls one adapter makes.
 #[derive(Clone)]
@@ -148,7 +158,7 @@ impl Api {
         let body = GetUpdates {
             offset,
             timeout,
-            allowed_updates: ["message"],
+            allowed_updates: ALLOWED_UPDATES,
         };
         self.call_with_timeout("getUpdates", &body, timeout as u64 + POLL_GRACE.as_secs())
             .await
@@ -209,6 +219,155 @@ impl Api {
     ) -> Result<ChatMember, ApiError> {
         self.call("getChatMember", &ChatMemberById { chat_id, user_id })
             .await
+    }
+
+    /// Ask Telegram where a file lives, so it can be downloaded.
+    ///
+    /// The file is not in this answer: `file_path` is a suffix the caller appends
+    /// to the file address. Telegram refuses files over 20 MB here, which is the
+    /// ceiling this adapter can reach.
+    pub async fn get_file(&self, file_id: &str) -> Result<FileRef, ApiError> {
+        self.call("getFile", &FileById { file_id }).await
+    }
+
+    /// Download one file's bytes from the address `getFile` returned.
+    ///
+    /// The URL carries the token, so a failure here is reported without it.
+    pub async fn download_file(
+        &self,
+        file_path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, ApiError> {
+        let response = self
+            .http
+            .get(self.config.file_url(file_path))
+            .timeout(Duration::from_secs(FILE_TIMEOUT_SECS))
+            .send()
+            .await
+            .map_err(|error| ApiError {
+                status: 0,
+                description: format!("could not reach Telegram: {error}"),
+                retry_after: None,
+            })?;
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            return Err(ApiError {
+                status,
+                description: format!("Telegram refused the file download ({status})"),
+                retry_after: None,
+            });
+        }
+        if let Some(length) = response.content_length() {
+            if length > max_bytes {
+                return Err(ApiError {
+                    status,
+                    description: format!(
+                        "the file is {length} bytes, above the {max_bytes}-byte limit"
+                    ),
+                    retry_after: None,
+                });
+            }
+        }
+        let bytes = response.bytes().await.map_err(|error| ApiError {
+            status,
+            description: format!("the download broke off: {error}"),
+            retry_after: None,
+        })?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(ApiError {
+                status,
+                description: format!(
+                    "the file grew past the {max_bytes}-byte limit and was not kept"
+                ),
+                retry_after: None,
+            });
+        }
+        Ok(bytes.to_vec())
+    }
+
+    /// Answer a button press, so the client stops showing a spinner.
+    ///
+    /// Telegram requires this within a few seconds. `text` is shown as a toast
+    /// over the chat, which is how a refusal is reported to the person who
+    /// tapped.
+    pub async fn answer_callback(
+        &self,
+        callback_id: &str,
+        text: &str,
+        alert: bool,
+    ) -> Result<(), ApiError> {
+        let answered: bool = self
+            .call(
+                "answerCallbackQuery",
+                &AnswerCallback {
+                    callback_query_id: callback_id,
+                    text,
+                    show_alert: alert,
+                },
+            )
+            .await?;
+        let _ = answered;
+        Ok(())
+    }
+
+    /// Post a message with an inline keyboard of approval buttons.
+    ///
+    /// Each button carries the answer and the approval id, which is all a
+    /// 64-byte `callback_data` can hold and all a decision needs (ADR-0060).
+    pub async fn send_approval(
+        &self,
+        chat_id: &str,
+        html: &str,
+        approval_id: &str,
+        thread_id: Option<&str>,
+    ) -> Result<MessageId, ApiError> {
+        let thread = thread_id.and_then(|id| id.parse::<i64>().ok());
+        let body = SendWithKeyboard {
+            chat_id,
+            text: html,
+            parse_mode: Some("HTML"),
+            message_thread_id: thread,
+            reply_markup: InlineKeyboard {
+                inline_keyboard: vec![vec![
+                    Button {
+                        text: "Approve",
+                        callback_data: approval_id_for(approval_id, true),
+                    },
+                    Button {
+                        text: "Reject",
+                        callback_data: approval_id_for(approval_id, false),
+                    },
+                ]],
+            },
+        };
+        let sent: SentMessage = self.call("sendMessage", &body).await?;
+        Ok(MessageId(sent.message_id))
+    }
+
+    /// Replace a posted message's text, dropping its keyboard.
+    ///
+    /// Used once a request is decided: the card stays where the question was, so
+    /// a person scrolling back learns the outcome instead of finding buttons that
+    /// no longer do anything.
+    pub async fn edit_message(
+        &self,
+        chat_id: &str,
+        message_id: i64,
+        html: &str,
+    ) -> Result<(), ApiError> {
+        let edited: serde_json::Value = self
+            .call(
+                "editMessageText",
+                &EditMessage {
+                    chat_id,
+                    message_id,
+                    text: html,
+                    parse_mode: Some("HTML"),
+                },
+            )
+            .await?;
+        let _ = edited;
+        Ok(())
     }
 
     async fn call<T: DeserializeOwned, B: Serialize>(
@@ -309,7 +468,7 @@ impl ChatMember {
 struct GetUpdates {
     offset: i64,
     timeout: u32,
-    allowed_updates: [&'static str; 1],
+    allowed_updates: &'static [&'static str],
 }
 
 #[derive(Debug, Serialize)]
@@ -345,6 +504,84 @@ struct ChatById<'a> {
 struct ChatMemberById<'a> {
     chat_id: &'a str,
     user_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct FileById<'a> {
+    file_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AnswerCallback<'a> {
+    callback_query_id: &'a str,
+    text: &'a str,
+    show_alert: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SendWithKeyboard<'a> {
+    chat_id: &'a str,
+    text: &'a str,
+    parse_mode: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_thread_id: Option<i64>,
+    reply_markup: InlineKeyboard,
+}
+
+#[derive(Debug, Serialize)]
+struct InlineKeyboard {
+    inline_keyboard: Vec<Vec<Button>>,
+}
+
+#[derive(Debug, Serialize)]
+struct Button {
+    text: &'static str,
+    callback_data: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EditMessage<'a> {
+    chat_id: &'a str,
+    message_id: i64,
+    text: &'a str,
+    parse_mode: Option<&'a str>,
+}
+
+/// Where Telegram says a file is.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileRef {
+    /// The suffix to append to the API's file path; absent when Telegram refused.
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+/// The `callback_data` for one answer to one approval.
+///
+/// `approve:` plus a UUID is 44 bytes, inside Telegram's 64-byte limit. The
+/// prefix is what tells the inbound loop which answer was chosen, so the id
+/// alone is not enough.
+pub fn approval_id_for(approval_id: &str, approved: bool) -> String {
+    format!(
+        "{}:{approval_id}",
+        if approved { "approve" } else { "reject" }
+    )
+}
+
+/// Read a `callback_data` this adapter wrote.
+///
+/// Returns `None` for anything else, so an interaction the adapter did not
+/// compose — a button from another bot's message in a group — is ignored rather
+/// than read as a decision about whatever id it happens to contain.
+pub fn parse_callback_data(data: &str) -> Option<(bool, &str)> {
+    let (answer, approval_id) = data.split_once(':')?;
+    let approved = match answer {
+        "approve" => true,
+        "reject" => false,
+        _ => return None,
+    };
+    (!approval_id.is_empty()).then_some((approved, approval_id))
 }
 
 /// The first part of a body, for an error message.

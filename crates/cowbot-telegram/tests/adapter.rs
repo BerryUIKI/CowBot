@@ -85,12 +85,13 @@ async fn get_updates(State(state): State<State_>, Json(body): Json<Value>) -> Js
         .lock()
         .unwrap()
         .push(body["offset"].as_i64().unwrap_or(0));
-    // Only `message` may be asked for: fetching updates the adapter drops is a
-    // real cost on a busy bot.
+    // Exactly two kinds, and both are handled. Asking for a kind the adapter
+    // drops is a real cost on a busy bot; *not* asking for `callback_query` is
+    // the quietest way to build a button that does nothing (ADR-0060).
     assert_eq!(
         body["allowed_updates"],
-        json!(["message"]),
-        "the poll asked for update kinds it does not handle"
+        json!(["message", "callback_query"]),
+        "the poll must ask for the update kinds the adapter handles, and no others"
     );
     let batch = fake.batches.lock().unwrap().pop_front().unwrap_or_default();
     Json(json!({ "ok": true, "result": batch }))
@@ -193,6 +194,7 @@ fn context(store: cowbot_store::Store, sink: Arc<RecordingSink>) -> IntegrationC
             revoked_at: None,
         },
         sink,
+        attachments_dir: None,
     }
 }
 
