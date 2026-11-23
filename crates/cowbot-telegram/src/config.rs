@@ -22,6 +22,37 @@ pub struct TelegramConfig {
     /// default is the cloud API, which is what almost everyone uses.
     #[serde(default = "cloud_api")]
     pub api_base: String,
+    #[serde(default)]
+    pub transport: Transport,
+    /// The value Telegram echoes back in `X-Telegram-Bot-Api-Secret-Token`.
+    ///
+    /// Required for [`Transport::Webhook`] and unread by polling, which confirms
+    /// itself by advancing the offset and carries no inbound request at all.
+    /// Telegram has no signature scheme for a webhook, so this header is the
+    /// whole authentication story — which is why `from_json` refuses to leave it
+    /// empty rather than letting an operator invent one.
+    #[serde(default)]
+    pub secret_token: Option<String>,
+}
+
+/// How Telegram delivers updates (ADR-0062).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    /// `getUpdates` long polling, the default: no public URL, no secret.
+    #[default]
+    LongPoll,
+    /// `setWebhook`, which registers an HTTPS URL with Telegram.
+    Webhook,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transport::LongPoll => "long_poll",
+            Transport::Webhook => "webhook",
+        }
+    }
 }
 
 fn cloud_api() -> String {
@@ -36,6 +67,11 @@ impl std::fmt::Debug for TelegramConfig {
             .debug_struct("TelegramConfig")
             .field("bot_token", &"[sealed]")
             .field("api_base", &self.api_base)
+            .field("transport", &self.transport)
+            .field(
+                "secret_token",
+                &self.secret_token.as_ref().map(|_| "[sealed]"),
+            )
             .finish()
     }
 }
@@ -47,6 +83,43 @@ impl TelegramConfig {
             .map_err(|error| CowError::Config(format!("invalid Telegram config: {error}")))?;
         parsed.bot_token = parsed.bot_token.trim().to_string();
         parsed.api_base = parsed.api_base.trim().trim_end_matches('/').to_string();
+        parsed.secret_token = parsed
+            .secret_token
+            .map(|secret| secret.trim().to_string())
+            .filter(|secret| !secret.is_empty());
+
+        // A webhook with no secret is an open endpoint: anyone who learns the URL
+        // can drive an agent that executes code. Telegram has no signature to
+        // fall back on, so there is nothing else to check.
+        if parsed.transport == Transport::Webhook && parsed.secret_token.is_none() {
+            return Err(CowError::Config(
+                "secret_token is required when transport is 'webhook': Telegram sends it back \
+                 in X-Telegram-Bot-Api-Secret-Token and it is the only thing proving a request \
+                 came from Telegram. Use transport 'long_poll', or generate one with any random \
+                 string"
+                    .into(),
+            ));
+        }
+        // Telegram's own limits on `setWebhook`'s secret, so a value it would
+        // reject is refused here rather than at the first registration attempt.
+        if let Some(secret) = &parsed.secret_token {
+            if secret.len() > 256 {
+                return Err(CowError::Config(
+                    "secret_token must be at most 256 characters; Telegram refuses a longer one"
+                        .into(),
+                ));
+            }
+            if secret
+                .chars()
+                .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
+            {
+                return Err(CowError::Config(
+                    "secret_token may contain only A-Z, a-z, 0-9, underscore and hyphen; \
+                     Telegram refuses anything else"
+                        .into(),
+                ));
+            }
+        }
 
         // Telegram tokens are always `<digits>:<secret>`. Checking the shape
         // catches the mistakes an operator actually makes — pasting the bot's
@@ -156,6 +229,38 @@ mod tests {
     fn an_api_base_without_a_scheme_is_refused() {
         let error = parse(r#"{"bot_token":"1:A","api_base":"api.telegram.org"}"#).unwrap_err();
         assert!(error.to_string().contains("http"), "{error}");
+    }
+
+    #[test]
+    fn the_webhook_transport_requires_a_secret_and_validates_the_one_it_gets() {
+        // Telegram has no signature to fall back on: without the header echoed
+        // back correctly, anyone who learns the URL can drive an agent.
+        let missing = parse(r#"{"bot_token":"42:secret","transport":"webhook"}"#).unwrap_err();
+        assert!(missing.to_string().contains("secret_token"), "{missing}");
+
+        let too_long = parse(&format!(
+            r#"{{"bot_token":"42:secret","transport":"webhook","secret_token":"{}"}}"#,
+            "a".repeat(257)
+        ))
+        .unwrap_err();
+        assert!(too_long.to_string().contains("256"), "{too_long}");
+
+        let bad =
+            parse(r#"{"bot_token":"42:secret","transport":"webhook","secret_token":"has spaces"}"#)
+                .unwrap_err();
+        assert!(bad.to_string().contains("underscore"), "{bad}");
+
+        let ok = parse(
+            r#"{"bot_token":"42:secret","transport":"webhook","secret_token":"abc_DEF-123"}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.transport, Transport::Webhook);
+        assert_eq!(ok.secret_token.as_deref(), Some("abc_DEF-123"));
+
+        // Polling needs none, and the default is unchanged.
+        let polling = parse(r#"{"bot_token":"42:secret"}"#).unwrap();
+        assert_eq!(polling.transport, Transport::LongPoll);
+        assert!(polling.secret_token.is_none());
     }
 
     #[test]

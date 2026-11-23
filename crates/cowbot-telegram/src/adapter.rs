@@ -16,7 +16,7 @@ use chrono::{TimeZone, Utc};
 use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::integration::IntegrationKind;
-use cowbot_integrations::adapter::{Integration, IntegrationContext};
+use cowbot_integrations::adapter::{InboundRequest, Integration, IntegrationContext, WebhookReply};
 use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt, Refused};
 use cowbot_integrations::model::{
     Attachment, BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
@@ -28,7 +28,7 @@ use crate::api::{chat_unreachable_reason, parse_callback_data, Api, ApiError};
 
 /// Telegram's documented `sendMessage` limit, in UTF-16 code units.
 pub const MAX_MESSAGE_UNITS: usize = 4_096;
-use crate::config::TelegramConfig;
+use crate::config::{TelegramConfig, Transport};
 use crate::render::to_html;
 use crate::update::{addresses_bot, BotHandle, Update};
 
@@ -463,6 +463,23 @@ impl Integration for TelegramIntegration {
         // the CowBot channel it points at.
         report_binding_health(&ctx, self).await;
 
+        if self.api.config().transport == Transport::Webhook {
+            // Polling and a webhook cannot both be active: Telegram answers 409
+            // Conflict to whichever asks second. So this mode must not poll, and
+            // the task waits for a stop instead (ADR-0062).
+            //
+            // The URL is the operator's to register with `setWebhook`; startup
+            // says so rather than guessing a deployment's public address.
+            info!(
+                integration = %ctx.integration.id,
+                "the Telegram adapter is waiting for webhook deliveries; register \
+                 /api/v1/integrations/{}/webhook with setWebhook",
+                ctx.integration.id
+            );
+            cancel.cancelled().await;
+            return Ok(());
+        }
+
         self.poll(ctx, cancel).await
     }
 
@@ -482,6 +499,49 @@ impl Integration for TelegramIntegration {
 
     async fn check_binding(&self, external_id: &str) -> BindingHealth {
         binding_health(&self.api, self.bot().as_ref(), external_id).await
+    }
+
+    fn accepts_webhook(&self) -> bool {
+        self.api.config().transport == Transport::Webhook
+    }
+
+    /// Verify one webhook delivery and hand it to the pipeline.
+    ///
+    /// Telegram has no signature scheme for a webhook. Its whole authentication
+    /// story is the `X-Telegram-Bot-Api-Secret-Token` header echoing the value
+    /// given to `setWebhook`, so the comparison is the verification — and it is
+    /// constant time, because a byte-at-a-time comparison against a secret is a
+    /// secret that can be recovered.
+    ///
+    /// The body is then read with the same update decoding and dispatch the
+    /// poller uses, including the callback query that a button press arrives as.
+    async fn webhook(
+        &self,
+        ctx: &IntegrationContext,
+        request: InboundRequest<'_>,
+    ) -> CowResult<WebhookReply> {
+        let expected = self
+            .api
+            .config()
+            .secret_token
+            .as_deref()
+            .unwrap_or_default();
+        let presented = request
+            .header("x-telegram-bot-api-secret-token")
+            .unwrap_or_default();
+        if !secrets_match(expected, presented) {
+            return Err(CowError::Config(
+                "Telegram refused the delivery: the secret token header does not match".into(),
+            ));
+        }
+
+        let update: Update = serde_json::from_slice(request.body).map_err(|error| {
+            CowError::Config(format!("a Telegram delivery was not an update: {error}"))
+        })?;
+        // The update id is what the pipeline dedupes on, exactly as a polled
+        // update is; a delivery Telegram retries is dropped the same way.
+        dispatch(self, ctx, &update).await;
+        Ok(WebhookReply::Ack)
     }
 
     async fn fetch_attachment(
@@ -585,6 +645,23 @@ pub fn chat_id_shape_is_valid(external_id: &str) -> bool {
             .trim_start_matches('-')
             .chars()
             .all(|character| character.is_ascii_digit())
+}
+
+/// Compare two secrets without leaking their length or contents through timing.
+///
+/// A plain `==` on strings short-circuits at the first differing byte, which lets
+/// an attacker recover a secret one byte at a time. `subtle` does the comparison
+/// the same way regardless of where the difference is.
+fn secrets_match(expected: &str, presented: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    // An empty expected value can never match: a webhook configured without a
+    // secret is refused at parse time, and this is the runtime backstop.
+    if expected.is_empty() {
+        return false;
+    }
+    // `ct_eq` over the byte slices; lengths differing is still a mismatch and is
+    // not itself secret (Telegram's secret length is fixed by the operator).
+    expected.as_bytes().ct_eq(presented.as_bytes()).into()
 }
 
 #[cfg(test)]
@@ -785,6 +862,36 @@ mod tests {
             }
         }));
         assert!(adapter().inbound(&with_emoji).unwrap().addresses_bot);
+    }
+
+    #[test]
+    fn a_secret_is_compared_in_constant_time_and_an_empty_one_never_matches() {
+        // A plain `==` short-circuits at the first differing byte, which lets an
+        // attacker recover a secret one byte at a time.
+        assert!(secrets_match("s3cret", "s3cret"));
+        assert!(!secrets_match("s3cret", "s3creT"));
+        assert!(!secrets_match("s3cret", ""));
+        assert!(!secrets_match("s3cret", "s3cret-and-more"));
+        // A configuration with no secret is refused at parse time; this is the
+        // runtime backstop, and it must refuse rather than accept everything.
+        assert!(!secrets_match("", ""));
+        assert!(!secrets_match("", "anything"));
+    }
+
+    #[test]
+    fn a_webhook_adapter_reports_that_it_accepts_deliveries() {
+        // The route refuses an integration whose adapter says no, so this flag is
+        // what makes the URL live at all.
+        let polling = adapter();
+        assert!(!polling.accepts_webhook());
+
+        let webhook = TelegramIntegration::new(
+            TelegramConfig::from_json(
+                r#"{"bot_token":"42:secret","transport":"webhook","secret_token":"s3cret"}"#,
+            )
+            .unwrap(),
+        );
+        assert!(webhook.accepts_webhook());
     }
 
     #[test]
