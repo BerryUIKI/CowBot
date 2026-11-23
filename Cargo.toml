@@ -12,6 +12,7 @@ members = [
     "crates/cowbot-integrations",
     "crates/cowbot-mattermost",
     "crates/cowbot-telegram",
+    "crates/cowbot-slack",
     "crates/cowbot-cli",
     "crates/cowbot-server",
 ]
@@ -71,4 +72,5 @@ cowbot-service = { path = "crates/cowbot-service" }
 cowbot-integrations = { path = "crates/cowbot-integrations" }
 cowbot-mattermost = { path = "crates/cowbot-mattermost" }
 cowbot-telegram = { path = "crates/cowbot-telegram" }
+cowbot-slack = { path = "crates/cowbot-slack" }
 cowbot-server = { path = "crates/cowbot-server" }

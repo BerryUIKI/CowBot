@@ -570,6 +570,7 @@ dependencies = [
  "cowbot-mattermost",
  "cowbot-package",
  "cowbot-service",
+ "cowbot-slack",
  "cowbot-store",
  "cowbot-telegram",
  "cowbot-tools",
@@ -604,6 +605,26 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "cowbot-slack"
+version = "0.1.16"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-store",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
 ]
 
 [[package]]

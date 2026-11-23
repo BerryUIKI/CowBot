@@ -22,6 +22,8 @@ cowbot-integrations = { workspace = true }
 cowbot-mattermost = { workspace = true }
 # Telegram is the second: a SaaS platform, reached by long polling (ADR-0058).
 cowbot-telegram = { workspace = true }
+# Slack is the third, over Socket Mode (ADR-0059).
+cowbot-slack = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
