@@ -227,6 +227,13 @@ pub struct ServerConfig {
     /// A server has no "user project folder", so a turn that writes a file must
     /// be confined to a directory the server owns (ADR-0055).
     pub workspace_dir: PathBuf,
+    /// How long an approval may wait for a person, in seconds (ADR-0060).
+    ///
+    /// Fifteen minutes rather than the desktop's five: an IM approval reaches
+    /// somebody's phone, and five minutes is one meeting away from expiring. An
+    /// approval that lapses mid-thought is a tool call denied for no reason the
+    /// person can see.
+    pub approval_timeout_secs: u64,
     /// The LLM that answers channel turns; `None` runs none.
     pub llm: Option<ServerLlmConfig>,
 }
@@ -245,6 +252,7 @@ impl Default for ServerConfig {
             login_attempts: 10,
             login_window_secs: 15 * 60,
             workspace_dir: PathBuf::from("cowbot-workspace"),
+            approval_timeout_secs: 900,
             llm: None,
         }
     }
@@ -269,6 +277,7 @@ impl ServerConfig {
     /// | `COWBOT_SERVER_LOGIN_ATTEMPTS` | `10` |
     /// | `COWBOT_SERVER_LOGIN_WINDOW_SECS` | `900` |
     /// | `COWBOT_SERVER_WORKSPACE_DIR` | `cowbot-workspace` |
+    /// | `COWBOT_SERVER_APPROVAL_TIMEOUT_SECS` | `900` |
     ///
     /// The four `COWBOT_SERVER_LLM_*` variables are read by
     /// [`ServerLlmConfig::from_env`] and are all-or-nothing: none of them set
@@ -309,6 +318,11 @@ impl ServerConfig {
         }
         if let Ok(value) = std::env::var("COWBOT_SERVER_WORKSPACE_DIR") {
             config.workspace_dir = PathBuf::from(value);
+        }
+        if let Ok(value) = std::env::var("COWBOT_SERVER_APPROVAL_TIMEOUT_SECS") {
+            config.approval_timeout_secs = value.parse().map_err(|_| {
+                format!("COWBOT_SERVER_APPROVAL_TIMEOUT_SECS is not a number: '{value}'")
+            })?;
         }
         config.llm = ServerLlmConfig::from_env()?;
         Ok(config)

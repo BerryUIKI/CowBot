@@ -17,6 +17,7 @@ use cowbot_core::integration::{
     IntegrationBinding, IntegrationKind, IntegrationRecord, NewIntegration,
 };
 use cowbot_integrations::adapter::{Integration, IntegrationContext, Registry};
+use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt};
 use cowbot_integrations::model::{
     ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested, OutboundContent,
     OutboundTarget, Skipped,
@@ -33,6 +34,10 @@ use cowbot_store::Store;
 struct FakeAdapter {
     delivered: Arc<Mutex<Vec<(OutboundTarget, OutboundContent)>>>,
     outbound: Arc<Mutex<Vec<InboundMessage>>>,
+    /// Approval cards this adapter was asked to post (ADR-0060).
+    approvals: Arc<Mutex<Vec<(OutboundTarget, ApprovalPrompt)>>>,
+    /// Revisions it was asked to make, with the sentence they carry.
+    revisions: Arc<Mutex<Vec<(OutboundTarget, String)>>>,
 }
 
 impl FakeAdapter {
@@ -40,6 +45,8 @@ impl FakeAdapter {
         Self {
             delivered: Arc::default(),
             outbound: Arc::default(),
+            approvals: Arc::default(),
+            revisions: Arc::default(),
         }
     }
 }
@@ -80,6 +87,34 @@ impl Integration for FakeAdapter {
             .unwrap()
             .push((target.clone(), content.clone()));
         Ok(DeliveredId(format!("post-{}", content.part.index)))
+    }
+
+    async fn post_approval(
+        &self,
+        target: &OutboundTarget,
+        prompt: &ApprovalPrompt,
+    ) -> CowResult<ApprovalPosting> {
+        self.approvals
+            .lock()
+            .unwrap()
+            .push((target.clone(), prompt.clone()));
+        Ok(ApprovalPosting {
+            delivered: DeliveredId(format!("card-{}", prompt.approval_id)),
+            buttons: true,
+        })
+    }
+
+    async fn update_approval(
+        &self,
+        target: &OutboundTarget,
+        _posting: &ApprovalPosting,
+        summary: &str,
+    ) -> CowResult<()> {
+        self.revisions
+            .lock()
+            .unwrap()
+            .push((target.clone(), summary.to_string()));
+        Ok(())
     }
 }
 
@@ -138,6 +173,7 @@ fn inbound(event_id: &str, text: &str) -> InboundMessage {
         },
         text: text.into(),
         addresses_bot: true,
+        attachments: Vec::new(),
         created_at: chrono::Utc::now(),
     }
 }
@@ -631,7 +667,159 @@ async fn a_message_posted_the_moment_start_returns_is_still_mirrored() {
     running.stop();
 }
 
+#[tokio::test]
+async fn an_approval_request_reaches_the_im_and_a_decision_revises_the_card() {
+    // The whole S5 path: a pending approval for a task in this integration's
+    // channel is posted as a card, and the decision arrives back on the bus and
+    // retires it (ADR-0060).
+    let fixture = fixture().await;
+    let adapter = FakeAdapter::new();
+    let running = start(
+        fixture.store.clone(),
+        fixture.bus.clone(),
+        fixture.integration.clone(),
+        Arc::new(adapter.clone()),
+        Arc::new(ChannelSink::new(
+            fixture.store.clone(),
+            ChannelService::new(fixture.store.clone(), fixture.bus.clone()),
+            fixture.integration.clone(),
+        )),
+    );
+
+    let task =
+        cowbot_core::task::Task::new("Deploy", "Output").in_channel(fixture.channel.id.clone());
+    fixture
+        .store
+        .create_task(&fixture.workspace.id, None, &task)
+        .await
+        .unwrap();
+    let approval = cowbot_core::approval::Approval::new(task.id.clone(), "call-1");
+    fixture.store.create_approval(&approval).await.unwrap();
+
+    fixture.bus.publish(cowbot_core::event::Event::new(
+        cowbot_core::event::EventPayload::ApprovalRequested {
+            approval: approval.clone(),
+            risk: cowbot_core::risk::RiskLevel::High,
+            reason: "writes outside the workspace".into(),
+            rule: None,
+            call: Some(cowbot_core::tool::ToolCall {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({ "path": "a.txt" }),
+            }),
+        },
+    ));
+
+    wait_for_approvals(&adapter, 1).await;
+    let (target, prompt) = adapter.approvals.lock().unwrap()[0].clone();
+    assert_eq!(target.external_conversation_id, "town-square");
+    assert_eq!(prompt.tool_name, "write_file", "the card names the tool");
+    assert!(prompt.arguments.contains("a.txt"));
+
+    // Deciding it publishes `ApprovalDecided`, which the mirror turns into a
+    // revision of the card it posted.
+    fixture
+        .store
+        .decide_approval(
+            &approval.id,
+            cowbot_core::approval::ApprovalStatus::Approved,
+            "user-1",
+        )
+        .await
+        .unwrap();
+    let decided = fixture
+        .store
+        .get_approval(&approval.id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.bus.publish(cowbot_core::event::Event::new(
+        cowbot_core::event::EventPayload::ApprovalDecided { approval: decided },
+    ));
+
+    wait_for_revisions(&adapter, 1).await;
+    let (_, summary) = adapter.revisions.lock().unwrap()[0].clone();
+    assert!(summary.contains("Approved"), "{summary}");
+    running.stop();
+}
+
+#[tokio::test]
+async fn an_approval_for_a_channel_this_integration_does_not_serve_is_not_posted() {
+    // A card in the wrong room shows one team's approval request to another.
+    let fixture = fixture().await;
+    let other = Channel::new("elsewhere", "");
+    fixture
+        .store
+        .create_channel(&fixture.workspace.id, &other)
+        .await
+        .unwrap();
+    let adapter = FakeAdapter::new();
+    let running = start(
+        fixture.store.clone(),
+        fixture.bus.clone(),
+        fixture.integration.clone(),
+        Arc::new(adapter.clone()),
+        Arc::new(ChannelSink::new(
+            fixture.store.clone(),
+            ChannelService::new(fixture.store.clone(), fixture.bus.clone()),
+            fixture.integration.clone(),
+        )),
+    );
+
+    let task = cowbot_core::task::Task::new("Deploy", "Output").in_channel(other.id.clone());
+    fixture
+        .store
+        .create_task(&fixture.workspace.id, None, &task)
+        .await
+        .unwrap();
+    let approval = cowbot_core::approval::Approval::new(task.id.clone(), "call-1");
+    fixture.store.create_approval(&approval).await.unwrap();
+    fixture.bus.publish(cowbot_core::event::Event::new(
+        cowbot_core::event::EventPayload::ApprovalRequested {
+            approval,
+            risk: cowbot_core::risk::RiskLevel::High,
+            reason: "r".into(),
+            rule: None,
+            call: None,
+        },
+    ));
+
+    // Give the mirror the same window the positive test waits for, so a pass
+    // here is silence and not a race.
+    for _ in 0..25 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        adapter.approvals.lock().unwrap().is_empty(),
+        "a card was posted into a channel this integration does not serve"
+    );
+    running.stop();
+}
+
 // -- helpers ---------------------------------------------------------------
+
+async fn wait_for_approvals(adapter: &FakeAdapter, count: usize) {
+    for _ in 0..100 {
+        if adapter.approvals.lock().unwrap().len() >= count {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("expected {count} approval card(s)");
+}
+
+async fn wait_for_revisions(adapter: &FakeAdapter, count: usize) {
+    for _ in 0..100 {
+        if adapter.revisions.lock().unwrap().len() >= count {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!(
+        "expected {count} revision(s), got {}",
+        adapter.revisions.lock().unwrap().len()
+    );
+}
 
 async fn wait_for_messages(store: &Store, channel: &ChannelId, count: usize) {
     for _ in 0..100 {

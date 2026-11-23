@@ -33,6 +33,13 @@ pub struct IntegrationContext {
     pub integration: cowbot_core::integration::IntegrationRecord,
     /// Where an accepted message goes.
     pub sink: std::sync::Arc<dyn MessageSink>,
+    /// Where attachment bytes are written, when the deployment has a root.
+    ///
+    /// The same directory the deployment's file tools are rooted at, so a path it
+    /// produces is one a tool can open. `None` for a deployment with no root — the
+    /// test fixtures, and a build whose tools are not rooted anywhere — in which
+    /// case an attachment is named in the message text as not kept.
+    pub attachments_dir: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for IntegrationContext {
@@ -108,6 +115,76 @@ pub trait Integration: Send + Sync {
     /// honest "I cannot tell".
     async fn check_binding(&self, _external_id: &str) -> BindingHealth {
         BindingHealth::Unknown("this adapter cannot check its bindings yet".into())
+    }
+
+    /// Fetch the bytes of one attachment this adapter reported (ADR-0060).
+    ///
+    /// `max_bytes` is passed down rather than checked afterwards because the cap
+    /// has to stop the read: buffering a two-gigabyte file to then reject it is
+    /// the denial of service the cap exists to prevent. An adapter must also stop
+    /// at a size the platform already declared.
+    ///
+    /// The default refuses. It is reached by a platform that has no attachments
+    /// and by an adapter that has not written the download yet, and both should
+    /// say so in the message text rather than return bytes that are not there.
+    async fn fetch_attachment(
+        &self,
+        _attachment: &crate::model::Attachment,
+        _max_bytes: u64,
+    ) -> CowResult<Vec<u8>> {
+        Err(cowbot_core::error::CowError::Config(format!(
+            "this {} adapter cannot download attachments",
+            self.kind().as_str()
+        )))
+    }
+
+    /// Ask a person in this conversation to decide an approval (ADR-0060).
+    ///
+    /// Posts the question and returns; it does not wait. The waiting turn is
+    /// already polling the row, so an adapter that blocked here would stall its
+    /// own mirror for as long as a person takes to look at their phone.
+    ///
+    /// The default posts the prompt as ordinary text: the person can read it in
+    /// the IM and decide from a CowBot client, which is a real answer rather than
+    /// a button that does nothing. An adapter whose platform has buttons
+    /// overrides this.
+    async fn post_approval(
+        &self,
+        target: &OutboundTarget,
+        prompt: &crate::approvals::ApprovalPrompt,
+    ) -> CowResult<crate::approvals::ApprovalPosting> {
+        let delivered = self
+            .deliver(
+                target,
+                &OutboundContent {
+                    text: format!(
+                        "{}\n\nDecide this in CowBot: this channel cannot carry the buttons.",
+                        prompt.describe()
+                    ),
+                    thread_id: target.thread_id.clone(),
+                    part: crate::model::ChunkPart { index: 0, total: 1 },
+                },
+            )
+            .await?;
+        Ok(crate::approvals::ApprovalPosting {
+            delivered,
+            buttons: false,
+        })
+    }
+
+    /// Revise the message `post_approval` posted, once the request is decided.
+    ///
+    /// `posting` is what [`Self::post_approval`] returned and `summary` is
+    /// [`crate::approvals::decision_summary`]. The default does nothing: a
+    /// platform without an edit call leaves the original question in the room,
+    /// which is a stale card rather than a wrong one.
+    async fn update_approval(
+        &self,
+        _target: &OutboundTarget,
+        _posting: &crate::approvals::ApprovalPosting,
+        _summary: &str,
+    ) -> CowResult<()> {
+        Ok(())
     }
 }
 

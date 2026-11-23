@@ -12,6 +12,9 @@
 //! * [`principal`] — a platform account as a CowBot user;
 //! * [`notice`] — starting every binding check and saying, in the CowBot channel,
 //!   which ones cannot receive;
+//! * [`approvals`] — an approval request as a question for a person in the IM,
+//!   and their answer attributed to them rather than to the bot (ADR-0060);
+//! * [`attachments`] — a file somebody sent, on disk where a tool can reach it;
 //! * [`supervisor`] — running an adapter's inbound loop beside its mirror.
 //!
 //! The four platform crates (S2–S6) implement [`adapter::Integration`] and
@@ -20,6 +23,8 @@
 //! reply addressed to the wrong room — are written once and tested once.
 
 pub mod adapter;
+pub mod approvals;
+pub mod attachments;
 pub mod inbound;
 pub mod model;
 pub mod notice;
@@ -30,9 +35,10 @@ pub mod sink;
 pub mod supervisor;
 
 pub use adapter::{Factory, Integration, IntegrationContext, MessageSink, Registry};
+pub use approvals::{ApprovalPosting, ApprovalPrompt, Decided, Refused};
 pub use model::{
-    BindingHealth, ChunkLimit, ChunkPart, DeliveredId, ExternalAuthor, InboundMessage, Ingested,
-    OutboundContent, OutboundTarget, Route, Skipped,
+    Attachment, AttachmentKind, BindingHealth, ChunkLimit, ChunkPart, DeliveredId, ExternalAuthor,
+    InboundMessage, Ingested, OutboundContent, OutboundTarget, Route, Skipped,
 };
 pub use notice::report_binding_health;
 pub use outbound::{build_posts_with, chunk, chunk_units, label_chunk};
@@ -138,6 +144,7 @@ pub(crate) mod tests {
                 },
                 text: text.into(),
                 addresses_bot,
+                attachments: Vec::new(),
                 created_at: chrono::Utc::now(),
             }
         }

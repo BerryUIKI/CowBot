@@ -14,8 +14,10 @@ use cowbot_core::cancel::CancelSignal;
 use cowbot_core::error::CowResult;
 use cowbot_core::integration::IntegrationKind;
 use cowbot_integrations::adapter::{Integration, IntegrationContext};
+use cowbot_integrations::approvals::{ApprovalPosting, ApprovalPrompt};
 use cowbot_integrations::model::{
-    BindingHealth, DeliveredId, ExternalAuthor, OutboundContent, OutboundTarget,
+    Attachment, AttachmentKind, BindingHealth, DeliveredId, ExternalAuthor, OutboundContent,
+    OutboundTarget,
 };
 use tracing::{debug, info};
 
@@ -155,6 +157,29 @@ impl MattermostIntegration {
             &bot_display(&identity.username),
         );
 
+        // The post names its files by id; the size and type come from a second
+        // call, which is what lets the pipeline refuse an oversized file without
+        // downloading it. A lookup that fails leaves the attachment described by
+        // its id alone, so the message is still stored.
+        let mut attachments = Vec::with_capacity(post.file_ids.len());
+        for file_id in &post.file_ids {
+            let info = self.rest.file_info(file_id).await.ok();
+            let mime = info
+                .as_ref()
+                .map(|info| info.mime_type.clone())
+                .filter(|mime| !mime.is_empty());
+            attachments.push(Attachment {
+                external_id: file_id.clone(),
+                kind: AttachmentKind::from_mime(mime.as_deref()),
+                file_name: info
+                    .as_ref()
+                    .map(|info| info.name.clone())
+                    .filter(|name| !name.is_empty()),
+                mime_type: mime,
+                size_bytes: info.as_ref().map(|info| info.size),
+            });
+        }
+
         Some(cowbot_integrations::InboundMessage {
             event_id: post.id.clone(),
             external_conversation_id: post.channel_id.clone(),
@@ -172,6 +197,7 @@ impl MattermostIntegration {
             // Answering all of them is the busy-room problem, so addressing
             // means a mention of the bot.
             addresses_bot: contains_mention(&post.message, &identity.username),
+            attachments,
             created_at: moment(post.create_at),
         })
     }
@@ -317,6 +343,78 @@ impl Integration for MattermostIntegration {
     async fn check_binding(&self, external_id: &str) -> BindingHealth {
         binding_health(&self.rest, self.identity().as_ref(), external_id).await
     }
+
+    async fn fetch_attachment(
+        &self,
+        attachment: &Attachment,
+        max_bytes: u64,
+    ) -> cowbot_core::error::CowResult<Vec<u8>> {
+        self.rest
+            .file_bytes(&attachment.external_id, max_bytes)
+            .await
+    }
+
+    /// Post an approval request with its two answers.
+    ///
+    /// Mattermost has no native buttons outside an interactive integration, so
+    /// the question is a post and the answer is a reply the inbound loop reads.
+    /// That keeps the whole round trip on the socket the adapter already holds.
+    async fn post_approval(
+        &self,
+        target: &OutboundTarget,
+        prompt: &ApprovalPrompt,
+    ) -> cowbot_core::error::CowResult<ApprovalPosting> {
+        let post = self
+            .rest
+            .create_post(
+                &target.external_conversation_id,
+                &approval_body(prompt),
+                target.thread_id.as_deref(),
+            )
+            .await?;
+        Ok(ApprovalPosting {
+            delivered: DeliveredId(post.id),
+            buttons: true,
+        })
+    }
+
+    async fn update_approval(
+        &self,
+        _target: &OutboundTarget,
+        posting: &ApprovalPosting,
+        summary: &str,
+    ) -> cowbot_core::error::CowResult<()> {
+        // The post is replaced rather than appended to: the buttons are prose,
+        // so the only way to retire them is to say what happened in their place.
+        self.rest.update_post(&posting.delivered.0, summary).await
+    }
+}
+
+/// The body of an approval post.
+///
+/// The two answers are spelled out because there is no button to tap: a person
+/// replies `approve` or `reject`, and the inbound loop reads that as a decision
+/// rather than as a message for an agent.
+pub fn approval_body(prompt: &ApprovalPrompt) -> String {
+    format!(
+        "{}
+
+Reply `approve` or `reject` to decide this.",
+        prompt.describe()
+    )
+}
+
+/// What a reply to an approval post decided, if it is one.
+///
+/// Only a bare `approve`/`reject` counts. A sentence that happens to contain the
+/// word is a message to the agent, and treating it as a decision would let
+/// somebody approve a destructive write by saying "do not approve this".
+pub fn decision_of(text: &str) -> Option<bool> {
+    match text.trim().trim_matches('`').to_ascii_lowercase().as_str() {
+        "approve" | "approved" | "yes" => Some(true),
+        "reject" | "rejected" | "no" => Some(false),
+        _ => None,
+    }
 }
 
 /// Check whether the bot is a member of a bound channel.
@@ -373,6 +471,7 @@ mod tests {
             root_id: String::new(),
             kind: String::new(),
             create_at: 1_700_000_000_000,
+            file_ids: Vec::new(),
         }
     }
 
@@ -559,6 +658,7 @@ mod notice_tests {
             bus: cowbot_bus::EventBus::default_bus(),
             integration,
             sink: std::sync::Arc::new(NoSink),
+            attachments_dir: None,
         };
         (store, ctx, channel.id)
     }

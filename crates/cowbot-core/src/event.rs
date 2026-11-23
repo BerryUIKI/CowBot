@@ -74,6 +74,16 @@ pub enum EventPayload {
         /// The workspace rule that required approval, when one matched.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rule: Option<PermissionRuleMatch>,
+        /// The call itself, so a surface that is not the desktop can name the
+        /// tool and show its arguments.
+        ///
+        /// The desktop rebuilds this from the `ToolCallRequested` it cached, but
+        /// an IM adapter subscribes to the bus from a different task and a lagged
+        /// subscriber drops events, so relying on that cache would sometimes
+        /// produce a card naming a bare id. Defaulted so an older event still
+        /// parses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<ToolCall>,
     },
     /// A pending approval was approved or rejected
     ApprovalDecided { approval: Approval },

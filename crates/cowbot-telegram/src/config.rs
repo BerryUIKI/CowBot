@@ -83,6 +83,15 @@ impl TelegramConfig {
     /// The token is part of the path because that is the whole of Telegram's
     /// authentication for a bot. It is why `Debug` and error messages have to be
     /// careful not to print this.
+    /// The address of a file Telegram pointed at with `getFile`.
+    ///
+    /// A different shape from a method call: the file path replaces the method
+    /// name and the token stays in the path, which is why a failed download must
+    /// never print the URL.
+    pub fn file_url(&self, file_path: &str) -> String {
+        format!("{}/file/bot{}/{}", self.api_base, self.bot_token, file_path)
+    }
+
     pub fn method_url(&self, method: &str) -> String {
         format!("{}/bot{}/{method}", self.api_base, self.bot_token)
     }

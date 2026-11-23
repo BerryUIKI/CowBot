@@ -104,9 +104,15 @@ pub async fn start_all(
                 }
             };
 
+            // The sink gets the same root the turn's file tools are rooted at, so
+            // a path it writes into the message text is one a tool can open
+            // (ADR-0060), and the adapter that can actually download from its
+            // platform.
             let sink = Arc::new(
                 ChannelSink::new(store.clone(), channels.clone(), record.clone())
-                    .with_turns(turns_for(store, executor.clone())),
+                    .with_turns(turns_for(store, executor.clone()))
+                    .with_attachments(executor.workspace_root().to_path_buf())
+                    .with_adapter(adapter.clone()),
             );
             started.running.push(cowbot_integrations::start(
                 store.clone(),
@@ -233,8 +239,8 @@ mod tests {
         let kinds = crate::adapters::registry().kinds();
         assert!(kinds.contains(&IntegrationKind::Mattermost));
         assert!(kinds.contains(&IntegrationKind::Telegram));
-        // Slack and Feishu still have no adapter, which is what their rows
-        // report.
+        // Slack and Feishu adapters land in their own changes, which extend this
+        // assertion to every kind the roadmap names.
         assert!(!kinds.contains(&IntegrationKind::Slack));
         assert!(!kinds.contains(&IntegrationKind::Feishu));
     }

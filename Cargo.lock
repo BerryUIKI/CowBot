@@ -498,6 +498,7 @@ dependencies = [
  "cowbot-store",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

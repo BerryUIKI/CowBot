@@ -248,6 +248,7 @@ async fn the_adapter_authenticates_and_relays_a_mention() {
             revoked_at: None,
         },
         sink: sink.clone(),
+        attachments_dir: None,
     };
 
     let cancel = CancelSignal::new();
@@ -331,6 +332,7 @@ async fn a_message_that_does_not_address_the_bot_is_relayed_but_not_addressed() 
             revoked_at: None,
         },
         sink: sink.clone(),
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();
@@ -395,6 +397,7 @@ async fn the_bots_own_post_never_reaches_the_pipeline() {
             revoked_at: None,
         },
         sink: sink.clone(),
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();
@@ -476,6 +479,7 @@ async fn a_system_post_is_never_relayed() {
             revoked_at: None,
         },
         sink: sink.clone(),
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();
@@ -535,6 +539,7 @@ async fn a_rejected_token_is_reported_rather_than_retried_forever() {
             revoked_at: None,
         },
         sink,
+        attachments_dir: None,
     };
     // The real error surfaces as a reconnect loop; what matters here is that the
     // socket was told to refuse and the adapter did not silently proceed.
@@ -636,6 +641,7 @@ async fn every_rest_call_carries_the_bot_token() {
             revoked_at: None,
         },
         sink,
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();
@@ -687,6 +693,7 @@ async fn a_channel_the_bot_joined_is_reachable() {
             revoked_at: None,
         },
         sink: Arc::new(RecordingSink::default()),
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();
@@ -725,6 +732,7 @@ async fn a_channel_the_bot_never_joined_is_unreachable_with_a_fixable_reason() {
             revoked_at: None,
         },
         sink: Arc::new(RecordingSink::default()),
+        attachments_dir: None,
     };
     let cancel = CancelSignal::new();
     let running = cancel.clone();

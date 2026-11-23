@@ -90,6 +90,12 @@ pub struct CrewRunOptions {
     /// with one agent set the planning task; pipeline runs leave it unset so
     /// coder and reviewer outputs are not shown as plans.
     pub capture_plan_task: Option<TaskId>,
+    /// How long an approval may wait for a person (ADR-0060).
+    ///
+    /// `None` keeps the service's own five-minute default, which is right for a
+    /// desktop where the card is on screen. A deployment that asks over a
+    /// messaging app needs longer, and sets it here.
+    pub approval_timeout: Option<std::time::Duration>,
 }
 
 impl Default for CrewRunOptions {
@@ -100,6 +106,7 @@ impl Default for CrewRunOptions {
             max_concurrency: 4,
             use_model_permissions: false,
             capture_plan_task: None,
+            approval_timeout: None,
         }
     }
 }
@@ -260,6 +267,8 @@ pub struct AssignmentScheduler {
     use_model_permissions: bool,
     /// Human decisions remembered for this process.
     session_decisions: Option<Arc<SessionDecisions>>,
+    /// How long an approval waits for a person, when the caller set one.
+    approval_timeout: Option<std::time::Duration>,
     /// Model requests prepared for conversation turns, keyed by task id.
     prepared: Arc<StdMutex<HashMap<TaskId, PreparedConversationTurn>>>,
     /// Tasks whose completed Plan-mode output becomes their stored plan.
@@ -301,6 +310,7 @@ impl AssignmentScheduler {
             scope: None,
             use_model_permissions: false,
             session_decisions: None,
+            approval_timeout: None,
             prepared: Arc::new(StdMutex::new(HashMap::new())),
             plan_tasks: Arc::new(StdMutex::new(HashSet::new())),
             turns,
@@ -327,6 +337,12 @@ impl AssignmentScheduler {
     /// Share the process-lifetime session approval decisions.
     pub fn with_session_decisions(mut self, decisions: Option<Arc<SessionDecisions>>) -> Self {
         self.session_decisions = decisions;
+        self
+    }
+
+    /// Set how long an approval waits for a person before it expires.
+    pub fn with_approval_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.approval_timeout = timeout;
         self
     }
 
@@ -797,6 +813,9 @@ impl AssignmentScheduler {
             .approvals
             .clone()
             .with_session_decisions(self.session_decisions.clone());
+        if let Some(timeout) = self.approval_timeout {
+            approvals = approvals.with_timeout(timeout);
+        }
         if self.use_model_permissions {
             approvals = approvals.with_evaluator(Some(Arc::new(ModelPermissionEvaluator::new(
                 executor.llm.clone(),

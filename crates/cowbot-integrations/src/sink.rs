@@ -26,6 +26,14 @@ pub struct ChannelSink {
     /// provider. The message is still recorded, so the operator sees the
     /// question rather than losing it.
     turns: Option<Box<dyn TurnStart>>,
+    /// Where attachment bytes are written, when the deployment has a root.
+    attachments: Option<std::path::PathBuf>,
+    /// The adapter that can fetch them, set once it exists.
+    ///
+    /// Held rather than passed in because the sink is the only place that has
+    /// both the pipeline and the root, and the adapter is the only thing that
+    /// knows how to download from its platform.
+    adapter: Option<std::sync::Arc<dyn crate::adapter::Integration>>,
 }
 
 /// Starts a turn for a message the sink stored.
@@ -40,7 +48,29 @@ impl ChannelSink {
             channels,
             integration,
             turns: None,
+            attachments: None,
+            adapter: None,
         }
+    }
+
+    /// Give the sink the adapter that can fetch an attachment's bytes.
+    pub fn with_adapter(
+        mut self,
+        adapter: std::sync::Arc<dyn crate::adapter::Integration>,
+    ) -> Self {
+        self.adapter = Some(adapter);
+        self
+    }
+
+    /// Write attachments below `root`, the directory the deployment's tools are
+    /// rooted at (ADR-0060).
+    ///
+    /// The pipeline uses the same root the file tools do, so the path it names in
+    /// the message text is one a tool can open without being told an absolute
+    /// server path.
+    pub fn with_attachments(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.attachments = Some(root.into());
+        self
     }
 
     /// Have the sink start turns through `turns`.
@@ -63,8 +93,30 @@ impl std::fmt::Debug for ChannelSink {
 #[async_trait]
 impl MessageSink for ChannelSink {
     async fn accept(&self, message: InboundMessage) -> CowResult<Ingested> {
-        let outcome =
-            inbound::ingest(&self.store, &self.channels, &self.integration, &message).await?;
+        // The store and the adapter are both needed to save a file, and the sink
+        // is the only place that has the root. `files` borrows the adapter, so it
+        // has to outlive the call to `ingest`; it is empty when there is nothing
+        // to save, which is the ordinary case.
+        let store = self
+            .attachments
+            .as_ref()
+            .map(crate::attachments::AttachmentStore::new);
+        let files = store
+            .as_ref()
+            .zip(self.adapter.as_ref())
+            .map(|(store, adapter)| crate::attachments::Inbound {
+                store,
+                adapter: adapter.as_ref(),
+                integration: &self.integration.id,
+            });
+        let outcome = inbound::ingest(
+            &self.store,
+            &self.channels,
+            &self.integration,
+            &message,
+            files.as_ref(),
+        )
+        .await?;
         if let (
             Ingested::Posted {
                 starts_turn: true,

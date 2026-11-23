@@ -19,6 +19,25 @@ pub struct Update {
     pub update_id: i64,
     #[serde(default)]
     pub message: Option<Message>,
+    /// A person tapped one of our buttons (ADR-0060).
+    #[serde(default)]
+    pub callback_query: Option<CallbackQuery>,
+}
+
+/// A button press on an inline keyboard.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CallbackQuery {
+    pub id: String,
+    /// The account that tapped.
+    #[serde(default)]
+    pub from: Option<User>,
+    /// The message the keyboard is attached to, which is the card to revise.
+    #[serde(default)]
+    pub message: Option<Message>,
+    /// What the button carried. Capped at 64 bytes by Telegram, which is why it
+    /// is an approval id and nothing more.
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +68,97 @@ pub struct Message {
     pub message_thread_id: Option<i64>,
     #[serde(default)]
     pub is_topic_message: Option<bool>,
+    /// A compressed photo, in every size Telegram generated.
+    ///
+    /// Only the largest is worth keeping, and it has no name — Telegram strips
+    /// it — which is why [`Message::attachments`] derives one.
+    #[serde(default)]
+    pub photo: Vec<PhotoSize>,
+    /// A file sent as a document, which keeps its name and type.
+    #[serde(default)]
+    pub document: Option<Document>,
+    #[serde(default)]
+    pub audio: Option<Document>,
+    #[serde(default)]
+    pub video: Option<Document>,
+    #[serde(default)]
+    pub voice: Option<Document>,
+}
+
+/// One size of a photo Telegram re-encoded.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PhotoSize {
+    pub file_id: String,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+/// A file attachment, whatever kind it is.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Document {
+    pub file_id: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+impl Message {
+    /// The files this message carried, as the pipeline describes them.
+    ///
+    /// A photo has no name and no size limit worth trusting, so the largest
+    /// `PhotoSize` is taken and named by its file id. Telegram refuses a
+    /// `getFile` above 20 MB, which the download reports rather than this.
+    pub fn attachments(&self) -> Vec<cowbot_integrations::model::Attachment> {
+        let mut attachments = Vec::new();
+        if let Some(largest) = self
+            .photo
+            .iter()
+            .max_by_key(|size| size.file_size.unwrap_or(0))
+        {
+            attachments.push(cowbot_integrations::model::Attachment {
+                external_id: largest.file_id.clone(),
+                kind: cowbot_integrations::model::AttachmentKind::Image,
+                file_name: Some(format!("{}.jpg", largest.file_id)),
+                mime_type: Some("image/jpeg".into()),
+                size_bytes: largest.file_size,
+            });
+        }
+        for (document, kind) in [
+            (
+                &self.document,
+                cowbot_integrations::model::AttachmentKind::File,
+            ),
+            (
+                &self.audio,
+                cowbot_integrations::model::AttachmentKind::Audio,
+            ),
+            (
+                &self.video,
+                cowbot_integrations::model::AttachmentKind::Video,
+            ),
+            (
+                &self.voice,
+                cowbot_integrations::model::AttachmentKind::Audio,
+            ),
+        ] {
+            let Some(document) = document else { continue };
+            attachments.push(cowbot_integrations::model::Attachment {
+                external_id: document.file_id.clone(),
+                kind: document
+                    .mime_type
+                    .as_deref()
+                    .map(|mime| cowbot_integrations::model::AttachmentKind::from_mime(Some(mime)))
+                    .unwrap_or(kind),
+                file_name: document.file_name.clone(),
+                mime_type: document.mime_type.clone(),
+                size_bytes: document.file_size,
+            });
+        }
+        attachments
+    }
 }
 
 impl Message {

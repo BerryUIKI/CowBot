@@ -39,6 +39,7 @@ fn turn_options() -> ChannelTurnOptions {
         approval_level: ApprovalLevel::Trusted,
         max_concurrency: 2,
         use_model_permissions: false,
+        approval_timeout: None,
         platform_context: None,
         participant_capacity: Vec::new(),
     }
@@ -197,6 +198,7 @@ async fn a_task_run_records_a_snapshot_linked_to_its_run() {
                 max_concurrency: 1,
                 use_model_permissions: false,
                 capture_plan_task: None,
+                approval_timeout: None,
             },
         )
         .await
