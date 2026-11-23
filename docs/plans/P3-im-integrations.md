@@ -1,15 +1,28 @@
 # P3 — IM integrations (research and proposal)
 
-- Status: Research, with S0–S3 built. S0 (server-side turns) is
+- Status: **Built.** S0 (server-side turns) is
   [ADR-0055](../ADR/0055-server-side-turn-execution.md); S1 (the shared adapter
   layer) is [ADR-0056](../ADR/0056-im-integrations.md); S2 (Mattermost) is
   [ADR-0057](../ADR/0057-mattermost-adapter.md); S3 (Telegram) is
-  [ADR-0058](../ADR/0058-telegram-adapter.md). Slack (S4) is next.
+  [ADR-0058](../ADR/0058-telegram-adapter.md); S4 (Slack) is
+  [ADR-0059](../ADR/0059-slack-adapter.md); S5 and S7 (approvals and
+  attachments) are [ADR-0060](../ADR/0060-im-approvals.md); S6 (Feishu) is
+  [ADR-0061](../ADR/0061-feishu-adapter.md).
 
-  S3 has moved the shared layer on in two ways the plan did not anticipate: the
-  binding-health notice loop and the `(2/3)` chunk label are now shared, and the
-  splitter has a UTF-16 variant for a platform whose limit is measured that way.
-  Both are evidence from a second adapter, not a redesign.
+  Three things the plan did not anticipate, all found while building it:
+
+  * S3 promoted the binding-health notice loop and the `(2/3)` chunk label into
+    the shared layer, and added a UTF-16 splitter for a platform that measures
+    its limit that way.
+  * **S5 needed no change to the approval wait.** The service already polls the
+    row and `decide` already wakes it, so the adapter calls `decide` and the turn
+    notices within 200 ms. The plan's "pending-resolver handle" is unnecessary;
+    the one `cowbot-core` change is an optional `call` field on
+    `ApprovalRequested`.
+  * **S6 needed no crypto.** Feishu's long connection removes the Encrypt Key,
+    the HMAC, and the `url_verification` deadline in one step, exactly as long
+    polling removed Telegram's webhook. What S6 does need is a hand-written
+    protobuf codec.
 - Date: 2026-11-20
 - Related: [ADR-0043](../ADR/0043-self-hosted-server-auth.md),
   [ADR-0045](../ADR/0045-collaboration-api-and-remote-client.md),
@@ -383,10 +396,10 @@ is to omit all four and let an operator re-bind.
 | S1 | `cowbot-integrations` crate, adapter trait, bindings table, outbound mirror | S0 |
 | S2 | Mattermost inbound (WebSocket bot), mention translation, dedupe, principal provisioning | S1 |
 | S3 | Telegram inbound (`getUpdates` long polling, private chat → direct channel, group → mention turn). **Built** ([ADR-0058](../ADR/0058-telegram-adapter.md)); inline keyboards move to S5 with the other platforms' approval actions | S2 |
-| S4 | Slack via Socket Mode; Events API as a deployment option | S3 |
-| S5 | Approvals over IM (async approval wait, interactive actions for Mattermost, Telegram, Slack) | S3 |
-| S6 | Feishu (encrypted events, card replies, card updates for long answers) | S5 |
-| S7 | Attachments inbound (images and files into tool-readable form) | S6 |
+| S4 | Slack via Socket Mode. **Built** ([ADR-0059](../ADR/0059-slack-adapter.md)); the Events API remains a later deployment option | S3 |
+| S5 | Approvals over IM. **Built** ([ADR-0060](../ADR/0060-im-approvals.md)); no change to the approval wait, but the decider is authorised | S3 |
+| S6 | Feishu. **Built** ([ADR-0061](../ADR/0061-feishu-adapter.md)) over the long connection, so no AES and no signature | S5 |
+| S7 | Attachments inbound. **Built** ([ADR-0060](../ADR/0060-im-approvals.md)) as files under the tool root; images are stored and named, not understood | S6 |
 
 S0 deserves its own ADR; it is a topology change to the server, not an
 integration detail. S1–S2 deserve one more, covering the adapter trait and the
