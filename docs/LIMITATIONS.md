@@ -95,31 +95,59 @@ tracked.
   both numbers instead of failing later on an unexpected response; update the
   older side.
 
-- **Two IM platform adapters ship: Mattermost and Telegram.** Both dial out — a
-  Mattermost bot over a WebSocket, a Telegram bot by long polling — so the
-  deployment needs no inbound surface for either
-  ([ADR-0057](ADR-0057-mattermost-adapter.md),
-  [ADR-0058](ADR-0058-telegram-adapter.md)). Slack and Feishu still report
-  `supported: false` and do not run.
+- **Four IM platform adapters ship: Mattermost, Telegram, Slack, and Feishu.**
+  All four dial out — a Mattermost or Slack bot over a WebSocket, a Telegram bot
+  by long polling, a Feishu app over its long connection — so the deployment needs
+  no inbound surface for any of them
+  ([ADR-0057](ADR/0057-mattermost-adapter.md),
+  [ADR-0058](ADR-0058-telegram-adapter.md),
+  [ADR-0059](ADR-0059-slack-adapter.md),
+  [ADR-0061](ADR-0061-feishu-adapter.md)).
+- **One process per Slack or Feishu app.** Slack reports how many connections an
+  app holds and Feishu delivers each event to one connection at random, so two
+  servers on the same app token each see a subset of the traffic and answer with
+  the wrong binding table or twice.
 - **A Telegram bot cannot read history and cannot open a private chat.** It sees
   only updates delivered while it is polling, so a CowBot channel cannot be
   backfilled from an existing Telegram conversation, and a person has to message
   the bot once before it can post to them.
-- **Telegram attachments are dropped.** A photo or document carries no text, so
-  the message is skipped as empty.
-- **A Telegram answer that Telegram refuses for rate limiting loses that chunk.**
-  The poll loop honours `retry_after`; a mirrored reply is posted once per chunk
-  and a refusal is logged rather than retried.
+- **Attachments are stored and named, not understood.** A file somebody sends is
+  written below the deployment's tool root and its path is appended to the message
+  text, so an agent can read a text file with `read_file` and inspect anything with
+  `execute_code` ([ADR-0060](ADR-0060-im-approvals.md)). **It cannot see an
+  image**: the LLM layer's message content is a string in every protocol, so a
+  photo of a whiteboard is a path, not a picture. Up to four files per message are
+  kept and each may be up to 20 MB; the rest are named in the text as not kept.
+- **An answer is never sent back as a file.** There is no rule for which of the
+  files a turn wrote is the deliverable, so outbound attachments are not built.
+- **An answer a platform refuses for rate limiting loses that chunk.** Telegram's
+  poll loop honours `retry_after`; a mirrored reply is posted once per chunk and a
+  refusal is logged rather than retried.
 - **The bot must be able to reach every conversation it is bound to.**
   Mattermost delivers posts only for channels the bot has joined; Telegram only
   from chats the bot was added to, and in a Telegram channel only when it is an
-  administrator. A binding that misses the requirement is silent rather than
-  broken. Bindings are checked when they are created — the response says
-  `reachable`, `unreachable`, or `unknown` — and at startup, where a problem posts
-  a notice into the CowBot channel it points at
+  administrator; Slack needs the bot invited; Feishu needs `is_in_chat` to answer
+  true. A binding that misses the requirement is silent rather than broken.
+  Bindings are checked when they are created — the response says `reachable`,
+  `unreachable`, or `unknown` — and at startup, where a problem posts a notice
+  into the CowBot channel it points at
   ([ADR-0057](ADR/0057-mattermost-adapter.md),
-  [ADR-0058](ADR/0058-telegram-adapter.md)). A bot removed from a chat after
-  startup is not noticed until the next restart.
+  [ADR-0058](ADR/0058-telegram-adapter.md),
+  [ADR-0060](ADR-0060-im-approvals.md)). A bot removed from a chat after startup
+  is not noticed until the next restart.
+- **An approval decided in the IM is attributed to a bridge user id.** The audit
+  trail and `tool_calls.approved_by` join on `users.id`, so what they show is
+  `bridge:slack:i1:U024` rather than a name; the name is on the bridge user row
+  and rendering it is a UI change that has not been made. A refusal is invisible in
+  Slack, whose interaction socket has no way to show a toast without an inbound
+  request.
+- **A refused attachment leaves the message but not the file.** A download that
+  fails — a private file the bot cannot read, one deleted between the event and
+  the fetch — is reported in the text as "not kept"; nothing retries it later.
+- **A stored attachment is readable by any turn on the server.** The tool root is
+  per deployment rather than per workspace, and the file tools are rooted rather
+  than confined, so an agent that walks out of the root is stopped by the approval
+  gate and not by the filesystem.
 - **A second bot in a bound channel is treated as a person.** Mattermost does not
   mark a post as coming from a bot, so the adapter cannot reuse the shared echo
   guard for one and two bots would answer each other.

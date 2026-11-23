@@ -41,8 +41,8 @@ const KIND_LABEL: Record<IntegrationKind, string> = {
 const CONFIG_PLACEHOLDER: Record<IntegrationKind, string> = {
   mattermost: '{\n  "base_url": "https://chat.example.com",\n  "bot_token": "…"\n}',
   telegram: '{\n  "bot_token": "123456:ABC…"\n}',
-  slack: '{\n  "bot_token": "xoxb-…",\n  "app_token": "xapp-…",\n  "signing_secret": "…"\n}',
-  feishu: '{\n  "app_id": "cli_…",\n  "app_secret": "…",\n  "encrypt_key": "…",\n  "verification_token": "…"\n}',
+  slack: '{\n  "bot_token": "xoxb-…",\n  "app_token": "xapp-…"\n}',
+  feishu: '{\n  "app_id": "cli_…",\n  "app_secret": "…",\n  "domain": "feishu"\n}',
 };
 
 export default function IntegrationSettings() {
