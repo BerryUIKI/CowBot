@@ -27,11 +27,15 @@ pub struct SlackConfig {
     pub app_token: String,
     /// The app's signing secret.
     ///
-    /// Kept for the Events API transport, which needs it and which this build
-    /// does not implement. Optional so an operator using Socket Mode does not
-    /// store a secret nothing reads.
+    /// Required for [`Transport::EventsApi`] and unread by Socket Mode, which has
+    /// no inbound request to verify. Optional in the type so an operator using
+    /// the default does not store a secret nothing reads; `from_json` refuses a
+    /// configuration that chose the Events API without one, because accepting
+    /// unsigned traffic would be worse than refusing to start.
     #[serde(default)]
     pub signing_secret: Option<String>,
+    #[serde(default)]
+    pub transport: Transport,
     /// The Web API origin, for a test pointed at a local fake.
     #[serde(default = "default_api_base")]
     pub api_base: String,
@@ -39,6 +43,26 @@ pub struct SlackConfig {
 
 fn default_api_base() -> String {
     DEFAULT_API_BASE.to_string()
+}
+
+/// How this Slack app delivers events (ADR-0062).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    /// An outbound WebSocket, the default: no public URL, no signature.
+    #[default]
+    SocketMode,
+    /// An inbound HTTPS endpoint, which the operator registers with Slack.
+    EventsApi,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transport::SocketMode => "socket_mode",
+            Transport::EventsApi => "events_api",
+        }
+    }
 }
 
 impl SlackConfig {
@@ -62,6 +86,20 @@ impl SlackConfig {
             return Err(CowError::Config(
                 "bot_token must be the bot token Slack shows as the `xoxb-` token; the app-level \
                  `xapp-` token goes in app_token"
+                    .into(),
+            ));
+        }
+        // The Events API is the one transport that needs the signing secret, and
+        // it is the only thing standing between an unauthenticated POST and an
+        // agent turn, so its absence is a startup error rather than a runtime one.
+        if parsed.transport == Transport::EventsApi
+            && parsed
+                .signing_secret
+                .as_deref()
+                .is_none_or(|secret| secret.trim().is_empty())
+        {
+            return Err(CowError::Config(
+                "signing_secret is required when transport is 'events_api': it is what proves a                  request came from Slack. Use transport 'socket_mode', or copy the secret from                  the app's Basic Information page"
                     .into(),
             ));
         }
@@ -134,6 +172,35 @@ mod tests {
     fn a_signing_secret_is_optional_because_socket_mode_does_not_read_it() {
         let parsed = config(r#"{"bot_token":"xoxb-1","app_token":"xapp-1"}"#).unwrap();
         assert!(parsed.signing_secret.is_none());
+        assert_eq!(
+            parsed.transport,
+            Transport::SocketMode,
+            "the default is unchanged"
+        );
+    }
+
+    #[test]
+    fn the_events_api_transport_requires_a_signing_secret() {
+        // Accepting unsigned traffic would be worse than refusing to start: an
+        // unauthenticated POST with no provider would still become an agent
+        // turn, and the signature is the only thing between them.
+        let error =
+            config(r#"{"bot_token":"xoxb-1","app_token":"xapp-1","transport":"events_api"}"#)
+                .unwrap_err();
+        assert!(error.to_string().contains("signing_secret"), "{error}");
+
+        // An empty string is not a secret either.
+        let blank = config(
+            r#"{"bot_token":"xoxb-1","app_token":"xapp-1","transport":"events_api","signing_secret":"  "}"#,
+        )
+        .unwrap_err();
+        assert!(blank.to_string().contains("signing_secret"), "{blank}");
+
+        let configured = config(
+            r#"{"bot_token":"xoxb-1","app_token":"xapp-1","transport":"events_api","signing_secret":"s3cret"}"#,
+        )
+        .unwrap();
+        assert_eq!(configured.transport, Transport::EventsApi);
     }
 
     #[test]
