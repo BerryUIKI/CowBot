@@ -1,6 +1,6 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.17 and the `dev` branch at the time of writing.
+**Applies to:** CowBot 0.1.17 and the `main` branch at the time of writing.
 **Last reviewed:** 2026-11-21.
 
 This page is the honest boundary of the product. It says what works, what does

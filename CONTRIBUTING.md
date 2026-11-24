@@ -11,11 +11,11 @@ Do not disclose vulnerabilities in public issues; follow [SECURITY.md](SECURITY.
 ## Make a change
 
 1. Fork the repository if you do not have write access and clone your fork.
-2. Fetch upstream and create a focused branch from `dev`, the integration branch. Follow [the collaboration guide](docs/COLLABORATION.md) for GitFlow conventions.
+2. Fetch upstream and create a short-lived branch from `main`, the trunk. Follow [the collaboration guide](docs/COLLABORATION.md) for the trunk-based conventions.
 3. Set up the environment with [the developer guide](docs/DEVELOPMENT.md).
 4. Make the smallest coherent change. Update docs and meaningful tests when behavior changes; avoid unrelated refactors or lockfile churn.
 5. Run formatting, Clippy, and workspace tests for code changes. For docs, check local links, command examples, and visual assets.
-6. Open a PR against `dev`, linking the issue and explaining the problem, resulting behavior, validation, and limitations. Use the PR template.
+6. Open a PR against `main`, linking the issue and explaining the problem, resulting behavior, validation, and limitations. Use the PR template.
 7. Respond to review, resolve discussion, and rerun affected checks after edits. Maintainers decide when to merge.
 
 Write code, comments, documentation, branch names, and commit messages in English. Use concise imperative commits such as `docs: clarify mock provider behavior` or `fix: handle missing tool arguments`. Keep commits small and atomic.

@@ -79,10 +79,10 @@ From 0.1.2 onward, CowBot checks GitHub Releases at launch and can download and 
 
 ## Quick start
 
-Install the [Rust toolchain](https://rustup.rs/), then build from the integration branch:
+Install the [Rust toolchain](https://rustup.rs/), then build from `main`, the trunk:
 
 ```bash
-git clone --branch dev https://github.com/BerryUIKI/CowBot.git CowBot
+git clone https://github.com/BerryUIKI/CowBot.git CowBot
 cd CowBot
 cargo build --workspace --locked
 ```
@@ -255,7 +255,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Keep contributions small and focused. Branch from `dev` using `feature/<name>` and open pull requests against `dev`. `main` is the release branch; releases are promoted separately. Repository documentation, code, and commit messages use English. See [CLAUDE.md](CLAUDE.md) for development conventions.
+Keep contributions small and focused. Create a short-lived branch from `main` using `feature/<name>` and open pull requests against `main`; `main` is the trunk and every release is a tag cut from it. Repository documentation, code, and commit messages use English. See [CLAUDE.md](CLAUDE.md) for development conventions.
 
 Report reproducible bugs and discuss proposals through [GitHub Issues](https://github.com/BerryUIKI/CowBot/issues). Follow the [Code of Conduct](CODE_OF_CONDUCT.md); use [Security](SECURITY.md) for vulnerability reporting. Maintainers can use the [release checklist](docs/RELEASING.md).
 

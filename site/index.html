@@ -198,7 +198,7 @@
               <p class="platform-note">Universal — Apple Silicon and Intel</p>
               <ul class="file-list">
                 <li><a data-os-link="macos" data-asset="dmg" href="https://github.com/BerryUIKI/CowBot/releases/latest">Disk image (.dmg)</a></li>
-                <li><a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/USER_GUIDE.md#install">Installation guide</a></li>
+                <li><a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md#install">Installation guide</a></li>
               </ul>
               <p class="platform-hint">Right-click the app and choose Open, or allow it in System Settings → Privacy &amp; Security.</p>
             </article>
@@ -216,7 +216,7 @@
           <p class="download-foot">
             Builds are unsigned. From 0.1.2 onward CowBot checks for updates at
             launch and installs them from Settings → About. Read the
-            <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/USER_GUIDE.md">user guide</a>
+            <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">user guide</a>
             or
             <a href="https://github.com/BerryUIKI/CowBot/releases">browse all releases</a>.
           </p>
@@ -383,7 +383,7 @@
           <p class="download-foot">
             Policies govern tool use, not the operating system. The subprocess
             backend runs commands with your user's permissions — see
-            <a href="https://github.com/BerryUIKI/CowBot/blob/dev/SECURITY.md">Security</a>.
+            <a href="https://github.com/BerryUIKI/CowBot/blob/main/SECURITY.md">Security</a>.
           </p>
         </div>
       </section>
@@ -408,8 +408,8 @@
               <li><strong>Roadmap:</strong> self-hosted team mode, isolated sandbox backends, and DAG workflows are planned, not shipped.</li>
             </ul>
             <p class="link-row">
-              <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/ARCHITECTURE.md">Read the architecture</a>
-              <a href="https://github.com/BerryUIKI/CowBot/tree/dev/docs/ADR">Architecture decisions</a>
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ARCHITECTURE.md">Read the architecture</a>
+              <a href="https://github.com/BerryUIKI/CowBot/tree/main/docs/ADR">Architecture decisions</a>
             </p>
           </div>
           <figure class="figure">
@@ -433,12 +433,12 @@
           <div class="split-head">
             <h2>Run it from source.</h2>
             <p>
-              Install the Rust toolchain, clone the integration branch, and try
+              Install the Rust toolchain, clone the repository, and try
               a crew offline. The mock provider needs no API key.
             </p>
             <p class="link-row">
-              <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/DEVELOPMENT.md">Developer guide</a>
-              <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/USER_GUIDE.md">User guide</a>
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/DEVELOPMENT.md">Developer guide</a>
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">User guide</a>
             </p>
           </div>
           <div class="terminal">
@@ -446,7 +446,7 @@
               <span>Terminal</span>
               <button class="copy" type="button" data-copy="setup">Copy</button>
             </div>
-            <pre><code id="setup"><span class="prompt">$</span> git clone --branch dev https://github.com/BerryUIKI/CowBot.git CowBot
+            <pre><code id="setup"><span class="prompt">$</span> git clone https://github.com/BerryUIKI/CowBot.git CowBot
 <span class="prompt">$</span> cd CowBot
 <span class="prompt">$</span> cargo build --workspace --locked
 <span class="prompt">$</span> cargo run -p cowbot-cli -- run \
@@ -495,7 +495,7 @@
               not built — nothing here is a promise about a date.
             </p>
             <p class="link-row">
-              <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/ROADMAP.md">Read the roadmap</a>
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ROADMAP.md">Read the roadmap</a>
             </p>
             <ol class="phase-track" data-reveal-group>
               <li class="phase is-current" data-reveal>
@@ -592,8 +592,8 @@
             <details>
               <summary>Can I contribute?</summary>
               <p>
-                Yes. Branch from <code>dev</code> as <code>feature/&lt;name&gt;</code>,
-                keep commits small, and open a pull request. See the
+                Yes. Branch from <code>main</code> as <code>feature/&lt;name&gt;</code>,
+                keep commits small, and open a pull request against <code>main</code>. See the
                 contribution guide and the code of conduct.
               </p>
             </details>
@@ -630,21 +630,21 @@
           <h3>Product</h3>
           <a href="#download">Download</a>
           <a href="#features">Features</a>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/USER_GUIDE.md">User guide</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">User guide</a>
           <a href="https://github.com/BerryUIKI/CowBot/releases">Releases</a>
         </nav>
         <nav class="footer-col" aria-label="Project">
           <h3>Project</h3>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/ROADMAP.md">Roadmap</a>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/docs/ARCHITECTURE.md">Architecture</a>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/CONTRIBUTING.md">Contributing</a>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/SECURITY.md">Security</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ROADMAP.md">Roadmap</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/CONTRIBUTING.md">Contributing</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/SECURITY.md">Security</a>
         </nav>
         <nav class="footer-col" aria-label="Elsewhere">
           <h3>Elsewhere</h3>
           <a href="https://github.com/BerryUIKI/CowBot">GitHub</a>
           <a href="https://github.com/BerryUIKI/CowBot/issues">Issues</a>
-          <a href="https://github.com/BerryUIKI/CowBot/blob/dev/LICENSE">License</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/LICENSE">License</a>
         </nav>
       </div>
       <div class="wrap footer-base">

@@ -6,7 +6,7 @@ known to be missing, and what an operator must do before trusting it with real
 work. It replaces the shorter status note of earlier releases without changing
 the reporting instructions.
 
-**Applies to:** CowBot 0.1.16 and the `dev` branch at the time of writing.
+**Applies to:** CowBot 0.1.16 and the `main` branch at the time of writing.
 
 ## Assets
 
@@ -188,7 +188,7 @@ on maintainer availability.
 
 ## Supported versions
 
-Reports against the current release and the `dev` branch are welcome. Fixes land
-on `dev` and ship in the next release; older releases may require an upgrade
+Reports against the current release and the `main` branch are welcome. Fixes land
+on `main` and ship in the next release; older releases may require an upgrade
 rather than a backport. There is no long-term support branch and no support
 window yet.

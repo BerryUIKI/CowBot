@@ -12,7 +12,7 @@ Describe relevant behavior changes, security boundaries, and remaining work.
 
 ## Review checklist
 
-- [ ] Targets `dev`, or explains the release/hotfix exception.
+- [ ] Targets `main`, the trunk, from a short-lived branch.
 - [ ] Scope follows the agreed design; planned capabilities are labeled.
 - [ ] Relevant tests and documentation are updated.
 - [ ] No secrets, private data, or unexplained dependency changes are included.
