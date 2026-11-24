@@ -19,7 +19,7 @@ CowBot is an open-source, high-performance multi-agent collaboration platform wi
 
 ## Git Workflow (Trunk-Based Development)
 
-- **Strict rule**: NEVER push directly to `main`. It has GitHub branch protection enabled with pull request requirements, required status checks, and force-push/deletion blocked.
+- **Strict rule**: NEVER push directly to `main`. It has GitHub branch protection: pull request required, the `Workspace (fmt, clippy, test)` and `Desktop (frontend and Tauri backend)` checks required (with branches up to date), and force-push/deletion blocked.
 - `main` — the trunk and the only long-lived branch. It is always releasable; a release is a `v<version>` tag cut from a reviewed commit on it.
 - `feature/<name>` — short-lived branch created from `main`, pushed to origin, and merged into `main` via Pull Request (`gh pr create --base main`). Delete it after the merge.
 - **No `dev`, `release/*`, or `hotfix/*` branches.** Integration happens on `main` through small pull requests, not on a second long-lived branch. `main` was formerly the release-only branch and `dev` the integration branch; `dev` was retired at 0.1.17 when the two were identical, and the repository's default branch is `main`.
