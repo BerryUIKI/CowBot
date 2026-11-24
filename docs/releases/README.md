@@ -5,6 +5,7 @@ the canonical distribution point; these files keep the notes in the repository.
 
 | Version | Theme |
 | --- | --- |
+| [0.1.17](0.1.17.md) | Agents you can talk to from your team’s chat: four IM platforms, approvals in the chat, and inbound files |
 | [0.1.16](0.1.16.md) | The desktop connects to a CowBot server: server mode, saved sessions, and reconnection |
 | [0.1.15](0.1.15.md) | A sidebar that stays put: no horizontal panning, and content truncates |
 | [0.1.14](0.1.14.md) | Thirteen interface languages, a default CowBot agent, and optional bot tags |
