@@ -34,6 +34,21 @@ fn options(max_concurrency: usize) -> CrewRunOptions {
         max_concurrency,
         use_model_permissions: false,
         capture_plan_task: None,
+        approval_timeout: None,
+    }
+}
+
+/// Options that need no human decision, for a test about turn events.
+///
+/// The manual policy asks before any High-risk call, and an unknown tool name is
+/// classified High. A test that wants to see a tool call *finish* has to run
+/// under a policy that lets it, or it spends five minutes in the approval wait
+/// and then asserts a failure that came from the timeout rather than from the
+/// assertion it means to make.
+fn trusted_options(max_concurrency: usize) -> CrewRunOptions {
+    CrewRunOptions {
+        approval_level: cowbot_core::approval::ApprovalLevel::Trusted,
+        ..options(max_concurrency)
     }
 }
 
@@ -321,7 +336,9 @@ async fn a_tool_call_reports_start_and_finish_around_the_result() {
     scheduler.register_agent(coder, llm, ToolRegistry::new(), "mock-model");
 
     let task = Task::new("Use a tool", "Answer").assign_to(coder_id);
-    let run_options = options(1);
+    // Trusted, so the call reaches the registry: the tool does not exist, and
+    // that is the failure this test is about.
+    let run_options = trusted_options(1);
     scheduler
         .enqueue(
             &task,

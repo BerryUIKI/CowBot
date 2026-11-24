@@ -36,6 +36,7 @@ fn options(max_concurrency: usize) -> CrewRunOptions {
         max_concurrency,
         use_model_permissions: false,
         capture_plan_task: None,
+        approval_timeout: None,
     }
 }
 

@@ -252,6 +252,14 @@ pub async fn post_message(
         .channels()
         .post_thread_message(&channel_id, sender, &body.content, body.thread_id.clone())
         .await?;
+    // Answer in the background so the client is not held for the length of a
+    // turn; the reply reaches every client as a MessagePosted event on the
+    // workspace socket, exactly as a desktop reply does (ADR-0055). With no
+    // LLM configured the message is stored and nothing else happens, which is
+    // what a server did before the executor existed.
+    if let Some(turns) = &state.turns {
+        turns.spawn_reply(channel_id.clone(), message.clone());
+    }
     Ok((StatusCode::CREATED, Json(MessageBody::from(message))))
 }
 

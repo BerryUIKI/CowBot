@@ -57,6 +57,15 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0051](0051-database-lifecycle-safeguards.md) | Data-directory isolation, upgrade consent, and database recovery |
 | [0052](0052-default-main-agent-and-agent-tags.md) | A default CowBot main agent, first-chat naming, and agent tags |
 | [0053](0053-desktop-server-mode.md) | The desktop's server mode: saved sessions, reconnect, and mode gating |
+| [0054](0054-server-api-version-and-read-retry.md) | Checking the server's API version and retrying transient reads |
+| [0055](0055-server-side-turn-execution.md) | Server-side turn execution: a configured provider, one executor, a narrow tool set |
+| [0056](0056-im-integrations.md) | IM integrations: the adapter contract, identity mapping, and outbound mirror |
+| [0057](0057-mattermost-adapter.md) | The Mattermost adapter: in-band socket auth, discovered identity, mention translation |
+| [0058](0058-telegram-adapter.md) | The Telegram adapter: long polling, UTF-16 entity offsets, HTML rendering |
+| [0059](0059-slack-adapter.md) | The Slack adapter: Socket Mode, envelope acknowledgment, mrkdwn translation |
+| [0060](0060-im-approvals.md) | IM approvals and attachments: the decider is checked, files land under the tool root |
+| [0061](0061-feishu-adapter.md) | The Feishu adapter: long connection, hand-written protobuf frames, message-id dedupe |
+| [0062](0062-webhook-transports.md) | Webhook transports: an inbound surface, per-request verification, hand-written AES |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 

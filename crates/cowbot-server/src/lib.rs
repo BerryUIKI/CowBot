@@ -9,6 +9,7 @@
 //! one; `cowbot-client`'s remote mode is the later milestone that speaks this
 //! API.
 
+pub mod adapters;
 pub mod api;
 pub mod auth;
 pub mod channels;
@@ -16,6 +17,8 @@ pub mod config;
 pub mod conversation_list;
 pub mod conversations;
 pub mod error;
+pub mod integration_startup;
+pub mod integrations;
 pub mod memory;
 pub mod packages;
 pub mod router;
@@ -24,9 +27,12 @@ pub mod stream;
 pub mod tasks;
 pub mod templates;
 pub mod tokens;
+pub mod turn_executor;
+pub mod webhooks;
 pub mod workspaces;
 
 pub use auth::{AuthService, AuthenticatedUser, IssuedSession};
 pub use config::ServerConfig;
 pub use error::ApiError;
 pub use router::{app, AppState};
+pub use turn_executor::TurnExecutor;

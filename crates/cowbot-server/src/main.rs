@@ -39,6 +39,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::connect(&config.database).await?;
     store.migrate().await?;
 
+    // Expire approvals a previous process left pending. The desktop does this on
+    // open and the server never did, so a row whose waiting turn died stayed
+    // actionable: a card left in an IM could still be tapped into a decision that
+    // woke nobody (ADR-0060).
+    match store.list_workspaces().await {
+        Ok(workspaces) => {
+            for workspace in workspaces {
+                let service = cowbot_service::ApprovalService::new(
+                    store.clone(),
+                    cowbot_bus::EventBus::default_bus(),
+                    workspace.id.clone(),
+                );
+                match service.reconcile_on_startup().await {
+                    Ok(0) => {}
+                    Ok(expired) => {
+                        tracing::info!(expired, "Expired approvals left pending by an earlier run")
+                    }
+                    Err(error) => {
+                        // A database fault here must not stop the server: the
+                        // approvals stay pending, which is the state it found.
+                        tracing::warn!(%error, "Could not expire leftover approvals")
+                    }
+                }
+            }
+        }
+        Err(error) => tracing::warn!(%error, "Could not list workspaces to expire approvals"),
+    }
+
     let auth = Arc::new(AuthService::new(store.clone(), config.clone()));
     let password = generated_password();
     if let Some(owner) = auth.bootstrap(&password).await? {
@@ -49,7 +77,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Change it from POST /api/v1/auth/password after signing in.");
     }
 
-    let state = AppState::new(store, auth, cowbot_bus::EventBus::default_bus());
+    let state = AppState::new(store.clone(), auth, cowbot_bus::EventBus::default_bus());
+    // The running integrations outlive this scope so a later stop control could
+    // reach them; nothing holds a lock while the server serves requests.
+    let integrations = tokio::sync::Mutex::new(None);
+    let state = match &config.llm {
+        Some(llm) => {
+            let executor = cowbot_server::TurnExecutor::with_approval_timeout(
+                store.clone(),
+                state.bus.clone(),
+                llm,
+                &config.workspace_dir,
+                std::time::Duration::from_secs(config.approval_timeout_secs),
+            )
+            .await?;
+            tracing::info!(
+                protocol = llm.protocol.as_str(),
+                model = %llm.model,
+                workspace_dir = %config.workspace_dir.display(),
+                "Server will answer channel turns"
+            );
+            // A bot has to be running before anyone messages it, so the
+            // integrations start here rather than from a route. They are only
+            // started when a provider exists: a bot that stores a question and
+            // never answers is worse than one that is not running, because the
+            // IM user sees their message accepted and waits (ADR-0057).
+            //
+            // The handles are kept for the life of the process. Dropping one does
+            // not stop the tasks — the cancel signal is owned, not a guard — but
+            // a handle that is reachable is one an operator-facing stop control
+            // could later act on.
+            match cowbot_server::integration_startup::start_all(
+                &store,
+                &state.bus,
+                executor.clone(),
+            )
+            .await
+            {
+                Ok(started) => {
+                    *integrations.lock().await = Some(started);
+                }
+                Err(error) => {
+                    // A database read that fails here must not stop the HTTP
+                    // surface: a server that cannot start its bots still serves
+                    // the workspace.
+                    tracing::warn!(%error, "IM integrations did not start");
+                }
+            }
+            state.with_turns(executor)
+        }
+        None => {
+            tracing::info!(
+                "No COWBOT_SERVER_LLM_* variables set: channel turns are stored but not answered, \
+                 so no IM integration is started either"
+            );
+            state
+        }
+    };
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     tracing::info!(
         address = %config.address,

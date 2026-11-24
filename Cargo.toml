@@ -9,13 +9,18 @@ members = [
     "crates/cowbot-client",
     "crates/cowbot-package",
     "crates/cowbot-service",
+    "crates/cowbot-integrations",
+    "crates/cowbot-mattermost",
+    "crates/cowbot-telegram",
+    "crates/cowbot-slack",
+    "crates/cowbot-feishu",
     "crates/cowbot-cli",
     "crates/cowbot-server",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 authors = ["CowBot Contributors"]
 license = "Apache-2.0"
@@ -49,6 +54,13 @@ tempfile = "3.10"
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
+# Cryptography, for verifying the platforms that sign a webhook body instead of
+# connecting out (ADR-0062).
+sha2 = "0.10"
+sha1 = "0.10"
+hmac = "0.12"
+subtle = "2"
+
 # Tokenization
 tiktoken-rs = "0.12"
 
@@ -65,4 +77,9 @@ cowbot-store = { path = "crates/cowbot-store" }
 cowbot-client = { path = "crates/cowbot-client" }
 cowbot-package = { path = "crates/cowbot-package" }
 cowbot-service = { path = "crates/cowbot-service" }
+cowbot-integrations = { path = "crates/cowbot-integrations" }
+cowbot-mattermost = { path = "crates/cowbot-mattermost" }
+cowbot-telegram = { path = "crates/cowbot-telegram" }
+cowbot-slack = { path = "crates/cowbot-slack" }
+cowbot-feishu = { path = "crates/cowbot-feishu" }
 cowbot-server = { path = "crates/cowbot-server" }

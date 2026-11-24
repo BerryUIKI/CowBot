@@ -386,16 +386,17 @@ mod tests {
         let cancel = CancelSignal::new();
         let mut seen = Vec::new();
 
+        // Cancel from inside the stream rather than from a timer. A timer races
+        // the 200 ms chunk delay, and a loaded machine loses that race — the
+        // second chunk then arrives before the stop and the test fails for a
+        // reason that has nothing to do with cancellation. Cancelling here makes
+        // the ordering the test asserts on a property of the stream itself.
         let stopper = cancel.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            stopper.cancel();
-        });
-
         let result = provider
             .chat_stream(&request(), &cancel, &mut |chunk| {
                 if let StreamChunk::Text(text) = chunk {
                     seen.push(text);
+                    stopper.cancel();
                 }
             })
             .await;

@@ -1,6 +1,6 @@
 # Model provider capabilities
 
-**Applies to:** CowBot 0.1.16. Cross-links [ADR-0016](ADR/0016-model-provider-protocols.md)
+**Applies to:** CowBot 0.1.17. Cross-links [ADR-0016](ADR/0016-model-provider-protocols.md)
 and [ADR-0021](ADR/0021-vendor-first-model-providers.md).
 
 CowBot speaks three wire protocols. This page records what each one supports

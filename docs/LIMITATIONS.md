@@ -1,7 +1,7 @@
 # What CowBot does today, and what it does not
 
-**Applies to:** CowBot 0.1.16 and the `dev` branch at the time of writing.
-**Last reviewed:** 2026-11-19.
+**Applies to:** CowBot 0.1.17 and the `dev` branch at the time of writing.
+**Last reviewed:** 2026-11-21.
 
 This page is the honest boundary of the product. It says what works, what does
 not, and which behaviours are deliberate choices that may surprise you. The
@@ -13,7 +13,7 @@ is stale — please open an issue.
 
 ## What works today
 
-CowBot 0.1.16 is a local-first **desktop app and CLI**. The default mode runs
+CowBot 0.1.17 is a local-first **desktop app and CLI**. The default mode runs
 everything on your machine against a SQLite database; an optional self-hosted
 server shares a workspace with a small team over HTTP and WebSocket.
 
@@ -30,7 +30,7 @@ server shares a workspace with a small team over HTTP and WebSocket.
 | Composer | Sixteen `/commands` as desktop actions, and `/btw` for a side question that never enters the conversation |
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
-| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace |
+| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace. A deployment can configure one model provider and answer channel turns itself, with no desktop running (ADR-0055) |
 | Interface | Thirteen languages (English, Simplified and Traditional Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese, Latin American and European Spanish), with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
@@ -41,11 +41,16 @@ tracked.
 
 ### Collaboration and hosting
 
-- **Only one machine runs agent turns.** A remote client can read a conversation
-  and its context, but a turn still executes in the desktop's process with its
-  model provider, so a team member without that provider configured cannot make
-  an agent answer. Running crews, compacting context, and preparing worktrees
-  are therefore local to the machine that opened the workspace.
+- **Only a configured server or the desktop runs agent turns.** By default a
+  turn executes in the desktop's process with its model provider, so a team
+  member without that provider configured cannot make an agent answer. A server
+  can be configured to answer channel turns itself through four
+  `COWBOT_SERVER_LLM_*` variables ([ADR-0055](ADR/0055-server-side-turn-execution.md)),
+  but its agent is deliberately less capable: it can run code and read or write
+  files inside `COWBOT_SERVER_WORKSPACE_DIR`, and nothing else. The desktop's
+  workspace tools and project worktrees remain local. Running crews, compacting
+  context, and preparing worktrees are local to the machine that opened the
+  workspace.
 - **Some actions are hidden in server mode, not supported remotely.** Settings →
   Server switches between the local workspace and a server, and the controls
   that need this machine disappear rather than failing: running a task, project
@@ -62,7 +67,111 @@ tracked.
 - **No live-turn transport.** A remote client can read a conversation and its
   context, but streaming a live turn over the network and cancelling one are not
   available remotely. A dropped stream reconnects on its own and the window
-  reloads what it missed.
+  reloads what it missed. This also bounds a server-run turn: the socket opens a
+  bubble when a turn starts and then carries nothing until it settles, so the
+  answer appears at once rather than as it is written, and the only way to stop
+  one is to cancel the task behind it.
+- **A server turn has no spending ceiling.** A deployment that answers turns
+  itself spends on a model with nobody present. The approval gate bounds which
+  tools run, not how many tokens a turn uses, and there is no per-workspace
+  budget yet. A turn's context size *is* bounded when the operator sets
+  `COWBOT_SERVER_LLM_CONTEXT_WINDOW`: a full conversation branch is then skipped
+  rather than sent, the same way a full group participant is.
+- **Server-side group routing skips the capacity gate unless a window is set.**
+  A group conversation normally skips a participant whose context branch is
+  full, using the window the desktop knows from its model metadata. The server
+  passes one only when the operator declares `COWBOT_SERVER_LLM_CONTEXT_WINDOW`,
+  so without it a full branch surfaces as a turn failure instead of a skip.
+- **The server has no rate limiting.** A shared deployment has no per-user or
+  per-workspace request ceiling; an API token or session can issue requests as
+  fast as the client and proxy allow. `429` responses are handled by the desktop
+  client if a proxy adds them, but the server does not produce them.
+- **A write that fails mid-flight is not retried.** Reads are retried up to three
+  times over about 600 ms; a create, edit, or approval decision that fails is
+  reported so you can decide whether to repeat it, because the API has no
+  idempotency key and a silent replay could duplicate it.
+- **The desktop checks the server's API version and refuses a mismatch.** A
+  server and a desktop from different protocol versions report the mismatch with
+  both numbers instead of failing later on an unexpected response; update the
+  older side.
+
+- **Four IM platform adapters ship: Mattermost, Telegram, Slack, and Feishu.**
+  All four dial out — a Mattermost or Slack bot over a WebSocket, a Telegram bot
+  by long polling, a Feishu app over its long connection — so the deployment needs
+  no inbound surface for any of them
+  ([ADR-0057](ADR/0057-mattermost-adapter.md),
+  [ADR-0058](ADR-0058-telegram-adapter.md),
+  [ADR-0059](ADR-0059-slack-adapter.md),
+  [ADR-0061](ADR-0061-feishu-adapter.md)).
+- **A webhook transport means exposing CowBot to the internet**
+  ([ADR-0062](ADR/0062-webhook-transports.md)). Every adapter defaults to an
+  outbound transport precisely so that is not required; choosing a webhook trades
+  that away for a public hostname, a certificate, and a reverse proxy. The
+  endpoint verifies every request before parsing it, but the proxy's request-size
+  limit is the only bound on an unauthenticated caller.
+- **The three webhook transports are not tested against the live platforms.** The
+  signing and decryption schemes are covered by unit tests, a published AES test
+  vector, and route tests; a deployment is the first place a real platform's
+  signature is checked end to end.
+- **One process per Slack or Feishu app.** Slack reports how many connections an
+  app holds and Feishu delivers each event to one connection at random, so two
+  servers on the same app token each see a subset of the traffic and answer with
+  the wrong binding table or twice.
+- **A Telegram bot cannot read history and cannot open a private chat.** It sees
+  only updates delivered while it is polling, so a CowBot channel cannot be
+  backfilled from an existing Telegram conversation, and a person has to message
+  the bot once before it can post to them.
+- **Attachments are stored and named, not understood.** A file somebody sends is
+  written below the deployment's tool root and its path is appended to the message
+  text, so an agent can read a text file with `read_file` and inspect anything with
+  `execute_code` ([ADR-0060](ADR-0060-im-approvals.md)). **It cannot see an
+  image**: the LLM layer's message content is a string in every protocol, so a
+  photo of a whiteboard is a path, not a picture. Up to four files per message are
+  kept and each may be up to 20 MB; the rest are named in the text as not kept.
+- **An answer is never sent back as a file.** There is no rule for which of the
+  files a turn wrote is the deliverable, so outbound attachments are not built.
+- **An answer a platform refuses for rate limiting loses that chunk.** Telegram's
+  poll loop honours `retry_after`; a mirrored reply is posted once per chunk and a
+  refusal is logged rather than retried.
+- **The bot must be able to reach every conversation it is bound to.**
+  Mattermost delivers posts only for channels the bot has joined; Telegram only
+  from chats the bot was added to, and in a Telegram channel only when it is an
+  administrator; Slack needs the bot invited; Feishu needs `is_in_chat` to answer
+  true. A binding that misses the requirement is silent rather than broken.
+  Bindings are checked when they are created — the response says `reachable`,
+  `unreachable`, or `unknown` — and at startup, where a problem posts a notice
+  into the CowBot channel it points at
+  ([ADR-0057](ADR/0057-mattermost-adapter.md),
+  [ADR-0058](ADR/0058-telegram-adapter.md),
+  [ADR-0060](ADR-0060-im-approvals.md)). A bot removed from a chat after startup
+  is not noticed until the next restart.
+- **An approval decided in the IM is attributed to a bridge user id.** The audit
+  trail and `tool_calls.approved_by` join on `users.id`, so what they show is
+  `bridge:slack:i1:U024` rather than a name; the name is on the bridge user row
+  and rendering it is a UI change that has not been made. A refusal is invisible in
+  Slack, whose interaction socket has no way to show a toast without an inbound
+  request.
+- **A refused attachment leaves the message but not the file.** A download that
+  fails — a private file the bot cannot read, one deleted between the event and
+  the fetch — is reported in the text as "not kept"; nothing retries it later.
+- **A stored attachment is readable by any turn on the server.** The tool root is
+  per deployment rather than per workspace, and the file tools are rooted rather
+  than confined, so an agent that walks out of the root is stopped by the approval
+  gate and not by the filesystem.
+- **A second bot in a bound channel is treated as a person.** Mattermost does not
+  mark a post as coming from a bot, so the adapter cannot reuse the shared echo
+  guard for one and two bots would answer each other.
+- **A Mattermost disconnect does not recover what was missed.** The socket reconnects
+  with backoff, but posts sent while it was down are gone; Mattermost has no
+  resume-from-id over this transport.
+- **An integration's configuration is stored unencrypted.** A bot token is kept
+  as JSON in the deployment's database; a reader of that file sees it. It never
+  appears in an API response, a log line, or a `.cowpkg`, but there is no
+  encryption at rest and no key management.
+- **Each IM account becomes a CowBot user.** A platform account that writes to a
+  bound channel is provisioned a `Member` row on first sight, with no password so
+  it cannot sign in. In a large tenant the user list grows with the IM directory,
+  and no retention action removes an account that stopped writing.
 
 ### Isolation and security
 

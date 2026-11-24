@@ -20,6 +20,7 @@ use cowbot_core::conversation::{
     ConversationSettingsUpdate, ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::integration::{IntegrationBinding, IntegrationId, NewIntegration};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt_snapshot::{
@@ -82,9 +83,10 @@ pub fn latest_database_schema_version() -> i64 {
 }
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, ConversationSummary, EventStream, MemoryFilter,
-    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
-    NewTask, NoteSave, RecalledMemory, SessionDecisionView, WorkspaceImport,
+    AgentUpdate, BindingView, Client, ClientSession, ClientUser, ConversationSummary, EventStream,
+    IntegrationView, MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate,
+    NewBinding, NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave,
+    RecalledMemory, SessionDecisionView, WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -1164,6 +1166,162 @@ impl Client for LocalClient {
             .update_agent(&self.session.workspace.id, update)
             .await
     }
+
+    async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>> {
+        let records = self
+            .store
+            .list_integrations(&self.session.workspace.id)
+            .await?;
+        let mut views = Vec::with_capacity(records.len());
+        for record in records {
+            views.push(IntegrationView {
+                supported: supported_locally(record.kind),
+                binding_count: self
+                    .store
+                    .list_integration_bindings(&record.id)
+                    .await?
+                    .len(),
+                id: record.id,
+                workspace_id: record.workspace_id.0,
+                kind: record.kind,
+                label: record.label,
+                created_at: record.created_at,
+                revoked_at: record.revoked_at,
+            });
+        }
+        Ok(views)
+    }
+
+    async fn create_integration(
+        &self,
+        request: &NewIntegrationRequest,
+    ) -> CowResult<IntegrationView> {
+        let label = request.label.trim();
+        if label.is_empty() {
+            return Err(CowError::Config("an integration needs a label".into()));
+        }
+        if !request.config.is_object() {
+            return Err(CowError::Config(
+                "config must be a JSON object; its shape depends on the adapter".into(),
+            ));
+        }
+        let new = NewIntegration::new(
+            &self.session.workspace.id,
+            request.kind,
+            label,
+            request.config.to_string(),
+        );
+        self.store.create_integration(&new).await?;
+        let record = self
+            .store
+            .get_integration(&new.id)
+            .await?
+            .ok_or_else(|| CowError::NotFound("the integration was not found".into()))?;
+        Ok(IntegrationView {
+            supported: supported_locally(record.kind),
+            binding_count: 0,
+            id: record.id,
+            workspace_id: record.workspace_id.0,
+            kind: record.kind,
+            label: record.label,
+            created_at: record.created_at,
+            revoked_at: record.revoked_at,
+        })
+    }
+
+    async fn revoke_integration(&self, id: &IntegrationId) -> CowResult<()> {
+        let Some(record) = self.store.get_integration(id).await? else {
+            return Err(CowError::NotFound("the integration was not found".into()));
+        };
+        if record.workspace_id != self.session.workspace.id {
+            return Err(CowError::NotFound("the integration was not found".into()));
+        }
+        self.store.revoke_integration(id).await?;
+        Ok(())
+    }
+
+    async fn list_integration_bindings(&self, id: &IntegrationId) -> CowResult<Vec<BindingView>> {
+        let bindings = self.store.list_integration_bindings(id).await?;
+        Ok(bindings.into_iter().map(binding_view).collect())
+    }
+
+    async fn bind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        binding: &NewBinding,
+    ) -> CowResult<BindingView> {
+        let Some(record) = self.store.get_integration(id).await? else {
+            return Err(CowError::NotFound("the integration was not found".into()));
+        };
+        if record.workspace_id != self.session.workspace.id {
+            return Err(CowError::NotFound("the integration was not found".into()));
+        }
+        let external_id = binding.external_id.trim();
+        if external_id.is_empty() {
+            return Err(CowError::Config(
+                "a binding needs the platform's conversation id".into(),
+            ));
+        }
+        // A binding is a write path into a channel, so it may only point at a
+        // channel this workspace owns.
+        let channel_workspace = self.store.channel_workspace(&binding.channel_id).await?;
+        if channel_workspace.as_ref() != Some(&self.session.workspace.id) {
+            return Err(CowError::NotFound("the channel was not found".into()));
+        }
+        if let Some(agent_id) = &binding.agent_id {
+            if !self
+                .store
+                .agent_in_workspace(agent_id, &self.session.workspace.id)
+                .await?
+            {
+                return Err(CowError::NotFound("the agent was not found".into()));
+            }
+        }
+
+        let stored = IntegrationBinding {
+            integration_id: id.clone(),
+            external_id: external_id.to_string(),
+            channel_id: binding.channel_id.clone(),
+            agent_id: binding.agent_id.clone(),
+        };
+        self.store.bind_integration_channel(&stored).await?;
+        Ok(binding_view(stored))
+    }
+
+    async fn unbind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        external_id: &str,
+    ) -> CowResult<()> {
+        if !self
+            .store
+            .unbind_integration_channel(id, external_id)
+            .await?
+        {
+            return Err(CowError::NotFound("the binding was not found".into()));
+        }
+        Ok(())
+    }
+}
+
+fn binding_view(binding: IntegrationBinding) -> BindingView {
+    BindingView {
+        integration_id: binding.integration_id,
+        external_id: binding.external_id,
+        channel_id: binding.channel_id,
+        agent_id: binding.agent_id,
+        // A local workspace starts no adapter, so there is nothing to ask.
+        health: None,
+    }
+}
+
+/// Whether this build compiles in an adapter for `kind`.
+///
+/// The desktop in local mode starts no integration — a local workspace has no
+/// always-on process to run one in — so every kind reports false. Saying so is
+/// more useful than reporting true and offering a control that does nothing.
+fn supported_locally(_kind: cowbot_core::integration::IntegrationKind) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -1175,10 +1333,148 @@ mod tests {
         AssignmentEventKind, AssignmentMode, AssignmentOrigin, ReplyMode,
     };
     use cowbot_core::conversation::{ConversationMode, RouteSource};
+    use cowbot_core::integration::IntegrationKind;
     use cowbot_core::run::RunStatus;
     use cowbot_core::task::{Task, TaskStatus};
     use cowbot_llm::MockLlmProvider;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn a_local_client_creates_lists_and_retires_an_integration() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let created = client
+            .create_integration(&NewIntegrationRequest {
+                kind: IntegrationKind::Slack,
+                label: "Support bot".into(),
+                config: json!({ "bot_token": "xoxb-secret" }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.label, "Support bot");
+        // A local workspace starts no integration, so it must not claim it can.
+        assert!(!created.supported);
+
+        let listed = client.list_integrations().await.unwrap();
+        assert_eq!(listed.len(), 1);
+
+        client.revoke_integration(&created.id).await.unwrap();
+        let listed = client.list_integrations().await.unwrap();
+        assert!(listed[0].revoked_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_local_client_refuses_a_configuration_that_is_not_an_object() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let error = client
+            .create_integration(&NewIntegrationRequest {
+                kind: IntegrationKind::Telegram,
+                label: "Bot".into(),
+                config: json!("not an object"),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("JSON object"));
+    }
+
+    #[tokio::test]
+    async fn a_local_client_binds_and_unbinds_a_conversation() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+        let workspace_id = client.session().await.unwrap().workspace.id;
+        let channel = client.create_channel("support", "").await.unwrap();
+
+        let integration = client
+            .create_integration(&NewIntegrationRequest {
+                kind: IntegrationKind::Mattermost,
+                label: "Bot".into(),
+                config: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let binding = client
+            .bind_integration_channel(
+                &integration.id,
+                &NewBinding {
+                    external_id: "town-square".into(),
+                    channel_id: channel.id.clone(),
+                    agent_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(binding.external_id, "town-square");
+        assert_eq!(binding.channel_id, channel.id);
+
+        let listed = client
+            .list_integration_bindings(&integration.id)
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+
+        client
+            .unbind_integration_channel(&integration.id, "town-square")
+            .await
+            .unwrap();
+        assert!(client
+            .list_integration_bindings(&integration.id)
+            .await
+            .unwrap()
+            .is_empty());
+        let _ = workspace_id;
+    }
+
+    #[tokio::test]
+    async fn a_local_client_refuses_to_bind_another_workspaces_channel() {
+        let store = Store::connect_in_memory().await.unwrap();
+        let client = LocalClient::initialize(store, EventBus::default_bus())
+            .await
+            .unwrap();
+
+        let other = cowbot_core::identity::Workspace::new("Other");
+        client.store.create_workspace(&other).await.unwrap();
+        let foreign = Channel::new("theirs", "");
+        client
+            .store
+            .create_channel(&other.id, &foreign)
+            .await
+            .unwrap();
+
+        let integration = client
+            .create_integration(&NewIntegrationRequest {
+                kind: IntegrationKind::Feishu,
+                label: "Bot".into(),
+                config: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let error = client
+            .bind_integration_channel(
+                &integration.id,
+                &NewBinding {
+                    external_id: "oc_123".into(),
+                    channel_id: foreign.id,
+                    agent_id: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("channel was not found"),
+            "{error}"
+        );
+    }
 
     #[tokio::test]
     async fn initialize_expires_orphaned_approvals() {

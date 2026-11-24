@@ -11,6 +11,21 @@ cowbot-store = { workspace = true }
 cowbot-service = { workspace = true }
 cowbot-package = { workspace = true }
 cowbot-bus = { workspace = true }
+# The turn executor answers channel messages in this process, so the server
+# needs a provider and a tool set the way the desktop's runtime does (ADR-0055).
+cowbot-llm = { workspace = true }
+cowbot-tools = { workspace = true }
+# The integration routes resolve bindings and report which adapter kinds this
+# build can start (ADR-0056).
+cowbot-integrations = { workspace = true }
+# The Mattermost adapter is the first platform this build can run (ADR-0057).
+cowbot-mattermost = { workspace = true }
+# Telegram is the second: a SaaS platform, reached by long polling (ADR-0058).
+cowbot-telegram = { workspace = true }
+# Slack is the third, over Socket Mode (ADR-0059).
+cowbot-slack = { workspace = true }
+# Feishu is the fourth, over its long connection (ADR-0061).
+cowbot-feishu = { workspace = true }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }

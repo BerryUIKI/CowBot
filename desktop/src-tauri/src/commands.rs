@@ -1,8 +1,8 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{
-    AgentUpdate, Client, ConversationSummary, MemoryFilter, MemoryNotes, MemorySave,
-    MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory, NewTask, NoteSave,
-    RecalledMemory,
+    AgentUpdate, BindingView, Client, ConversationSummary, IntegrationView, MemoryFilter,
+    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation,
+    NewIntegrationRequest, NewMemory, NewTask, NoteSave, RecalledMemory,
 };
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
@@ -20,6 +20,7 @@ use cowbot_core::conversation::{
     ConversationTurn, RoutingMode, TurnId,
 };
 use cowbot_core::identity::WorkspaceId;
+use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt::{PromptKind, PromptPlan};
@@ -227,9 +228,13 @@ pub async fn post_message(
         .ok_or_else(|| format!("channel '{}' was not found", channel_id.0))?;
     let approval_level = approval_level.unwrap_or(ApprovalLevel::Ask);
 
-    // A single-agent conversation keeps the M2 pre-send capacity block. A
-    // group is not pre-blocked: the service checks each selected branch after
-    // routing. The view supplies the per-participant windows for that check.
+    // The capacity rule lives in the service (`ChannelAgentService::reply`), so
+    // every transport applies it the same way. The desktop keeps one cheap
+    // pre-send refusal on top of it: a conversation that is already full cannot
+    // get an answer, and saying so before the message is stored beats storing
+    // it and posting a notice. Auto-compaction moved into the service for the
+    // same reason — it needs the provider, and only the service has it on every
+    // transport (ADR-0055).
     let mut participant_capacity = Vec::new();
     let (llm, model) = if channel.is_conversation() {
         let settings = state
@@ -239,30 +244,11 @@ pub async fn post_message(
             .map_err(|error| error.to_string())?;
         let runtime = conversation_runtime(&state, &settings);
         let counter = token_counter_for_model(&settings.model);
-        let mut view = conversation_context_view(&state, &channel_id).await?;
+        let view = conversation_context_view(&state, &channel_id).await?;
 
         if view.participants.len() <= 1 {
             let pending = counter.count_message(content.trim());
             if let Some(usable) = view.usable_tokens {
-                let projected = view.total_tokens.saturating_add(pending);
-                let threshold_reached = settings.auto_compact
-                    && state.local_client.is_some()
-                    && u64::from(projected) * 100
-                        >= u64::from(usable) * u64::from(settings.compact_threshold);
-                if threshold_reached {
-                    let outcome = local(&state)?
-                        .compact_conversation(&channel_id, runtime.0.clone(), &runtime.1)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    if outcome.in_progress {
-                        return Err(
-                            "This conversation's context is already being compacted. Try again \
-                             shortly."
-                                .to_string(),
-                        );
-                    }
-                    view = conversation_context_view(&state, &channel_id).await?;
-                }
                 if view.total_tokens.saturating_add(pending) >= usable {
                     return Err(
                         "This conversation's context is full. Compact the context, clear it, or \
@@ -324,6 +310,9 @@ pub async fn post_message(
                     approval_level,
                     max_concurrency: 4,
                     use_model_permissions,
+                    // The desktop draws the approval card on screen, so the
+                    // service's five-minute default is right for it (ADR-0060).
+                    approval_timeout: None,
                     platform_context,
                     participant_capacity,
                 },
@@ -362,6 +351,95 @@ pub async fn post_message(
     });
 
     Ok(message)
+}
+
+#[tauri::command]
+pub async fn list_integrations(state: State<'_, AppState>) -> Result<Vec<IntegrationView>, String> {
+    state
+        .client
+        .list_integrations()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_integration(
+    state: State<'_, AppState>,
+    kind: String,
+    label: String,
+    config: serde_json::Value,
+) -> Result<IntegrationView, String> {
+    let kind = kind
+        .parse::<IntegrationKind>()
+        .map_err(|_| format!("'{kind}' is not a known integration kind"))?;
+    state
+        .client
+        .create_integration(&NewIntegrationRequest {
+            kind,
+            label,
+            config,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn revoke_integration(
+    state: State<'_, AppState>,
+    integration_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .revoke_integration(&IntegrationId::new(integration_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_integration_bindings(
+    state: State<'_, AppState>,
+    integration_id: String,
+) -> Result<Vec<BindingView>, String> {
+    state
+        .client
+        .list_integration_bindings(&IntegrationId::new(integration_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn bind_integration_channel(
+    state: State<'_, AppState>,
+    integration_id: String,
+    external_id: String,
+    channel_id: String,
+    agent_id: Option<String>,
+) -> Result<BindingView, String> {
+    state
+        .client
+        .bind_integration_channel(
+            &IntegrationId::new(integration_id),
+            &NewBinding {
+                external_id,
+                channel_id: ChannelId::new(channel_id),
+                agent_id: agent_id.map(AgentId::new),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unbind_integration_channel(
+    state: State<'_, AppState>,
+    integration_id: String,
+    external_id: String,
+) -> Result<(), String> {
+    state
+        .client
+        .unbind_integration_channel(&IntegrationId::new(integration_id), &external_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3577,6 +3655,7 @@ pub async fn ask_side_question(
                 approval_level: approval_level.unwrap_or(ApprovalLevel::Ask),
                 max_concurrency: 4,
                 use_model_permissions: state.uses_remote_model(),
+                approval_timeout: None,
                 platform_context: project_platform_context(&state),
                 participant_capacity: Vec::new(),
             },

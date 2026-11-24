@@ -27,6 +27,7 @@ use cowbot_core::conversation::{
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
 use cowbot_core::identity::{Workspace, WorkspaceId};
+use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
 use cowbot_core::prompt_snapshot::{
@@ -38,13 +39,16 @@ use cowbot_core::template::TemplateDocument;
 use cowbot_core::tool::ToolDefinition;
 use reqwest::{Client as HttpClient, Method, StatusCode};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::{
-    AgentUpdate, Client, ClientSession, ClientUser, ConversationPreview, EventStream, MemoryFilter,
-    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewConversation, NewMemory,
-    NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView, TaskRunPreview,
+    AgentUpdate, BindingHealthView, BindingView, Client, ClientSession, ClientUser,
+    ConversationPreview, EventStream, IntegrationView, MemoryFilter, MemoryNotes, MemorySave,
+    MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation, NewIntegrationRequest,
+    NewMemory, NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView,
+    TaskRunPreview,
 };
 
 /// First wait before the event socket reconnects after a drop.
@@ -52,6 +56,25 @@ const RECONNECT_INITIAL: Duration = Duration::from_secs(2);
 
 /// Longest wait between reconnect attempts.
 const RECONNECT_MAX: Duration = Duration::from_secs(60);
+
+/// First wait before a failed read is tried again.
+///
+/// Only reads are retried: replaying a write the server already applied would
+/// duplicate it, and the API has no idempotency key to lean on.
+const RETRY_INITIAL: Duration = Duration::from_millis(200);
+
+/// Longest wait between read attempts. Three attempts fit inside it.
+const RETRY_MAX: Duration = Duration::from_secs(2);
+
+/// How many times one read is attempted before the error is reported.
+const RETRY_ATTEMPTS: u32 = 3;
+
+/// The API version this client speaks.
+///
+/// A server that speaks another version would answer with shapes this build
+/// does not understand, and the failure would surface as an unrelated parse
+/// error somewhere else, so the version is checked before the first request.
+pub const API_VERSION: u32 = 1;
 
 /// A client bound to one server session.
 pub struct RemoteClient {
@@ -126,6 +149,10 @@ impl RemoteClient {
     /// session. `/api/v1/me` supplies the user and workspace list, so a saved
     /// session survives a desktop restart without asking for the password
     /// again (ADR-0053).
+    ///
+    /// The server's API version is checked first, so an upgraded server and an
+    /// older desktop report that mismatch instead of failing later on a shape
+    /// neither side expected.
     pub async fn resume(
         base_url: &str,
         token: &str,
@@ -135,6 +162,7 @@ impl RemoteClient {
         let http = HttpClient::builder().build().map_err(|error| {
             CowError::Config(format!("the HTTP client could not start: {error}"))
         })?;
+        check_api_version(&http, &base).await?;
         let response = http
             .get(format!("{base}/api/v1/me"))
             .bearer_auth(token)
@@ -231,6 +259,7 @@ impl RemoteClient {
         let http = HttpClient::builder().build().map_err(|error| {
             CowError::Config(format!("the HTTP client could not start: {error}"))
         })?;
+        check_api_version(&http, &base).await?;
         let response = http
             .post(format!("{base}/api/v1/auth/sign-in"))
             .json(&json!({ "email": email, "password": password }))
@@ -317,14 +346,7 @@ impl RemoteClient {
         path: String,
         body: Option<Value>,
     ) -> CowResult<T> {
-        let mut request = self
-            .http
-            .request(method, self.url(&path))
-            .bearer_auth(&self.token);
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        let response = request.send().await.map_err(transport)?;
+        let response = self.dispatch(&method, &path, body.as_ref()).await?;
         let status = response.status();
         let value: Value = response.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
@@ -332,6 +354,29 @@ impl RemoteClient {
         }
         serde_json::from_value(value)
             .map_err(|error| CowError::Storage(format!("unexpected response shape: {error}")))
+    }
+
+    /// Send one request, retrying a read that failed for a transient reason.
+    ///
+    /// Writes are sent once, because a write the server applied before the
+    /// connection broke would be applied twice.
+    async fn dispatch(
+        &self,
+        method: &Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> CowResult<reqwest::Response> {
+        send_with_retry(method == Method::GET, || {
+            let mut request = self
+                .http
+                .request(method.clone(), self.url(path))
+                .bearer_auth(&self.token);
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            request
+        })
+        .await
     }
 
     async fn send_empty(&self, method: Method, path: String) -> CowResult<()> {
@@ -346,20 +391,87 @@ impl RemoteClient {
         path: String,
         body: Option<Value>,
     ) -> CowResult<()> {
-        let mut request = self
-            .http
-            .request(method, self.url(&path))
-            .bearer_auth(&self.token);
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        let response = request.send().await.map_err(transport)?;
+        let response = self.dispatch(&method, &path, body.as_ref()).await?;
         let status = response.status();
         if status.is_success() {
             return Ok(());
         }
         let value: Value = response.json().await.unwrap_or(Value::Null);
         Err(map_error(status, &value))
+    }
+}
+
+/// Read `/health` and refuse a server that speaks another API version.
+///
+/// The answer is the version the server reported, so a caller can log or show
+/// it. An unreachable server is the caller's problem to phrase; a reachable
+/// server that speaks the wrong protocol is reported here with both numbers,
+/// because that is the one failure a user cannot diagnose on their own.
+async fn check_api_version(http: &HttpClient, base: &str) -> CowResult<u32> {
+    let response = send_with_retry(true, || http.get(format!("{base}/health"))).await?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Err(map_error(status, &body));
+    }
+    let version = body
+        .get("api_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            CowError::Config(
+                "the server did not report an API version; check that this address runs CowBot \
+                 Server"
+                    .into(),
+            )
+        })? as u32;
+    if version != API_VERSION {
+        return Err(CowError::Config(format!(
+            "this CowBot speaks server API version {API_VERSION}, but {base} speaks version \
+             {version}. Update the older of the two."
+        )));
+    }
+    Ok(version)
+}
+
+/// Send a request, retrying a read that failed for a transient reason.
+///
+/// A connection that never opened, a timeout, a `5xx`, and an explicit `429`
+/// are worth another attempt; a `4xx` that names a problem with the request is
+/// not. A write is sent once: the API has no idempotency key, so replaying one
+/// the server already applied would apply it twice.
+async fn send_with_retry<F>(retryable: bool, build: F) -> CowResult<reqwest::Response>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut delay = RETRY_INITIAL;
+    let mut attempt = 1;
+    loop {
+        match build().send().await {
+            Ok(response) => {
+                let status = response.status();
+                let transient = status.is_server_error()
+                    || status == StatusCode::TOO_MANY_REQUESTS
+                    || status == StatusCode::REQUEST_TIMEOUT;
+                if !retryable || !transient || attempt >= RETRY_ATTEMPTS {
+                    return Ok(response);
+                }
+                tracing::debug!(
+                    %status,
+                    attempt,
+                    "retrying a server read after a transient failure"
+                );
+            }
+            Err(error) => {
+                let transient = error.is_timeout() || error.is_connect();
+                if !retryable || !transient || attempt >= RETRY_ATTEMPTS {
+                    return Err(transport(error));
+                }
+                tracing::debug!(attempt, "retrying a server read after a transport failure");
+            }
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(RETRY_MAX);
+        attempt += 1;
     }
 }
 
@@ -1308,6 +1420,144 @@ impl Client for RemoteClient {
             })),
         )
         .await
+    }
+
+    async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>> {
+        let body = self
+            .request::<Vec<IntegrationBody>>(
+                Method::GET,
+                self.workspace_path("/integrations"),
+                None,
+            )
+            .await?;
+        Ok(body.into_iter().map(IntegrationView::from).collect())
+    }
+
+    async fn create_integration(
+        &self,
+        request: &NewIntegrationRequest,
+    ) -> CowResult<IntegrationView> {
+        let body = self
+            .request::<IntegrationBody>(
+                Method::POST,
+                self.workspace_path("/integrations"),
+                Some(json!({
+                    "kind": request.kind.as_str(),
+                    "label": request.label,
+                    "config": request.config,
+                })),
+            )
+            .await?;
+        Ok(IntegrationView::from(body))
+    }
+
+    async fn revoke_integration(&self, id: &IntegrationId) -> CowResult<()> {
+        self.send_empty(
+            Method::DELETE,
+            self.workspace_path(&format!("/integrations/{}", id.0)),
+        )
+        .await
+    }
+
+    async fn list_integration_bindings(&self, id: &IntegrationId) -> CowResult<Vec<BindingView>> {
+        let body = self
+            .request::<Vec<BindingBody>>(
+                Method::GET,
+                self.workspace_path(&format!("/integrations/{}/bindings", id.0)),
+                None,
+            )
+            .await?;
+        Ok(body.into_iter().map(BindingView::from).collect())
+    }
+
+    async fn bind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        binding: &NewBinding,
+    ) -> CowResult<BindingView> {
+        let body = self
+            .request::<BindingBody>(
+                Method::POST,
+                self.workspace_path(&format!("/integrations/{}/bindings", id.0)),
+                Some(json!({
+                    "external_id": binding.external_id,
+                    "channel_id": binding.channel_id.0,
+                    "agent_id": binding.agent_id.as_ref().map(|agent| agent.0.clone()),
+                })),
+            )
+            .await?;
+        Ok(BindingView::from(body))
+    }
+
+    async fn unbind_integration_channel(
+        &self,
+        id: &IntegrationId,
+        external_id: &str,
+    ) -> CowResult<()> {
+        self.send_empty(
+            Method::DELETE,
+            self.workspace_path(&format!(
+                "/integrations/{}/bindings/{}",
+                id.0,
+                urlencode(external_id)
+            )),
+        )
+        .await
+    }
+}
+
+/// The wire shape of an integration, as the server sends it.
+#[derive(Debug, Deserialize)]
+struct IntegrationBody {
+    id: String,
+    workspace_id: String,
+    kind: IntegrationKind,
+    label: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    supported: bool,
+    binding_count: usize,
+}
+
+impl From<IntegrationBody> for IntegrationView {
+    fn from(body: IntegrationBody) -> Self {
+        Self {
+            id: IntegrationId::new(body.id),
+            workspace_id: body.workspace_id,
+            kind: body.kind,
+            label: body.label,
+            created_at: body.created_at,
+            revoked_at: body.revoked_at,
+            supported: body.supported,
+            binding_count: body.binding_count,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BindingBody {
+    integration_id: String,
+    external_id: String,
+    channel_id: String,
+    agent_id: Option<String>,
+    #[serde(default)]
+    health: Option<String>,
+    #[serde(default)]
+    health_detail: Option<String>,
+}
+
+impl From<BindingBody> for BindingView {
+    fn from(body: BindingBody) -> Self {
+        Self {
+            integration_id: IntegrationId::new(body.integration_id),
+            external_id: body.external_id,
+            channel_id: ChannelId::new(body.channel_id),
+            agent_id: body.agent_id.map(AgentId),
+            health: body.health.map(|status| BindingHealthView {
+                status,
+                detail: body.health_detail,
+            }),
+        }
     }
 }
 

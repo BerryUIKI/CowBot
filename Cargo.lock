@@ -401,7 +401,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cowbot-agent"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "cowbot-bus",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-bus"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "cowbot-core",
  "parking_lot",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-cli"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -447,9 +447,10 @@ dependencies = [
 
 [[package]]
 name = "cowbot-client"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "cowbot-agent",
  "cowbot-bus",
@@ -472,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-core"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "chrono",
@@ -486,8 +487,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-feishu"
+version = "0.1.17"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-store",
+ "futures",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
+name = "cowbot-integrations"
+version = "0.1.17"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-service",
+ "cowbot-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-llm"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "cowbot-core",
@@ -502,8 +544,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-mattermost"
+version = "0.1.17"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-service",
+ "cowbot-store",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-package"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "chrono",
  "cowbot-core",
@@ -519,16 +582,23 @@ dependencies = [
 
 [[package]]
 name = "cowbot-server"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "argon2",
  "axum",
  "chrono",
  "cowbot-bus",
  "cowbot-core",
+ "cowbot-feishu",
+ "cowbot-integrations",
+ "cowbot-llm",
+ "cowbot-mattermost",
  "cowbot-package",
  "cowbot-service",
+ "cowbot-slack",
  "cowbot-store",
+ "cowbot-telegram",
+ "cowbot-tools",
  "http-body-util",
  "serde",
  "serde_json",
@@ -544,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "cowbot-service"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "chrono",
@@ -563,8 +633,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-slack"
+version = "0.1.17"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-store",
+ "futures",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-store"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "chrono",
  "cowbot-core",
@@ -577,8 +670,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowbot-telegram"
+version = "0.1.17"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "cowbot-bus",
+ "cowbot-core",
+ "cowbot-integrations",
+ "cowbot-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cowbot-tools"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "cowbot-core",

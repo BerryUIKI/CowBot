@@ -219,6 +219,7 @@ fn options() -> ChannelTurnOptions {
         approval_level: ApprovalLevel::Trusted,
         max_concurrency: 2,
         use_model_permissions: false,
+        approval_timeout: None,
         platform_context: None,
         participant_capacity: Vec::new(),
     }

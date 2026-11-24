@@ -9,6 +9,7 @@ pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod identity;
+pub mod integration;
 pub mod memory;
 pub mod mention;
 pub mod permission;
@@ -53,6 +54,10 @@ pub use error::{CowError, CowResult};
 pub use event::{Event, EventPayload};
 pub use identity::{
     ApiToken, Invite, Membership, Role, Session, User, UserId, Workspace, WorkspaceId,
+};
+pub use integration::{
+    IntegrationBinding, IntegrationId, IntegrationKind, IntegrationPrincipal, IntegrationRecord,
+    NewIntegration,
 };
 pub use memory::{
     clamp_memory_budget, plan_recalled_entries, rank_memories, redact_secrets, render_memory_block,

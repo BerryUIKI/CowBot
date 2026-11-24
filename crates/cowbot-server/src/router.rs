@@ -17,6 +17,7 @@ use crate::channels;
 use crate::conversation_list;
 use crate::conversations;
 use crate::error::ApiError;
+use crate::integrations;
 use crate::memory;
 use crate::packages;
 use crate::snapshots;
@@ -34,6 +35,17 @@ pub struct AppState {
     pub bus: cowbot_bus::EventBus,
     /// Session-scoped approval decisions, shared by every workspace.
     pub session_decisions: Arc<cowbot_service::SessionDecisions>,
+    /// Runs channel turns in this process. `None` when the deployment
+    /// configured no LLM, in which case a posted message is stored and no
+    /// answer arrives — the behaviour every server release had before ADR-0055.
+    pub turns: Option<Arc<crate::TurnExecutor>>,
+    /// Serves the inbound surface a webhook transport needs (ADR-0062).
+    ///
+    /// `None` for every deployment that runs a socket or a poll, and for one with
+    /// no model provider. The route answers 404 in that case, which is the same
+    /// "nothing is running here" a caller gets from an integration this build
+    /// cannot start.
+    pub webhooks: Option<Arc<crate::webhooks::WebhookReceiver>>,
 }
 
 impl AppState {
@@ -43,7 +55,21 @@ impl AppState {
             auth,
             bus,
             session_decisions: cowbot_service::SessionDecisions::new(),
+            turns: None,
+            webhooks: None,
         }
+    }
+
+    /// Attach a turn executor, enabling server-side answers (ADR-0055).
+    pub fn with_turns(mut self, turns: Arc<crate::TurnExecutor>) -> Self {
+        self.turns = Some(turns);
+        self
+    }
+
+    /// Attach the webhook receiver, enabling the inbound surface (ADR-0062).
+    pub fn with_webhooks(mut self, webhooks: Arc<crate::webhooks::WebhookReceiver>) -> Self {
+        self.webhooks = Some(webhooks);
+        self
     }
 
     /// The channel service. It is not workspace-scoped; every call names a
@@ -118,7 +144,14 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(api::health))
-        .route("/api/v1/auth/sign-in", post(api::sign_in));
+        .route("/api/v1/auth/sign-in", post(api::sign_in))
+        // A webhook endpoint authenticates by verifying the body, never by a
+        // session, so it sits on the public router (ADR-0062). The integration
+        // id in the path chooses whose secret is used.
+        .route(
+            "/api/v1/integrations/{integration_id}/webhook",
+            post(crate::webhooks::receive),
+        );
 
     let authenticated = Router::new()
         .route("/api/v1/me", get(api::me))
@@ -337,6 +370,23 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/v1/workspaces/{workspace_id}/templates/{template_id}/instantiate",
             post(templates::instantiate_template),
+        )
+        // IM integrations (ADR-0056)
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations",
+            get(integrations::list_integrations).post(integrations::create_integration),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}",
+            delete(integrations::revoke_integration),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings",
+            get(integrations::list_bindings).post(integrations::bind_conversation),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings/{external_id}",
+            delete(integrations::unbind_conversation),
         );
 
     // Package transfer is workspace-level, not inside one workspace, so it

@@ -17,6 +17,7 @@ import type {
   ChannelParticipant,
   CommandTarget,
   ConversationSettings,
+  IntegrationKind,
   MemoryEntry,
   MemoryKind,
   MemoryStatus,
@@ -602,3 +603,25 @@ export function approvalLevelLabel(level: ApprovalLevel): string {
   }
 }
 
+/** An IM integration as the server returns it (ADR-0056). */
+export interface IntegrationView {
+  id: string;
+  workspace_id: string;
+  kind: IntegrationKind;
+  label: string;
+  created_at: string;
+  revoked_at: string | null;
+  /** Whether this client's backend can actually run the kind. */
+  supported: boolean;
+  binding_count: number;
+}
+
+/** One platform conversation feeding a CowBot channel. */
+export interface BindingView {
+  integration_id: string;
+  external_id: string;
+  channel_id: string;
+  agent_id: string | null;
+  /** What the adapter said on bind; absent on a list. */
+  health?: { status: string; detail: string | null } | null;
+}

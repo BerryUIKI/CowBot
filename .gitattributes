@@ -2,3 +2,9 @@
 # Embedded migration checksums cover the exact file bytes, so keep them LF on
 # every platform. See docs/ADR/0025-database-migration-checksum-compatibility.md.
 crates/cowbot-store/migrations/*.sql text eol=lf
+
+# Generated TypeScript bindings are compared byte-for-byte by
+# desktop/scripts/check-types.mjs, so a Windows checkout must not rewrite their
+# line endings and make every regeneration look like a change (ADR-0040).
+desktop/src/generated/**/*.ts text eol=lf
+desktop/src/generated/**/*.mjs text eol=lf

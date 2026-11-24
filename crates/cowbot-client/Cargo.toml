@@ -32,3 +32,4 @@ serde_json = { workspace = true }
 cowbot-llm = { workspace = true }
 cowbot-tools = { workspace = true }
 tempfile = "3"
+axum = "0.8"

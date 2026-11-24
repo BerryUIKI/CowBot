@@ -36,10 +36,202 @@ single-machine trial working.
 | `COWBOT_SERVER_SESSION_HOURS` | `336` (two weeks) | Session lifetime |
 | `COWBOT_SERVER_LOGIN_ATTEMPTS` | `10` | Failed sign-ins per source before refusal |
 | `COWBOT_SERVER_LOGIN_WINDOW_SECS` | `900` | Rate-limit window |
+| `COWBOT_SERVER_WORKSPACE_DIR` | `cowbot-workspace` | Directory the file tools are rooted at and the sandbox runs in |
+| `COWBOT_SERVER_LLM_PROTOCOL` | unset | `openai-chat`, `anthropic`, `openai-responses`, or `mock` |
+| `COWBOT_SERVER_LLM_BASE_URL` | unset | Provider endpoint; required for every protocol but `mock` |
+| `COWBOT_SERVER_LLM_API_KEY` | unset | Provider key; never written or returned by the API |
+| `COWBOT_SERVER_LLM_MODEL` | unset (or `mock`) | Model every channel turn is answered with |
+| `COWBOT_SERVER_LLM_CONTEXT_WINDOW` | unset | The model's context window, so a full conversation is skipped rather than sent |
+| `COWBOT_SERVER_LLM_MAX_OUTPUT_TOKENS` | unset | The model's output limit, subtracted from the window |
 
 A value that does not parse stops the server with a message rather than silently
 falling back — a mistyped listen address should not move the server somewhere
 unexpected.
+
+### Answering channel turns
+
+The four `COWBOT_SERVER_LLM_*` variables are all-or-nothing. Set none and the
+server stores a posted message and runs no turn, which is what a server has
+always done: the reply is the job of whichever desktop holds the model
+provider. Set all of them and the server answers a message that mentions an
+agent itself, with no desktop in the loop — see
+[ADR-0055](ADR/0055-server-side-turn-execution.md).
+
+```bash
+COWBOT_SERVER_LLM_PROTOCOL=openai-chat \
+COWBOT_SERVER_LLM_BASE_URL=https://api.openai.com/v1 \
+COWBOT_SERVER_LLM_API_KEY=sk-... \
+COWBOT_SERVER_LLM_MODEL=gpt-4o \
+cowbot-server
+```
+
+Setting only some of them is a startup error naming the missing one, rather than
+a server that starts and then fails every turn.
+
+`COWBOT_SERVER_LLM_PROTOCOL=mock` answers with an echo provider and needs
+neither a key nor an endpoint. It exists so a deployment can be stood up and
+tested end to end without spending on a model, and so the acceptance tests run
+in CI.
+
+**The server's agent is deliberately less capable than a desktop's.** A server
+turn can run code and read or write files inside `COWBOT_SERVER_WORKSPACE_DIR`,
+and nothing else. The desktop's workspace tools — creating a channel,
+instantiating a team, queueing a task, reaching a registered git project —
+assume a local project folder the server does not have, so they are not
+registered. Approvals still apply: a risky tool call in a server turn creates
+the same pending approval the API lists at
+`GET /api/v1/workspaces/{id}/approvals`.
+
+Two limits are worth knowing before deploying this: the server cannot stream a
+turn into a remote client's timeline while it runs (the answer appears when the
+turn settles), and a turn cannot be cancelled through the API.
+
+### IM integrations
+
+``cowbot-integrations` is the shared layer every IM adapter sits on: channel
+bindings, an inbound pipeline that dedupes a platform's retried delivery and
+attributes the message to the person who wrote it, and an outbound mirror that
+posts an agent's reply back into the IM
+([ADR-0056](ADR-0056-im-integrations.md)).
+
+An Owner or Admin configures one from the desktop's **Settings → Integrations**,
+or directly:
+
+```
+POST   /api/v1/workspaces/{ws}/integrations                    create
+GET    /api/v1/workspaces/{ws}/integrations                    list (any member)
+DELETE /api/v1/workspaces/{ws}/integrations/{id}               retire
+GET    /api/v1/workspaces/{ws}/integrations/{id}/bindings      list
+POST   /api/v1/workspaces/{ws}/integrations/{id}/bindings      bind
+DELETE /api/v1/workspaces/{ws}/integrations/{id}/bindings/{external}
+```
+
+The configuration — endpoint, bot token, signing secret — is sent once on create
+and **never returned**. It is stored as JSON in the database with no encryption at
+rest, so a reader of that file sees a bot token.
+
+**All four platforms this build names are supported**
+([ADR-0057](ADR-0057-mattermost-adapter.md),
+[ADR-0058](ADR-0058-telegram-adapter.md),
+[ADR-0059](ADR-0059-slack-adapter.md),
+[ADR-0061](ADR-0061-feishu-adapter.md)). Their configurations are:
+
+```json
+{ "base_url": "https://chat.example.com", "bot_token": "…" }
+```
+
+```json
+{ "bot_token": "123456:ABC-DEF…" }
+```
+
+```json
+{ "bot_token": "xoxb-…", "app_token": "xapp-…" }
+```
+
+```json
+{ "app_id": "cli_…", "app_secret": "…", "domain": "feishu" }
+```
+
+The Mattermost bot's own user id and the server's post size limit are read from
+the server, so those are the only two values to supply. Telegram needs only the
+token BotFather issued; `api_base` is optional and points a deployment at a
+self-hosted Bot API server. Slack needs two tokens — the `xoxb-` bot token for the
+Web API and an `xapp-` app token with `connections:write` for Socket Mode — and
+its signing secret is **not** required, because Socket Mode has no inbound
+request to verify. Feishu needs the app id and secret; `domain` selects
+`feishu` (default) or `lark`, and an encrypt key is neither accepted nor needed,
+because this build uses Feishu's long connection rather than its webhook.
+
+**No adapter needs an inbound surface.** A Mattermost bot opens a WebSocket to its
+own server; a Telegram bot long-polls `getUpdates`; a Slack app opens a Socket
+Mode WebSocket; a Feishu app opens its long connection. None needs a public DNS
+name, a reverse proxy, or TLS termination in front of CowBot, which also means
+none needs a signature check or a replay window.
+
+**One Slack or Feishu app, one CowBot process.** Slack reports the number of
+connections an app holds and Feishu delivers each event to one connection at
+random, so two servers started on the same app token each receive a subset of the
+events — and answer with the wrong binding table or twice. Run one process per
+app. Telegram has the same rule for a different reason: `getUpdates` returns `409`
+to a second poller, which the adapter reports rather than retries.
+
+**A Telegram binding is a chat id, which is a signed integer.** Get it from the
+group or channel, or from the person's first message to the bot. A bot cannot open
+a private chat: the person has to message it once before the binding can post. A
+Slack binding is a channel id beginning `C`, `G`, or `D`, and the bot has to be
+invited with `/invite`. A Feishu binding is a `oc_…` chat id, and the bot has to
+be added to the chat.
+
+**A webhook transport is the alternative to dialling out**
+([ADR-0062](ADR/0062-webhook-transports.md)). Each adapter's `transport` field
+chooses, and the default for every one of them is the outbound transport that
+needs no public URL:
+
+```json
+{ "bot_token": "xoxb-…", "app_token": "xapp-…",
+  "transport": "events_api", "signing_secret": "…" }
+```
+
+```json
+{ "bot_token": "123456:ABC…", "transport": "webhook", "secret_token": "…" }
+```
+
+```json
+{ "app_id": "cli_…", "app_secret": "…", "transport": "webhook",
+  "verification_token": "…", "encrypt_key": "…" }
+```
+
+Each secret is required by the transport that reads it and refused at create time
+when it is missing: an endpoint that accepts unsigned traffic is an endpoint
+anyone can drive.
+
+The URL to register with the platform is
+`https://<your-host>/api/v1/integrations/<integration id>/webhook`. Telegram and
+Slack both take it in their own console; Feishu wants it under Event Subscriptions
+with the transport set to a request URL rather than a long connection.
+
+**A webhook deployment must be reachable from the internet.** That means a public
+hostname and TLS in front of CowBot — `deploy/` already runs Caddy for this — and
+it means the reverse proxy's request-size limit is the only bound on what an
+unauthenticated caller can make CowBot read. Set one. The endpoint itself verifies
+every request before parsing it, and answers 404 for any integration id it does not
+serve, so an id that was revoked or never existed is indistinguishable from one
+this build cannot run.
+
+Telegram cannot poll and receive a webhook at the same time: `getUpdates` answers
+`409 Conflict` to whichever asks second, so choosing the webhook transport stops
+polling rather than racing it.
+
+**An agent that needs approval asks in the IM**
+([ADR-0060](ADR-0060-im-approvals.md)). Telegram gets an inline keyboard, Slack a
+Block Kit message, Feishu an interactive card; Mattermost gets a post whose reply
+is read as the answer, because it has no native buttons outside an interactive
+integration. Only the person who asked and a workspace administrator may decide;
+anyone else is refused, and the refusal is shown to them. The card is revised once
+decided. `COWBOT_SERVER_APPROVAL_TIMEOUT_SECS` sets how long a request waits
+(default `900`) — the desktop's five minutes is one meeting away from expiring.
+
+An integration starts with the server, and only when a model provider is
+configured: a bot that stores a question and cannot answer it is worse than one
+that is not running. Retire one through the API and restart to stop it.
+
+**The bot must be able to reach the conversation it is bound to.** Mattermost
+delivers posts only for channels the bot has joined; Telegram delivers only from
+chats the bot was added to, and in a Telegram channel it must be an administrator
+to post at all; Slack needs the bot invited and `conversations.members` to list
+it; Feishu needs `is_in_chat` to answer true. Either way a binding that misses the requirement is silent rather
+than broken. Two things check it: a bind responds with a `health` of `reachable`,
+`unreachable`, or `unknown` and the reason, and startup posts a notice into the
+CowBot channel of any binding that cannot receive. `unknown` means the check could
+not run — it is never treated as success. A bot removed from a chat after startup
+is not noticed until the next restart.
+
+Setting `COWBOT_SERVER_LLM_CONTEXT_WINDOW` is worth the effort. A conversation
+whose branch no longer fits is then skipped with a notice instead of being sent
+and failing at the provider — and compaction, when the conversation has
+auto-compaction on, runs inside the turn with the same provider. Without it the
+server has no idea how large the model's window is, so it does not attempt
+either.
 
 ## Running from source
 
@@ -82,7 +274,11 @@ limiting and keeps the raw port off the internet.
 ### Health
 
 `GET /health` returns `{"status":"ok","api_version":1}` without a token. The
-container image declares it as its health check; point your own probe at it.
+container image declares it as its health check; point your own probe at it. The
+desktop reads it before signing in or resuming a session and refuses a server
+that speaks another API version, naming both. A protocol bump therefore means
+deploying the server and updating the desktops together; the message tells the
+user which side is older.
 
 ### Backup
 
@@ -168,6 +364,7 @@ reads as `404`.
 | Previews | `GET /runs/{run}/preview?model=…&tools=…` | member |
 | Recorded prompts | `GET /workspaces/{ws}/snapshots`, `GET /snapshots/settings`, `PATCH /snapshots/settings`, `POST /snapshots/purge`, `GET /snapshots/{llm_call_id}`, `GET /runs/{run}/snapshots` | administer |
 | Templates | `GET/POST /workspaces/{ws}/templates`, `GET/DELETE .../{id}`, `GET .../{id}/export`, `POST .../{id}/instantiate` | read: member; write: administer |
+| Integrations | `GET/POST /workspaces/{ws}/integrations`, `DELETE .../{id}`, `GET/POST .../{id}/bindings`, `DELETE .../{id}/bindings/{external}` | read: member; write: administer |
 | Packages | `POST /packages/import` (body: the archive), `GET /workspaces/{ws}/packages/export` | import: any signed-in user; export: administer |
 
 Two details an operator should know:
