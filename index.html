@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CowBot — a team of agents in a workspace you own</title>
+    <meta
+      name="description"
+      content="CowBot is an open-source, local-first multi-agent collaboration platform built in Rust. Plan, code, and review in one shared workspace — with approvals, local history, and any model endpoint."
+    />
+    <meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#191814" media="(prefers-color-scheme: dark)" />
+    <meta property="og:title" content="CowBot" />
+    <meta
+      property="og:description"
+      content="Open-source, local-first agent teams in a workspace you control. Desktop builds for Windows, macOS, and Linux."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://raw.githubusercontent.com/BerryUIKI/CowBot/main/assets/brand/cowbot-icon.png" />
+    <link rel="icon" href="assets/brand/cowbot-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="main.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="#top" aria-label="CowBot home">
+          <span class="mark" aria-hidden="true">
+            <img src="assets/brand/cowbot-icon.svg" alt="" width="32" height="32" />
+          </span>
+          <span class="brand-name">CowBot</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#download">Download</a>
+          <a href="#features">Features</a>
+          <a href="#approvals">Approvals</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#quickstart">Quick start</a>
+          <a href="https://github.com/BerryUIKI/CowBot" rel="noopener">GitHub</a>
+        </nav>
+        <div class="header-right">
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" title="Toggle dark mode">
+            <span class="theme-icon" aria-hidden="true"></span>
+            <span class="theme-label">Dark</span>
+          </button>
+          <a class="button button-small" href="#download">Get the app</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="status-line">
+              <span class="status-dot" aria-hidden="true"></span>
+              Open source under Apache-2.0 · Phase 1 complete
+            </p>
+            <h1>Agents that work together, in a workspace you control.</h1>
+            <p class="lede">
+              CowBot gives planners, coders, and reviewers one shared timeline.
+              Every tool call passes the approval policy you set, and every
+              message, task, and run is written to a SQLite file on your own
+              disk. Built in Rust. No server required.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" id="hero-download" href="https://github.com/BerryUIKI/CowBot/releases/latest">
+                Download for your desktop
+              </a>
+              <a class="button button-quiet" href="#architecture">See how it works</a>
+            </div>
+            <p class="hero-note">
+              Free for Windows, macOS, and Linux. Builds are unsigned —
+              <span data-release-version>latest release</span>.
+            </p>
+          </div>
+
+          <div class="demo" aria-label="Illustrative CowBot channel conversation">
+            <div class="demo-bar">
+              <span class="demo-channel"># engineering</span>
+              <span class="demo-members">Planner · Coder · Reviewer · you</span>
+            </div>
+            <ol class="thread">
+              <li class="msg from-human" data-reveal style="--i: 0">
+                <span class="avatar avatar-human" aria-hidden="true">H</span>
+                <div class="msg-body">
+                  <p class="who">You</p>
+                  <p>@team Plan a small command-line calculator.</p>
+                </div>
+              </li>
+              <li class="msg from-planner" data-reveal style="--i: 1">
+                <span class="avatar avatar-planner" aria-hidden="true">P</span>
+                <div class="msg-body">
+                  <p class="who">Planner</p>
+                  <p>Parser in one module, four operations, tests for bad input.</p>
+                  <p class="deliverable">implementation-plan.md</p>
+                </div>
+              </li>
+              <li class="msg from-coder" data-reveal style="--i: 2">
+                <span class="avatar avatar-coder" aria-hidden="true">C</span>
+                <div class="msg-body">
+                  <p class="who">Coder</p>
+                  <p>Ready to verify the parser against the project test suite.</p>
+                  <div class="approval" id="approval">
+                    <p class="approval-label">Approval · execute_code</p>
+                    <code>cargo test --workspace</code>
+                    <div class="approval-actions">
+                      <button class="button button-approve" id="approve" type="button">Approve</button>
+                      <button class="button button-quiet" id="reject" type="button">Reject</button>
+                    </div>
+                    <p class="approval-result" id="approval-result" role="status" hidden></p>
+                  </div>
+                </div>
+              </li>
+              <li class="msg from-reviewer is-hidden" id="reviewer-msg">
+                <span class="avatar avatar-reviewer" aria-hidden="true">R</span>
+                <div class="msg-body">
+                  <p class="who">Reviewer</p>
+                  <p>Tests pass and the CLI contract matches the plan. Ship it.</p>
+                </div>
+              </li>
+            </ol>
+            <p class="demo-foot">Illustrative conversation, not a screenshot.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="how">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>One request, four visible steps.</h2>
+            <p>
+              A crew runs the same loop every time. Each step writes to the
+              workspace, so you can follow it live and read it again later.
+            </p>
+          </div>
+          <ol class="flow" data-reveal-group>
+            <li class="flow-step" data-reveal>
+              <span class="flow-index">1</span>
+              <h3>You state the task</h3>
+              <p>
+                Write it in a channel or create a task. The request becomes an
+                assignment with a budget and a lifecycle the runtime tracks.
+              </p>
+            </li>
+            <li class="flow-step" data-reveal>
+              <span class="flow-index">2</span>
+              <h3>Planner drafts the plan</h3>
+              <p>
+                The first role reads the goal and writes a deliverable. Its
+                output becomes context for the roles after it.
+              </p>
+            </li>
+            <li class="flow-step" data-reveal>
+              <span class="flow-index">3</span>
+              <h3>Coder works, tools ask first</h3>
+              <p>
+                Every tool call is classified before it runs. Anything above
+                your policy's threshold waits for your decision.
+              </p>
+            </li>
+            <li class="flow-step" data-reveal>
+              <span class="flow-index">4</span>
+              <h3>Reviewer closes the loop</h3>
+              <p>
+                The final role checks the work against the plan. Runs, tool
+                calls, and approval decisions are persisted as they happen.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="download">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Download CowBot</h2>
+            <p>
+              Native desktop builds for every platform, plus the
+              <code>cowbot</code> CLI you can build from source.
+            </p>
+          </div>
+
+          <div class="download-desk">
+            <article class="download-cell">
+              <h3>Windows</h3>
+              <p class="platform-note">Windows 10 and 11, 64-bit</p>
+              <ul class="file-list">
+                <li><a data-os-link="windows" data-asset="exe" href="https://github.com/BerryUIKI/CowBot/releases/latest">Installer (.exe)</a></li>
+                <li><a data-os-link="windows" data-asset="msi" href="https://github.com/BerryUIKI/CowBot/releases/latest">MSI package</a></li>
+              </ul>
+              <p class="platform-hint">SmartScreen may warn on first run: choose More info → Run anyway.</p>
+            </article>
+            <article class="download-cell">
+              <h3>macOS</h3>
+              <p class="platform-note">Universal — Apple Silicon and Intel</p>
+              <ul class="file-list">
+                <li><a data-os-link="macos" data-asset="dmg" href="https://github.com/BerryUIKI/CowBot/releases/latest">Disk image (.dmg)</a></li>
+                <li><a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md#install">Installation guide</a></li>
+              </ul>
+              <p class="platform-hint">Right-click the app and choose Open, or allow it in System Settings → Privacy &amp; Security.</p>
+            </article>
+            <article class="download-cell">
+              <h3>Linux</h3>
+              <p class="platform-note">x64 desktop distributions</p>
+              <ul class="file-list">
+                <li><a data-os-link="linux" data-asset="appimage" href="https://github.com/BerryUIKI/CowBot/releases/latest">AppImage</a></li>
+                <li><a data-os-link="linux" data-asset="deb" href="https://github.com/BerryUIKI/CowBot/releases/latest">Debian package (.deb)</a></li>
+              </ul>
+              <p class="platform-hint"><code>chmod +x</code> the AppImage, or install the .deb with <code>apt install ./CowBot-*.deb</code>.</p>
+            </article>
+          </div>
+
+          <p class="download-foot">
+            Builds are unsigned. From 0.1.2 onward CowBot checks for updates at
+            launch and installs them from Settings → About. Read the
+            <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">user guide</a>
+            or
+            <a href="https://github.com/BerryUIKI/CowBot/releases">browse all releases</a>.
+          </p>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="features">
+        <div class="wrap split">
+          <div class="split-head">
+            <h2>A small team, with real boundaries.</h2>
+            <p>
+              CowBot keeps the agent loop, the approval gate, and the records
+              that prove what happened in separate places — so you can inspect
+              any of them.
+            </p>
+          </div>
+          <ul class="feature-list">
+            <li>
+              <div>
+                <h3>Crews with roles and goals</h3>
+                <p>
+                  Planner, Coder, and Reviewer run as a sequential crew with
+                  context chaining. Role definitions live in templates you can
+                  edit or import.
+                </p>
+              </div>
+              <code class="crate">cowbot-agent</code>
+            </li>
+            <li>
+              <div>
+                <h3>Approval before anything runs</h3>
+                <p>
+                  Every tool call is classified by static risk. Choose Ask,
+                  SafeAuto, PlanOnly, or Trusted — decisions are persisted with
+                  an audit trail.
+                </p>
+              </div>
+              <code class="crate">cowbot-service</code>
+            </li>
+            <li>
+              <div>
+                <h3>History you can open</h3>
+                <p>
+                  Workspaces, channels, tasks, assignments, tool calls, and
+                  audit events live in local SQLite with embedded migrations.
+                </p>
+              </div>
+              <code class="crate">cowbot-store</code>
+            </li>
+            <li>
+              <div>
+                <h3>Bring your own model endpoint</h3>
+                <p>
+                  OpenAI Chat Completions, Anthropic Messages, and OpenAI
+                  Responses protocols. Use OpenAI, DeepSeek, Ollama, OpenRouter,
+                  a Claude relay, or the offline mock.
+                </p>
+              </div>
+              <code class="crate">cowbot-llm</code>
+            </li>
+            <li>
+              <div>
+                <h3>Workspaces that travel</h3>
+                <p>
+                  Export a <code>.cowpkg</code> archive with per-file SHA-256
+                  checksums. Import always creates a new workspace; existing
+                  ones are never modified.
+                </p>
+              </div>
+              <code class="crate">cowbot-package</code>
+            </li>
+            <li>
+              <div>
+                <h3>One core for desktop and CLI</h3>
+                <p>
+                  The Tauri app and the <code>cowbot</code> binary share a
+                  transport-neutral client over a Tokio event bus.
+                </p>
+              </div>
+              <code class="crate">cowbot-client</code>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="approvals">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Decide how much an agent may do alone.</h2>
+            <p>
+              Risk is classified deterministically before every tool call, and
+              your policy decides which tiers run without asking you. Nothing
+              undecidable is ever auto-approved.
+            </p>
+          </div>
+
+          <div class="policy-board">
+            <div class="policy-tabs" role="tablist" aria-label="Approval policies">
+              <button class="policy-tab" role="tab" id="tab-ask" aria-controls="panel-ask" aria-selected="true" data-policy="ask" type="button">Ask</button>
+              <button class="policy-tab" role="tab" id="tab-safe" aria-controls="panel-safe" aria-selected="false" tabindex="-1" data-policy="safe" type="button">SafeAuto</button>
+              <button class="policy-tab" role="tab" id="tab-plan" aria-controls="panel-plan" aria-selected="false" tabindex="-1" data-policy="plan" type="button">PlanOnly</button>
+              <button class="policy-tab" role="tab" id="tab-trusted" aria-controls="panel-trusted" aria-selected="false" tabindex="-1" data-policy="trusted" type="button">Trusted</button>
+            </div>
+
+            <div class="policy-panels">
+              <div class="policy-panel" role="tabpanel" id="panel-ask" aria-labelledby="tab-ask" data-panel="ask">
+                <div class="policy-copy">
+                  <h3>Ask <span class="policy-badge">default</span></h3>
+                  <p>Read-only calls proceed. Every write or command waits for your answer in the Approvals view.</p>
+                </div>
+                <ul class="tier-list">
+                  <li data-tier="readonly"><span class="tier-name">Read-only</span><span class="tier-desc">reads and listings</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="low"><span class="tier-name">Low</span><span class="tier-desc">reversible writes in the workspace</span><span class="tier-state is-ask">Asks</span></li>
+                  <li data-tier="medium"><span class="tier-name">Medium</span><span class="tier-desc">ordinary command execution</span><span class="tier-state is-ask">Asks</span></li>
+                  <li data-tier="high"><span class="tier-name">High</span><span class="tier-desc">deletion, force-push, outside the workspace</span><span class="tier-state is-ask">Asks</span></li>
+                  <li data-tier="critical"><span class="tier-name">Critical</span><span class="tier-desc">system damage or sandbox bypass</span><span class="tier-state is-deny">Denied</span></li>
+                </ul>
+              </div>
+
+              <div class="policy-panel" role="tabpanel" id="panel-safe" aria-labelledby="tab-safe" data-panel="safe" hidden>
+                <div class="policy-copy">
+                  <h3>SafeAuto</h3>
+                  <p>Routine reads and in-workspace writes run automatically. Execution and anything riskier still asks.</p>
+                </div>
+                <ul class="tier-list">
+                  <li data-tier="readonly"><span class="tier-name">Read-only</span><span class="tier-desc">reads and listings</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="low"><span class="tier-name">Low</span><span class="tier-desc">reversible writes in the workspace</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="medium"><span class="tier-name">Medium</span><span class="tier-desc">ordinary command execution</span><span class="tier-state is-ask">Asks</span></li>
+                  <li data-tier="high"><span class="tier-name">High</span><span class="tier-desc">deletion, force-push, outside the workspace</span><span class="tier-state is-ask">Asks</span></li>
+                  <li data-tier="critical"><span class="tier-name">Critical</span><span class="tier-desc">system damage or sandbox bypass</span><span class="tier-state is-deny">Denied</span></li>
+                </ul>
+              </div>
+
+              <div class="policy-panel" role="tabpanel" id="panel-plan" aria-labelledby="tab-plan" data-panel="plan" hidden>
+                <div class="policy-copy">
+                  <h3>PlanOnly</h3>
+                  <p>A hard read-only boundary. Agents may plan and read, but every write and every execution is denied.</p>
+                </div>
+                <ul class="tier-list">
+                  <li data-tier="readonly"><span class="tier-name">Read-only</span><span class="tier-desc">reads and listings</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="low"><span class="tier-name">Low</span><span class="tier-desc">reversible writes in the workspace</span><span class="tier-state is-deny">Denied</span></li>
+                  <li data-tier="medium"><span class="tier-name">Medium</span><span class="tier-desc">ordinary command execution</span><span class="tier-state is-deny">Denied</span></li>
+                  <li data-tier="high"><span class="tier-name">High</span><span class="tier-desc">deletion, force-push, outside the workspace</span><span class="tier-state is-deny">Denied</span></li>
+                  <li data-tier="critical"><span class="tier-name">Critical</span><span class="tier-desc">system damage or sandbox bypass</span><span class="tier-state is-deny">Denied</span></li>
+                </ul>
+              </div>
+
+              <div class="policy-panel" role="tabpanel" id="panel-trusted" aria-labelledby="tab-trusted" data-panel="trusted" hidden>
+                <div class="policy-copy">
+                  <h3>Trusted</h3>
+                  <p>Everything except critical risk runs unattended. Critical commands are still denied in this version.</p>
+                </div>
+                <ul class="tier-list">
+                  <li data-tier="readonly"><span class="tier-name">Read-only</span><span class="tier-desc">reads and listings</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="low"><span class="tier-name">Low</span><span class="tier-desc">reversible writes in the workspace</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="medium"><span class="tier-name">Medium</span><span class="tier-desc">ordinary command execution</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="high"><span class="tier-name">High</span><span class="tier-desc">deletion, force-push, outside the workspace</span><span class="tier-state is-auto">Runs</span></li>
+                  <li data-tier="critical"><span class="tier-name">Critical</span><span class="tier-desc">system damage or sandbox bypass</span><span class="tier-state is-deny">Denied</span></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <p class="download-foot">
+            Policies govern tool use, not the operating system. The subprocess
+            backend runs commands with your user's permissions — see
+            <a href="https://github.com/BerryUIKI/CowBot/blob/main/SECURITY.md">Security</a>.
+          </p>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="architecture">
+        <div class="wrap architecture-grid">
+          <div class="architecture-copy">
+            <h2>Local by construction.</h2>
+            <p>
+              The desktop shell opens the active workspace database directly.
+              Application services persist first, then publish events on the
+              bus. There is no background server, no account, and no telemetry.
+            </p>
+            <p>
+              The only network traffic is the model request to the endpoint you
+              configure, plus one update check against GitHub at launch when you
+              leave it enabled.
+            </p>
+            <ul class="plain-list">
+              <li><strong>Sandbox:</strong> subprocess and file tools with timeouts and output limits.</li>
+              <li><strong>Boundary:</strong> approvals are policy, not OS isolation — model-generated commands run with your user's permissions.</li>
+              <li><strong>Roadmap:</strong> self-hosted team mode, isolated sandbox backends, and DAG workflows are planned, not shipped.</li>
+            </ul>
+            <p class="link-row">
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ARCHITECTURE.md">Read the architecture</a>
+              <a href="https://github.com/BerryUIKI/CowBot/tree/main/docs/ADR">Architecture decisions</a>
+            </p>
+          </div>
+          <figure class="figure">
+            <picture>
+              <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture.svg" />
+              <img
+                src="docs/assets/architecture-light.svg"
+                alt="Diagram: the CLI and Tauri desktop both use the local client. Services persist through cowbot-store to SQLite and coordinate agents and approvals. Agents call model and tool adapters, and events flow through cowbot-bus."
+                width="1120"
+                height="650"
+                loading="lazy"
+              />
+            </picture>
+            <figcaption>The current local runtime: ten Rust crates plus the desktop shell.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="quickstart">
+        <div class="wrap split">
+          <div class="split-head">
+            <h2>Run it from source.</h2>
+            <p>
+              Install the Rust toolchain, clone the repository, and try
+              a crew offline. The mock provider needs no API key.
+            </p>
+            <p class="link-row">
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/DEVELOPMENT.md">Developer guide</a>
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">User guide</a>
+            </p>
+          </div>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span>Terminal</span>
+              <button class="copy" type="button" data-copy="setup">Copy</button>
+            </div>
+            <pre><code id="setup"><span class="prompt">$</span> git clone https://github.com/BerryUIKI/CowBot.git CowBot
+<span class="prompt">$</span> cd CowBot
+<span class="prompt">$</span> cargo build --workspace --locked
+<span class="prompt">$</span> cargo run -p cowbot-cli -- run \
+    --task "Plan a REST API for a task tracker" \
+    --dry-run</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="workspace">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Four views, one local workspace.</h2>
+            <p>
+              The desktop app never touches SQLite directly. Each view talks to
+              the same client the CLI uses.
+            </p>
+          </div>
+          <div class="views" data-reveal-group>
+            <article class="view-cell" data-reveal>
+              <h3>Channels</h3>
+              <p>Create a channel, read the timeline, and post with mentions so agents pick up the thread.</p>
+            </article>
+            <article class="view-cell" data-reveal>
+              <h3>Tasks</h3>
+              <p>Create a task with a starter team, watch assignments and events, cancel, or start a crew run.</p>
+            </article>
+            <article class="view-cell" data-reveal>
+              <h3>Approvals</h3>
+              <p>Pending tool calls with the command, its risk tier, and the acting assignment. Approve or reject.</p>
+            </article>
+            <article class="view-cell" data-reveal>
+              <h3>Settings</h3>
+              <p>Providers, agents, templates, workspaces, and updates — including import and export of workspaces.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="roadmap">
+        <div class="wrap roadmap-grid">
+          <div class="roadmap-copy">
+            <h2>Where this is going.</h2>
+            <p>
+              Phase 1 is complete and ships today. The next phases are planned,
+              not built — nothing here is a promise about a date.
+            </p>
+            <p class="link-row">
+              <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ROADMAP.md">Read the roadmap</a>
+            </p>
+            <ol class="phase-track" data-reveal-group>
+              <li class="phase is-current" data-reveal>
+                <span class="phase-mark" aria-hidden="true"></span>
+                <div>
+                  <h3>Phase 1 · Local MVP</h3>
+                  <p>Desktop app, CLI, crews, approvals, persistence, packages, updates.</p>
+                </div>
+                <span class="phase-status">Shipped</span>
+              </li>
+              <li class="phase" data-reveal>
+                <span class="phase-mark" aria-hidden="true"></span>
+                <div>
+                  <h3>Phase 2 · Self-hosted teams</h3>
+                  <p>Server API, accounts and roles, remote client, Docker deployment.</p>
+                </div>
+                <span class="phase-status">Planned</span>
+              </li>
+              <li class="phase" data-reveal>
+                <span class="phase-mark" aria-hidden="true"></span>
+                <div>
+                  <h3>Phase 3 · Ecosystem</h3>
+                  <p>Docker sandbox, long-term memory, integrations, plugins, MCP.</p>
+                </div>
+                <span class="phase-status">Planned</span>
+              </li>
+            </ol>
+          </div>
+          <figure class="figure figure-tall">
+            <picture>
+              <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workspace-concept.svg" />
+              <img
+                src="docs/assets/workspace-concept-light.svg"
+                alt="Illustrative CowBot workspace: channels on the left, a discussion with Planner and Coder in the center, a task pipeline on the right, and an approval card."
+                width="1200"
+                height="760"
+                loading="lazy"
+              />
+            </picture>
+            <figcaption>Concept layout, not a screenshot — the shipped shell is close in spirit.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section section-rule" id="faq">
+        <div class="wrap faq-grid">
+          <div class="faq-head">
+            <h2>Questions people ask first.</h2>
+            <p>Short answers, with links to the documents that go deeper.</p>
+          </div>
+          <div class="faq">
+            <details>
+              <summary>Does CowBot send my data anywhere?</summary>
+              <p>
+                Only the model request goes to the endpoint you configure, plus
+                one update check against GitHub at launch if you leave it on.
+                Messages, tasks, approvals, and run history stay in local
+                SQLite.
+              </p>
+            </details>
+            <details>
+              <summary>Which models can I use?</summary>
+              <p>
+                Any endpoint speaking OpenAI Chat Completions, Anthropic
+                Messages, or OpenAI Responses — OpenAI, DeepSeek, Ollama,
+                OpenRouter, Claude relays, and custom URLs. Without a provider,
+                CowBot uses the offline mock model.
+              </p>
+            </details>
+            <details>
+              <summary>Is this a sandbox?</summary>
+              <p>
+                Not an OS-level one. Tools run as your user with timeouts and
+                output limits; approval policies decide what runs at all. Docker
+                and WASM sandbox backends are planned for Phase 3.
+              </p>
+            </details>
+            <details>
+              <summary>Why do my downloads look unsigned?</summary>
+              <p>
+                Builds are not code-signed yet. macOS may ask you to allow the
+                app in System Settings, and Windows may show SmartScreen. The
+                in-app updater verifies update signatures on every release.
+              </p>
+            </details>
+            <details>
+              <summary>How do I move a workspace to another machine?</summary>
+              <p>
+                Export it as a <code>.cowpkg</code> package from Settings or the
+                CLI, then import it on the other machine. Import always creates
+                a new workspace and never overwrites an existing one.
+              </p>
+            </details>
+            <details>
+              <summary>Can I contribute?</summary>
+              <p>
+                Yes. Branch from <code>main</code> as <code>feature/&lt;name&gt;</code>,
+                keep commits small, and open a pull request against <code>main</code>. See the
+                contribution guide and the code of conduct.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing">
+        <div class="wrap closing-inner">
+          <div>
+            <h2>Your machine. Your models. Your records.</h2>
+            <p>Download the desktop app, or build it from source in a few minutes.</p>
+          </div>
+          <div class="closing-actions">
+            <a class="button button-primary" id="closing-download" href="https://github.com/BerryUIKI/CowBot/releases/latest">
+              Download CowBot
+            </a>
+            <a class="button button-quiet" href="https://github.com/BerryUIKI/CowBot">View on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-grid">
+        <div class="footer-brand">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/brand/cowbot-wordmark-dark.svg" />
+            <img src="assets/brand/cowbot-wordmark-light.svg" alt="CowBot" width="180" height="62" loading="lazy" />
+          </picture>
+          <p>An open-source, local-first multi-agent collaboration platform.</p>
+        </div>
+        <nav class="footer-col" aria-label="Product">
+          <h3>Product</h3>
+          <a href="#download">Download</a>
+          <a href="#features">Features</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/USER_GUIDE.md">User guide</a>
+          <a href="https://github.com/BerryUIKI/CowBot/releases">Releases</a>
+        </nav>
+        <nav class="footer-col" aria-label="Project">
+          <h3>Project</h3>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ROADMAP.md">Roadmap</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/CONTRIBUTING.md">Contributing</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/SECURITY.md">Security</a>
+        </nav>
+        <nav class="footer-col" aria-label="Elsewhere">
+          <h3>Elsewhere</h3>
+          <a href="https://github.com/BerryUIKI/CowBot">GitHub</a>
+          <a href="https://github.com/BerryUIKI/CowBot/issues">Issues</a>
+          <a href="https://github.com/BerryUIKI/CowBot/blob/main/LICENSE">License</a>
+        </nav>
+      </div>
+      <div class="wrap footer-base">
+        <p>CowBot is licensed under Apache-2.0. Third-party dependencies retain their own licenses.</p>
+        <p>Not affiliated with any model provider.</p>
+      </div>
+    </footer>
+  </body>
+</html>

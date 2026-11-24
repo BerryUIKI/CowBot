@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">CowBot — rounded icon</title>
+  <desc id="desc">An original cow icon drawn with smooth cubic Bézier curves, rounded strokes, and two inspiration marks. Transparent background.</desc>
+
+  <g id="inspiration" stroke="#272622" stroke-width="43" stroke-linecap="round">
+    <path d="M 746 188 L 783 132"/>
+    <path d="M 794 233 L 846 199"/>
+  </g>
+
+  <g id="horns" fill="#272622">
+    <path d="M 355 382
+      C 295 357 266 314 272 268
+      C 276 231 297 204 322 192
+      C 342 182 359 196 350 216
+      C 332 258 347 290 392 314
+      C 417 328 393 397 355 382 Z"/>
+    <path d="M 620 345
+      C 647 312 652 280 637 253
+      C 623 228 617 207 632 198
+      C 652 185 679 205 698 234
+      C 731 283 727 332 698 374
+      C 677 402 600 370 620 345 Z"/>
+  </g>
+
+  <g id="ears" fill="#fff" stroke="#272622" stroke-width="43" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 315 424
+      C 268 399 218 390 173 406
+      C 140 418 116 440 126 462
+      C 146 507 210 522 253 501
+      C 283 487 302 459 315 424 Z"/>
+    <path d="M 698 426
+      C 734 389 791 377 829 391
+      C 855 400 855 423 836 449
+      C 809 487 762 505 720 496
+      C 700 492 690 451 698 426 Z"/>
+  </g>
+
+  <path id="face" fill="#fff" stroke="#272622" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"
+    d="M 440 328
+      C 521 308 612 326 661 373
+      C 713 422 709 482 729 542
+      C 743 587 777 615 782 666
+      C 791 748 727 815 640 846
+      C 548 879 421 868 332 842
+      C 252 819 220 771 224 701
+      C 228 632 257 575 278 518
+      C 300 459 311 413 356 373
+      C 380 351 409 336 440 328 Z"/>
+
+  <path id="eye-patch" fill="#272622"
+    d="M 338 389
+      C 363 375 390 388 412 411
+      C 439 438 485 446 516 473
+      C 546 500 550 537 532 570
+      C 511 608 471 627 435 648
+      C 400 669 389 707 354 714
+      C 323 720 294 697 289 665
+      C 283 630 306 591 311 553
+      C 318 502 302 411 338 389 Z"/>
+
+  <path id="eye" fill="#fff"
+    d="M 429 506
+      C 441 501 458 502 470 508
+      C 454 518 448 533 452 547
+      C 456 561 468 568 481 566
+      C 467 582 445 584 428 574
+      C 410 563 406 544 411 528
+      C 414 517 420 510 429 506 Z"/>
+
+  <ellipse id="muzzle" cx="646" cy="732" rx="218" ry="139" transform="rotate(-19 646 732)"
+    fill="#fff" stroke="#272622" stroke-width="44"/>
+
+  <g id="nostrils" fill="#272622">
+    <ellipse cx="613" cy="723" rx="30" ry="19" transform="rotate(25 613 723)"/>
+    <ellipse cx="757" cy="691" rx="28" ry="18" transform="rotate(-40 757 691)"/>
+  </g>
+</svg>
