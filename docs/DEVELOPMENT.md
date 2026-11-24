@@ -2,7 +2,7 @@
 
 ## Setup
 
-Use current stable Rust, Cargo, rustfmt, Clippy, and native compiler/linker tools. The workspace uses edition 2021 and does not declare an MSRV. Clone the `dev` branch; see [Contributing](../CONTRIBUTING.md) and [Collaboration](COLLABORATION.md) for the PR workflow.
+Use current stable Rust, Cargo, rustfmt, Clippy, and native compiler/linker tools. The workspace uses edition 2021 and does not declare an MSRV. Clone the `main` branch; see [Contributing](../CONTRIBUTING.md) and [Collaboration](COLLABORATION.md) for the PR workflow.
 
 ```sh
 rustup component add rustfmt clippy

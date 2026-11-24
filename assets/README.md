@@ -24,7 +24,7 @@ The README wordmarks are separate variants with a `618 × 164` viewBox, no backg
    magick -background "#f4f3ee" assets/brand/cowbot-icon.svg -resize 512x512 -depth 8 assets/brand/cowbot-icon.png
    ```
 
-3. Check the icon at small sizes and preview the README in light and dark themes. Keep the source, derived export, and references together in the same small PR targeting `dev`.
+3. Check the icon at small sizes and preview the README in light and dark themes. Keep the source, derived export, and references together in the same small PR targeting `main`.
 
 Use stable, lowercase, kebab-case filenames. Git history records revisions; add a descriptive suffix only for a genuinely different asset variant. Link assets with relative repository paths so branch and release previews work without remote hosting.
 

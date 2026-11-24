@@ -262,18 +262,16 @@ Locked decisions:
 - **Documentation**: PRD, architecture, ADRs, and roadmap updated with every milestone; docs remain English-only.
 - **Observability**: structured logging and task/run tracing from Phase 1; metrics and cost accounting later.
 - **Internationalization**: UI strings externalized for at least English and Chinese; repository artifacts remain English.
-- **Git workflow**: GitFlow with `main` as the release branch and `dev` as the integration branch.
+- **Git workflow**: trunk-based development with `main` as the only long-lived branch.
 
 ---
 
-## 8. GitFlow Workflow
+## 8. Trunk-Based Workflow
 
-- `main`: stable, release-ready history only.
-- `dev`: integration branch for completed features; all feature work merges here first.
-- `feature/<name>`: branched from `dev`, merged back into `dev` with `--no-ff`.
-- `release/<version>`: branched from `dev` when preparing a release, merged into both `main` and `dev`.
-- `hotfix/<name>`: branched from `main` for urgent fixes, merged into both `main` and `dev`.
-- Commits are small, atomic, and English-written; pull requests target `dev` unless they are release or hotfix PRs.
+- `main`: the trunk and the only long-lived branch; always releasable, and a release is a `v<version>` tag cut from it.
+- `feature/<name>`: short-lived branch created from `main` and landed through a pull request against `main`.
+- No `dev`, `release/*`, or `hotfix/*` branches; integration happens on `main` through small pull requests.
+- Commits are small, atomic, and English-written; pull requests target `main`.
 
 ---
 
@@ -325,7 +323,7 @@ A milestone is done when:
 3. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` pass.
 4. Relevant docs and ADRs are updated in English.
 5. A demo or reproducible verification path is documented.
-6. Changes are merged into `dev` through small, atomic commits and reviewed.
+6. Changes are landed on `main` through small, atomic pull requests and reviewed.
 
 ---
 
