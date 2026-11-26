@@ -5,6 +5,7 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import ApprovalCard from "./ApprovalCard";
 import AgentNamingPrompt from "./AgentNamingPrompt";
@@ -93,15 +94,18 @@ import {
   onCowbotEvent,
   onChannelReply,
   onRunFinished,
+  onTrayQuitBlocked,
   parseCommand,
   pendingApprovals,
   postMessage,
+  quitApp,
   removeProject,
   renameChannel,
   runTask,
   saveMemoryNote,
   setActiveModel,
   setChannelPinned,
+  setTrayLabels,
   unarchiveTask,
   updateAgent,
   updateConversationSettings,
@@ -112,7 +116,7 @@ import icon from "./assets/cowbot-icon.svg";
 import wordmark from "./assets/cowbot-wordmark-dark.svg";
 import { errorMessage } from "./errors";
 import { dayKey, formatDayLabel, formatListTime, formatTime } from "./format";
-import { useT } from "./i18n";
+import { useI18n, useT } from "./i18n";
 import { t as translate } from "./i18n/catalog";
 import type {
   AgentProfile,
@@ -325,6 +329,7 @@ function PinMark() {
 
 export default function App() {
   const t = useT();
+  const { locale } = useI18n();
   const [view, setView] = useState<View>("chat");
   const [languageOpen, setLanguageOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -1077,6 +1082,68 @@ export default function App() {
     selectedId,
     selectedTaskId,
   ]);
+
+  // The shell owns the tray menu but not the interface language, so the labels
+  // are pushed whenever the language changes (ADR-0064).
+  useEffect(() => {
+    setTrayLabels(t("tray.open"), t("tray.quit")).catch(() => {
+      // A tray that could not be built stays English; nothing to report.
+    });
+  }, [locale, t]);
+
+  // A tray Quit while work is running is refused and brings the window back.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onTrayQuitBlocked(() => {
+      setNotice(t("app.notice.quitBlocked"));
+      refreshApprovals().catch((err) => setError(errorMessage(err)));
+      scheduleOverviewRefresh();
+    })
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // Without the event the tray still refuses to quit; only the reason is
+        // missing, which is not worth an error banner.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshApprovals, scheduleOverviewRefresh, t]);
+
+  // Work continues while the window is hidden, and the events that describe it
+  // are still delivered. Re-read the two views that summarise it when the
+  // window comes back, in case a delivery was dropped while it was away.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused) return;
+        refreshApprovals().catch((err) => setError(errorMessage(err)));
+        scheduleOverviewRefresh();
+      })
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // Focus events are a freshness nicety; the event stream already works.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshApprovals, scheduleOverviewRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2690,11 +2757,25 @@ export default function App() {
     }
   }
 
+  /// Quit from the account menu, after warning about work in progress.
+  ///
+  /// The tray's Quit refuses outright while something runs and says why; this
+  /// entry is the deliberate way to end it anyway. The window's × only hides
+  /// CowBot (ADR-0064).
+  async function handleQuit() {
+    if (
+      (runningTasks.size > 0 || pendingReply !== null) &&
+      !window.confirm(t("app.confirm.quitRunning"))
+    ) {
+      return;
+    }
+    await quitApp();
+  }
+
   async function handleRunTask(
     taskId: string,
     approvalLevel: ApprovalLevel = taskApproval,
-  ) {
-    setError(null);
+  ) {    setError(null);
     setRunningTasks((current) => new Set(current).add(taskId));
     try {
       await runTask(taskId, approvalLevel);
@@ -3693,6 +3774,7 @@ export default function App() {
                 onLearnMore={() =>
                   openExternal("https://github.com/BerryUIKI/CowBot")
                 }
+                onQuit={handleQuit}
               />
             ) : null}
           </div>

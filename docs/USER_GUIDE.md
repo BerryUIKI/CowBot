@@ -192,8 +192,9 @@ available both there and from the gear beside it.
 ### Language and the account menu
 
 The account menu contains **Settings**, **Language**, **Model configuration**,
-**Workspace settings**, **View changelog**, and **Learn more**. The last two open
-the project's GitHub releases page and repository. Server connection lives under
+**Workspace settings**, **View changelog**, **Learn more**, and **Quit CowBot**.
+The changelog and Learn more open the project's GitHub releases page and
+repository. Server connection lives under
 **Settings → Server**, next to **Workspace**.
 
 **Language** opens a picker with English, 简体中文, 繁體中文, Français, Deutsch,
@@ -219,6 +220,33 @@ instead of replacing Chat.
 The inspector remembers its last tab and closes with **×**. On windows narrower
 than about 1080 px the sidebar hides while the inspector is open so the chat and
 panel stay readable side by side; below 760 px the inspector overlays the chat.
+
+### The tray and running in the background
+
+Agent replies and crew runs execute inside the desktop app, so CowBot keeps
+running when its window does not.
+
+- **Closing the window hides CowBot** to a system tray icon. Everything that was
+  running keeps running: agents still answer channel mentions, crews still
+  finish, and the history is written as usual.
+- **The tray icon brings it back.** Click it — or click the desktop icon again,
+  or, on macOS, the Dock icon — to reopen the window.
+- **Quit CowBot ends it.** The tray's right-click menu has **Open CowBot** and
+  **Quit CowBot**, and the account menu has the same **Quit CowBot**. While a
+  task or a reply is still running, the tray's Quit is refused: CowBot reopens
+  the window and says so. The account menu's Quit asks first and then ends the
+  run.
+- **Nothing tells you while the window is closed.** There are no system
+  notifications, so a run that finishes — or an approval that is waiting — is
+  only visible once you reopen the window. Leave the window open in that case.
+- **Closing the window can quit instead.** Turn off **Settings → General →
+  Keep running in the background** to make the close button end CowBot, as it
+  did before 0.1.18.
+
+On a Linux desktop without an AppIndicator extension the tray icon does not
+appear, and there is then no way back to a hidden window; leave the setting on
+only if your desktop shows status icons. See
+[ADR-0064](ADR/0064-desktop-background-residency.md).
 
 ## Projects and worktrees
 
@@ -644,7 +672,9 @@ current settings, while a snapshot is the request that was actually sent.
   `config.json` in the same directory (plain text).
 - Backups: use **Export workspace** for a portable package, or copy the database
   files while CowBot is closed. Prompt snapshots are device-local audit evidence
-  and are never included in an exported package.
+  and are never included in an exported package. Quit CowBot from the tray or
+  the account menu first — closing the window only hides it (see
+  [the tray](#the-tray-and-running-in-the-background)).
 - Uninstalling the app does not delete your data; remove the app data directory
   manually if you want a clean install.
 

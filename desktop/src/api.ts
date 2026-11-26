@@ -678,6 +678,29 @@ export function quitApp(): Promise<void> {
   return invoke<void>("quit_app");
 }
 
+/** Label the tray menu in the interface language; the shell cannot read it. */
+export function setTrayLabels(open: string, quit: string): Promise<void> {
+  return invoke<void>("set_tray_labels", { open, quit });
+}
+
+/** Whether closing the window hides CowBot to the tray instead of quitting. */
+export function getCloseToTray(): Promise<boolean> {
+  return invoke<boolean>("get_close_to_tray");
+}
+
+export function setCloseToTray(enabled: boolean): Promise<void> {
+  return invoke<void>("set_close_to_tray", { enabled });
+}
+
+/**
+ * The tray's Quit was refused because a task or channel turn is still running.
+ *
+ * The shell reveals the window first, so the notice lands somewhere visible.
+ */
+export function onTrayQuitBlocked(handler: () => void): Promise<UnlistenFn> {
+  return listen("cowbot-tray-quit-blocked", () => handler());
+}
+
 export function setDatabaseDirectory(path: string): Promise<void> {
   return invoke<void>("set_database_directory", { path });
 }

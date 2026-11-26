@@ -32,6 +32,11 @@ export const ptBR: Catalog = {
     workspace: "Configurações do espaço de trabalho",
     changelog: "Ver registro de alterações",
     learnMore: "Saiba mais",
+    quit: "Sair do CowBot",
+  },
+  tray: {
+    open: "Abrir o CowBot",
+    quit: "Sair do CowBot",
   },
   approval: {
     auto: "Automático",
@@ -126,6 +131,10 @@ export const ptBR: Catalog = {
       botTagsHint:
         "Adiciona uma pequena tag “bot” ao lado dos nomes dos agentes. Útil quando colegas de equipe e agentes compartilham uma conversa; desativado por padrão.",
       botTagsToggle: "Mostrar “bot” ao lado dos nomes dos agentes",
+      closeToTrayTitle: "Continuar em segundo plano",
+      closeToTrayHint:
+        "Fechar a janela oculta o CowBot na bandeja do sistema em vez de encerrá-lo, para que os turnos dos agentes e as execuções em segundo plano continuem. Use o ícone da bandeja ou “Sair do CowBot” para encerrar.",
+      closeToTrayToggle: "Fechar a janela mantém o CowBot em execução",
     },
     models: {
       title: "Modelos",
@@ -395,6 +404,8 @@ export const ptBR: Catalog = {
     notice: {
       slashUnavailable:
         "Os comandos de barra não estão disponíveis; rascunhos que começam com / são enviados como mensagens. {detail}",
+      quitBlocked:
+        "O CowBot ainda está executando algo. Aguarde terminar ou pare pela conversa antes de sair.",
       compactedOne: "{count} entrada compactada: {before} → {after} tokens.",
       compactedOther: "{count} entradas compactadas: {before} → {after} tokens.",
       compactionRunning: "Já há uma compactação em andamento neste branch.",
@@ -433,6 +444,7 @@ export const ptBR: Catalog = {
       cancelTasksOne: "Cancelar a tarefa em execução neste chat?",
       cancelTasksOther: "Cancelar todas as {count} tarefas em execução neste chat?",
       cancelTaskDetail: "Cancelar esta tarefa e sua atribuição ativa?",
+      quitRunning: "Ainda há tarefas ou respostas em execução. Sair vai cancelá-las e o trabalho em andamento será perdido. Sair mesmo assim?",
     },
     commandHint: {
       unknown:

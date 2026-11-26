@@ -31,6 +31,11 @@ export const id: Catalog = {
     workspace: "Pengaturan ruang kerja",
     changelog: "Lihat catatan perubahan",
     learnMore: "Pelajari lebih lanjut",
+    quit: "Keluar dari CowBot",
+  },
+  tray: {
+    open: "Buka CowBot",
+    quit: "Keluar dari CowBot",
   },
   approval: {
     auto: "Otomatis",
@@ -124,6 +129,10 @@ export const id: Catalog = {
       botTagsHint:
         "Tambahkan label “bot” kecil di samping nama agen. Berguna saat rekan tim dan agen berbagi percakapan; nonaktif secara default.",
       botTagsToggle: "Tampilkan “bot” di samping nama agen",
+      closeToTrayTitle: "Tetap berjalan di latar belakang",
+      closeToTrayHint:
+        "Menutup jendela akan menyembunyikan CowBot ke baki sistem, bukan keluar, sehingga giliran agen dan proses latar belakang tetap berjalan. Gunakan ikon baki atau “Keluar dari CowBot” untuk mengakhirinya.",
+      closeToTrayToggle: "Menutup jendela membuat CowBot tetap berjalan",
     },
     models: {
       title: "Model",
@@ -393,6 +402,8 @@ export const id: Catalog = {
     notice: {
       slashUnavailable:
         "Perintah slash tidak tersedia; draf yang diawali / dikirim sebagai pesan. {detail}",
+      quitBlocked:
+        "CowBot masih menjalankan sesuatu. Tunggu hingga selesai, atau hentikan dari obrolan sebelum keluar.",
       compactedOne: "{count} entri dipadatkan: {before} → {after} token.",
       compactedOther: "{count} entri dipadatkan: {before} → {after} token.",
       compactionRunning: "Pemadatan sudah berjalan untuk cabang ini.",
@@ -433,6 +444,7 @@ export const id: Catalog = {
       cancelTasksOther:
         "Batalkan semua {count} tugas yang berjalan di obrolan ini?",
       cancelTaskDetail: "Batalkan tugas ini dan penugasan aktifnya?",
+      quitRunning: "Masih ada tugas atau balasan yang berjalan. Keluar akan membatalkannya dan pekerjaan yang sedang berjalan hilang. Tetap keluar?",
     },
     commandHint: {
       unknown:

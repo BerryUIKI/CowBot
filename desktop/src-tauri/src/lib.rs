@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod migration;
+mod shell;
 mod startup;
 mod workspace_tools;
 
@@ -139,20 +140,47 @@ pub fn run() {
     // the app opening with an empty workspace.
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
+        // A second launch may be the only way back to a window that is hidden
+        // to the tray, so it reveals rather than only raising (ADR-0064).
+        shell::reveal(app);
     }));
 
     let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The tray exists before the window is shown, so a user who closes the
+        // window immediately still has a way back (ADR-0064).
+        .setup(|app| {
+            if let Err(error) = shell::install(app.handle()) {
+                eprintln!("warning: the tray icon could not be created: {error}");
+            }
+            Ok(())
+        })
+        // Closing the main window hides CowBot instead of ending the process
+        // that agent turns and crew runs execute in. Other windows (none today)
+        // keep the default close behaviour.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                match shell::close_action_for(window.app_handle()) {
+                    shell::CloseAction::Hide => {
+                        let _ = window.hide();
+                    }
+                    shell::CloseAction::Exit => window.app_handle().exit(0),
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_startup_status,
             commands::resolve_startup,
             commands::quit_app,
+            commands::set_tray_labels,
+            commands::get_close_to_tray,
+            commands::set_close_to_tray,
             commands::set_database_directory,
             commands::get_session,
             commands::update_user_profile,
@@ -277,7 +305,16 @@ pub fn run() {
     // `resolve_startup` finishes initialization once the user decides.
     initialize(&app);
 
-    app.run(|_, _| {});
+    app.run(|app, event| {
+        // A mac user reaches for the Dock icon when the window is hidden; the
+        // run loop has to hand that back to the window (ADR-0064).
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            shell::reveal(app);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }
 
 /// Resolve the paths startup needs and decide whether the database can open.

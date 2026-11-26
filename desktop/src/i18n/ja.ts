@@ -33,6 +33,11 @@ export const ja: Catalog = {
     workspace: "ワークスペース設定",
     changelog: "変更履歴を表示",
     learnMore: "詳細を見る",
+    quit: "CowBot を終了",
+  },
+  tray: {
+    open: "CowBot を開く",
+    quit: "CowBot を終了",
   },
   approval: {
     auto: "自動",
@@ -128,6 +133,10 @@ export const ja: Catalog = {
       botTagsHint:
         "エージェント名の横に小さな“ボット”タグを付けます。チームメイトとエージェントが同じ会話を共有するときに便利です。デフォルトではオフです。",
       botTagsToggle: "エージェント名の横に“ボット”を表示する",
+      closeToTrayTitle: "バックグラウンドで実行し続ける",
+      closeToTrayHint:
+        "ウィンドウを閉じても CowBot は終了せずにシステムトレイに隠れ、エージェントのターンやバックグラウンド実行が続きます。終了するにはトレイアイコンまたは「CowBot を終了」を使います。",
+      closeToTrayToggle: "ウィンドウを閉じても CowBot を実行し続ける",
     },
     models: {
       title: "モデル",
@@ -397,6 +406,8 @@ export const ja: Catalog = {
     notice: {
       slashUnavailable:
         "スラッシュコマンドは利用できません。/ で始まる下書きはメッセージとして送信されます。{detail}",
+      quitBlocked:
+        "CowBot はまだ処理を実行中です。終了する前に、完了を待つかチャットから停止してください。",
       compactedOne: "{count} 件のエントリを圧縮しました：{before} → {after} トークン。",
       compactedOther:
         "{count} 件のエントリを圧縮しました：{before} → {after} トークン。",
@@ -437,6 +448,7 @@ export const ja: Catalog = {
       cancelTasksOther:
         "このチャットで実行中の {count} 件のタスクをすべてキャンセルしますか？",
       cancelTaskDetail: "このタスクとアクティブな割り当てをキャンセルしますか？",
+      quitRunning: "実行中のタスクまたは応答があります。終了すると中断され、進行中の作業は失われます。それでも終了しますか？",
     },
     commandHint: {
       unknown:

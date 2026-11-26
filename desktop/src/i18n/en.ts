@@ -35,6 +35,11 @@ export const en = {
     workspace: "Workspace settings",
     changelog: "View changelog",
     learnMore: "Learn more",
+    quit: "Quit CowBot",
+  },
+  tray: {
+    open: "Open CowBot",
+    quit: "Quit CowBot",
   },
   approval: {
     auto: "Auto",
@@ -127,6 +132,10 @@ export const en = {
       botTagsHint:
         "Add a small “bot” tag beside agent names. Useful when teammates and agents share a conversation; off by default.",
       botTagsToggle: "Show “bot” beside agent names",
+      closeToTrayTitle: "Keep running in the background",
+      closeToTrayHint:
+        "Closing the window hides CowBot to the system tray instead of quitting, so agent turns and background runs keep going. Use the tray icon or Quit CowBot to end it.",
+      closeToTrayToggle: "Closing the window keeps CowBot running",
     },
     models: {
       title: "Models",
@@ -401,6 +410,8 @@ export const en = {
     notice: {
       slashUnavailable:
         "Slash commands are unavailable; drafts starting with / are sent as messages. {detail}",
+      quitBlocked:
+        "CowBot is still running something. Wait for it to finish, or stop it from the chat, before quitting.",
       compactedOne: "Compacted {count} entry: {before} → {after} tokens.",
       compactedOther: "Compacted {count} entries: {before} → {after} tokens.",
       compactionRunning: "A compaction is already running for this branch.",
@@ -439,6 +450,8 @@ export const en = {
       cancelTasksOne: "Cancel the running task in this chat?",
       cancelTasksOther: "Cancel all {count} running tasks in this chat?",
       cancelTaskDetail: "Cancel this task and its active assignment?",
+      quitRunning:
+        "Tasks or replies are still running. Quitting ends them and loses the work in progress. Quit anyway?",
     },
     commandHint: {
       unknown: "Unknown command. Press Esc to send as a message, or type /help.",

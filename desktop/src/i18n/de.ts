@@ -33,6 +33,11 @@ export const de: Catalog = {
     workspace: "Arbeitsbereichseinstellungen",
     changelog: "Änderungsprotokoll anzeigen",
     learnMore: "Mehr erfahren",
+    quit: "CowBot beenden",
+  },
+  tray: {
+    open: "CowBot öffnen",
+    quit: "CowBot beenden",
   },
   approval: {
     auto: "Automatisch",
@@ -130,6 +135,10 @@ export const de: Catalog = {
       botTagsHint:
         "Zeigt neben Agentennamen ein kleines „Bot“-Tag an. Nützlich, wenn Teammitglieder und Agenten sich eine Unterhaltung teilen; standardmäßig aus.",
       botTagsToggle: "„Bot“ neben Agentennamen anzeigen",
+      closeToTrayTitle: "Im Hintergrund weiterlaufen",
+      closeToTrayHint:
+        "Beim Schließen des Fensters wird CowBot in den Infobereich ausgeblendet statt beendet, damit Agenten-Turns und Hintergrundläufe weiterlaufen. Über das Symbol im Infobereich oder „CowBot beenden“ wird die App beendet.",
+      closeToTrayToggle: "Beim Schließen läuft CowBot weiter",
     },
     models: {
       title: "Modelle",
@@ -401,6 +410,8 @@ export const de: Catalog = {
     notice: {
       slashUnavailable:
         "Slash-Befehle sind nicht verfügbar; Entwürfe, die mit / beginnen, werden als Nachrichten gesendet. {detail}",
+      quitBlocked:
+        "CowBot führt noch etwas aus. Warte, bis es fertig ist, oder stoppe es im Chat, bevor du die App beendest.",
       compactedOne:
         "{count} Eintrag komprimiert: {before} → {after} Tokens.",
       compactedOther:
@@ -446,6 +457,7 @@ export const de: Catalog = {
         "Alle {count} laufenden Aufgaben in diesem Chat abbrechen?",
       cancelTaskDetail:
         "Diese Aufgabe und ihre aktive Zuweisung abbrechen?",
+      quitRunning: "Es laufen noch Aufgaben oder Antworten. Beim Beenden werden sie abgebrochen und die laufende Arbeit geht verloren. Trotzdem beenden?",
     },
     commandHint: {
       unknown:

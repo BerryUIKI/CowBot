@@ -25,12 +25,14 @@ import {
   deletePermissionRule,
   exportWorkspace,
   getAuditEvents,
+  getCloseToTray,
   getSessionDecisions,
   getWorkspacePolicy,
   importWorkspace,
   listPermissionRules,
   listWorkspaces,
   setBypassCritical as saveBypassCritical,
+  setCloseToTray as saveCloseToTray,
   setPermissionRuleEnabled,
   switchWorkspace,
   updateUserProfile,
@@ -154,6 +156,8 @@ export default function SettingsView({
   const { t, locale } = useI18n();
   const { showAgentBotTags, setShowAgentBotTags } = useUiPreferences();
   const [botTagError, setBotTagError] = useState<string | null>(null);
+  const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
+  const [closeToTrayError, setCloseToTrayError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -199,6 +203,21 @@ export default function SettingsView({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (section !== "general") return;
+    let cancelled = false;
+    getCloseToTray()
+      .then((stored) => {
+        if (!cancelled) setCloseToTray(stored);
+      })
+      .catch((error) => {
+        if (!cancelled) setCloseToTrayError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section]);
 
   useEffect(() => {
     if (section !== "approvals") return;
@@ -582,6 +601,38 @@ export default function SettingsView({
               {botTagError ? (
                 <p className="settings-status is-error" role="alert">
                   {botTagError}
+                </p>
+              ) : null}
+              <div className="settings-language">
+                <div>
+                  <span className="settings-card-title">
+                    {t("settings.general.closeToTrayTitle")}
+                  </span>
+                  <p className="settings-hint">
+                    {t("settings.general.closeToTrayHint")}
+                  </p>
+                </div>
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={closeToTray ?? true}
+                    disabled={closeToTray === null}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setCloseToTrayError(null);
+                      setCloseToTray(enabled);
+                      saveCloseToTray(enabled).catch((error) => {
+                        setCloseToTray(!enabled);
+                        setCloseToTrayError(errorMessage(error));
+                      });
+                    }}
+                  />
+                  {t("settings.general.closeToTrayToggle")}
+                </label>
+              </div>
+              {closeToTrayError ? (
+                <p className="settings-status is-error" role="alert">
+                  {closeToTrayError}
                 </p>
               ) : null}
             </section>

@@ -32,6 +32,11 @@ export const fr: Catalog = {
     workspace: "Paramètres de l’espace de travail",
     changelog: "Afficher le journal des modifications",
     learnMore: "En savoir plus",
+    quit: "Quitter CowBot",
+  },
+  tray: {
+    open: "Ouvrir CowBot",
+    quit: "Quitter CowBot",
   },
   approval: {
     auto: "Auto",
@@ -129,6 +134,10 @@ export const fr: Catalog = {
       botTagsHint:
         "Ajoutez une petite étiquette “bot” à côté des noms d’agents. Utile lorsque des coéquipiers et des agents partagent une conversation ; désactivé par défaut.",
       botTagsToggle: "Afficher “bot” à côté des noms d’agents",
+      closeToTrayTitle: "Continuer en arrière-plan",
+      closeToTrayHint:
+        "Fermer la fenêtre masque CowBot dans la zone de notification au lieu de quitter, afin que les tours des agents et les exécutions en arrière-plan continuent. Utilisez l’icône de la zone de notification ou « Quitter CowBot » pour l’arrêter.",
+      closeToTrayToggle: "Fermer la fenêtre laisse CowBot actif",
     },
     models: {
       title: "Modèles",
@@ -400,6 +409,8 @@ export const fr: Catalog = {
     notice: {
       slashUnavailable:
         "Les commandes slash sont indisponibles ; les brouillons commençant par / sont envoyés comme messages. {detail}",
+      quitBlocked:
+        "CowBot exécute encore quelque chose. Attendez la fin ou arrêtez-le depuis la discussion avant de quitter.",
       compactedOne: "{count} entrée compactée : {before} → {after} jetons.",
       compactedOther: "{count} entrées compactées : {before} → {after} jetons.",
       compactionRunning: "Un compactage est déjà en cours pour cette branche.",
@@ -441,6 +452,7 @@ export const fr: Catalog = {
       cancelTasksOther:
         "Annuler les {count} tâches en cours dans cette discussion ?",
       cancelTaskDetail: "Annuler cette tâche et son affectation active ?",
+      quitRunning: "Des tâches ou des réponses sont encore en cours. Quitter les annule et le travail en cours est perdu. Quitter quand même ?",
     },
     commandHint: {
       unknown:
