@@ -199,6 +199,15 @@ Delivered:
 > adapter ([ADR-0058](ADR-0058-telegram-adapter.md)). Slack and Feishu are the
 > stages that follow, and until each lands its rows report unsupported.
 
+> **Background residency** (a desktop shell capability, not a milestone): agent
+> turns and crew runs execute in the desktop process, so the shell now stays
+> resident. Closing the main window hides it to a system tray icon rather than
+> ending those runs; the tray reveals the window and offers Quit, and Quit is
+> refused while a run or a reply is in flight. `close_to_tray` defaults to on and
+> Settings → General restores close-means-quit
+> ([ADR-0064](ADR-0064-desktop-background-residency.md)). System notifications
+> while the window is hidden and a launch-at-login switch remain open.
+
 ### 5.2 Phase 2 Exit Criteria
 
 - A team can deploy the server with Docker or a single binary and connect desktop clients over HTTPS.

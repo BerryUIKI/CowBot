@@ -215,6 +215,16 @@ tracked.
 
 ### Desktop and CLI
 
+- **Closing the window does not quit.** CowBot hides to a tray icon so agent
+  turns and crew runs keep going. Settings → General turns that off if you want
+  close to mean quit ([ADR-0064](ADR/0064-desktop-background-residency.md)).
+- **The tray may be invisible on Linux.** A desktop without an AppIndicator
+  extension (a bare GNOME session, for instance) does not show status icons, and
+  a hidden window is then only reachable through the account menu's quit —
+  which is to say not at all. Nothing detects this and warns you.
+- **Nothing tells you when work finishes while the window is hidden.** There are
+  no system notifications: a finished run and a waiting approval are only
+  visible once you open the window. The tray icon carries no badge or count.
 - **Slash commands are executed by the desktop only.** The CLI shares the
   catalogue and parser but does not run commands. There is no command history,
   and `/model` cannot reach a model on an inactive provider.
@@ -239,6 +249,9 @@ tracked.
 These are not bugs. They are choices that behave differently from what you may
 expect.
 
+- **Closing the window leaves CowBot running.** It is in the system tray, not
+  gone, and it is still answering. Use Quit CowBot in the tray menu or the
+  account menu to end it — the × only hides it.
 - **Slash commands never become messages.** `/clear`, `/compact`, `/rename`, and
   the rest act on the app; they do not post anything into the chat, and they do
   not appear in the transcript.

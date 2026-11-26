@@ -141,6 +141,28 @@ second launch focuses the open window instead of starting another copy. Only the
 release build takes that instance lock, so `tauri dev` can run beside an
 installed CowBot instead of being mistaken for it.
 
+## Background residency and the tray
+
+Agent turns and crew runs execute in the desktop process, so the shell stays
+resident: closing the main window hides it to a system tray icon instead of
+ending the process. The tray's left click reveals the window; its right-click
+menu offers **Open CowBot** and **Quit CowBot**. A second launch, and the macOS
+Dock icon, reveal the window the same way. `desktop/src-tauri/src/shell.rs` owns
+all of it.
+
+**Quit** from the tray is refused while `AppState.running` or `AppState.replies`
+is non-empty: the window comes back and the frontend explains why. The account
+menu's **Quit CowBot** is the deliberate exit and asks for confirmation when
+work is in flight. The menu labels follow the interface language — the frontend
+pushes them through `set_tray_labels`, because the shell cannot read the locale.
+
+`close_to_tray` in `config.json` defaults to **true**, including for files
+written before the tray existed; Settings → General turns it off, which makes the
+close button end the process as it did in 0.1.17. A window whose startup never
+completed always quits rather than hiding, so a failure the user still has to
+answer is never hidden. See
+[ADR-0064](../docs/ADR/0064-desktop-background-residency.md).
+
 ## Build
 
 ```bash

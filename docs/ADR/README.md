@@ -67,6 +67,7 @@ These records accompany the [architecture](../ARCHITECTURE.md). A decision descr
 | [0061](0061-feishu-adapter.md) | The Feishu adapter: long connection, hand-written protobuf frames, message-id dedupe |
 | [0062](0062-webhook-transports.md) | Webhook transports: an inbound surface, per-request verification, hand-written AES |
 | [0063](0063-trunk-based-development.md) | Trunk-based development replaces GitFlow |
+| [0064](0064-desktop-background-residency.md) | Desktop background residency: a tray icon and a window that closes to it |
 
 For a new decision, copy [the template](TEMPLATE.md), assign the next unused four-digit number, and use a descriptive English filename. Discuss it in a linked issue/PR. Record context, alternatives, consequences, and status; do not silently rewrite an accepted decision when direction changes. Add a superseding record and link both records instead.
 
