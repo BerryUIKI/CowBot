@@ -2796,6 +2796,35 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Set the tray menu's labels to the interface language.
+///
+/// The shell cannot read the interface locale, so the window reports it. Only
+/// the text changes: a tray menu cannot be replaced on Linux once it is set.
+#[tauri::command]
+pub fn set_tray_labels(app: AppHandle, open: String, quit: String) -> Result<(), String> {
+    let Some(handles) = app.try_state::<crate::shell::TrayHandles>() else {
+        // A tray that failed to build is not an error the window can act on.
+        return Ok(());
+    };
+    handles
+        .open
+        .set_text(open)
+        .and_then(|()| handles.quit.set_text(quit))
+        .map_err(|error| error.to_string())
+}
+
+/// Whether closing the window hides CowBot instead of quitting.
+#[tauri::command]
+pub fn get_close_to_tray(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(load_config(&state)?.close_to_tray)
+}
+
+/// Persist whether closing the window hides CowBot instead of quitting.
+#[tauri::command]
+pub fn set_close_to_tray(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    crate::shell::set_close_to_tray(&state, enabled)
+}
+
 /// Point the app at another folder for workspace databases and restart.
 #[tauri::command]
 pub fn set_database_directory(

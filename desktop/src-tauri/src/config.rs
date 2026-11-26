@@ -186,6 +186,15 @@ pub struct AppConfig {
     /// this switch changes how they are labelled on this machine.
     #[serde(default)]
     pub show_agent_bot_tags: bool,
+    /// Whether closing the main window hides CowBot to the system tray instead
+    /// of quitting (ADR-0064).
+    ///
+    /// On by default, including for configuration files written before the tray
+    /// existed: agent turns and crew runs execute in this process, so closing
+    /// the window used to end them silently. A user who wants the old
+    /// "close means quit" behaviour turns it off in Settings → General.
+    #[serde(default = "close_to_tray_default")]
+    pub close_to_tray: bool,
     /// Absolute folder that holds the workspace databases.
     ///
     /// Missing means the app data directory. The first-run guide offers a
@@ -219,6 +228,10 @@ fn auto_check_default() -> bool {
     true
 }
 
+fn close_to_tray_default() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -228,6 +241,7 @@ impl Default for AppConfig {
             auto_check_updates: true,
             ui_locale: None,
             show_agent_bot_tags: false,
+            close_to_tray: true,
             database_dir: None,
             active_workspace_database: None,
             workspaces: Vec::new(),
@@ -883,6 +897,24 @@ mod tests {
     }
 
     #[test]
+    fn close_to_tray_defaults_on_for_existing_configurations() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        // A file written before the tray existed must still keep CowBot running
+        // when its window closes (ADR-0064).
+        fs::write(&path, r#"{"version":1,"providers":[]}"#).unwrap();
+        assert!(load(&path).unwrap().close_to_tray);
+
+        let config = AppConfig {
+            close_to_tray: false,
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert!(!load(&path).unwrap().close_to_tray);
+    }
+
+    #[test]
     fn save_and_load_roundtrip() {
         let root = tempfile::tempdir().unwrap();
         let path = config_path(root.path());
@@ -893,6 +925,7 @@ mod tests {
             auto_check_updates: true,
             ui_locale: None,
             show_agent_bot_tags: false,
+            close_to_tray: true,
             database_dir: None,
             active_workspace_database: Some("workspaces/one.db".to_string()),
             workspaces: vec![WorkspaceEntry {
