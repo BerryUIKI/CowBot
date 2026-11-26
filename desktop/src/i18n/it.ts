@@ -33,6 +33,11 @@ export const it: Catalog = {
     workspace: "Impostazioni spazio di lavoro",
     changelog: "Visualizza registro modifiche",
     learnMore: "Ulteriori informazioni",
+    quit: "Esci da CowBot",
+  },
+  tray: {
+    open: "Apri CowBot",
+    quit: "Esci da CowBot",
   },
   approval: {
     auto: "Automatica",
@@ -131,6 +136,10 @@ export const it: Catalog = {
       botTagsHint:
         "Aggiungi un piccolo tag “bot” accanto ai nomi degli agenti. Utile quando colleghi e agenti condividono una conversazione; disattivato per impostazione predefinita.",
       botTagsToggle: "Mostra “bot” accanto ai nomi degli agenti",
+      closeToTrayTitle: "Continua in background",
+      closeToTrayHint:
+        "Chiudendo la finestra CowBot si nasconde nella barra delle applicazioni invece di uscire, così i turni degli agenti e le esecuzioni in background continuano. Usa l’icona della barra o «Esci da CowBot» per terminarlo.",
+      closeToTrayToggle: "Chiudere la finestra lascia CowBot in esecuzione",
     },
     models: {
       title: "Modelli",
@@ -401,6 +410,8 @@ export const it: Catalog = {
     notice: {
       slashUnavailable:
         "I comandi slash non sono disponibili; le bozze che iniziano con / vengono inviate come messaggi. {detail}",
+      quitBlocked:
+        "CowBot sta ancora eseguendo qualcosa. Attendi che finisca, o interrompilo dalla chat, prima di uscire.",
       compactedOne: "Compattata {count} voce: {before} → {after} token.",
       compactedOther: "Compattate {count} voci: {before} → {after} token.",
       compactionRunning: "È già in corso una compattazione per questo ramo.",
@@ -441,6 +452,7 @@ export const it: Catalog = {
       cancelTasksOther:
         "Annullare tutte le {count} attività in esecuzione in questa chat?",
       cancelTaskDetail: "Annullare questa attività e la sua assegnazione attiva?",
+      quitRunning: "Ci sono ancora attività o risposte in corso. Uscendo vengono annullate e il lavoro in corso va perso. Uscire comunque?",
     },
     commandHint: {
       unknown:

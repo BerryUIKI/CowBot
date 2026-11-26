@@ -31,6 +31,11 @@ export const ko: Catalog = {
     workspace: "워크스페이스 설정",
     changelog: "변경 기록 보기",
     learnMore: "자세히 알아보기",
+    quit: "CowBot 종료",
+  },
+  tray: {
+    open: "CowBot 열기",
+    quit: "CowBot 종료",
   },
   approval: {
     auto: "자동",
@@ -123,6 +128,10 @@ export const ko: Catalog = {
       botTagsHint:
         "에이전트 이름 옆에 작은 “봇” 태그를 표시합니다. 동료와 에이전트가 같은 대화를 나눌 때 유용하며, 기본값은 꺼짐입니다.",
       botTagsToggle: "에이전트 이름 옆에 “봇” 표시",
+      closeToTrayTitle: "백그라운드에서 계속 실행",
+      closeToTrayHint:
+        "창을 닫으면 CowBot이 종료되지 않고 시스템 트레이로 숨겨져 에이전트 턴과 백그라운드 실행이 계속됩니다. 종료하려면 트레이 아이콘이나 “CowBot 종료”를 사용하세요.",
+      closeToTrayToggle: "창을 닫아도 CowBot 계속 실행",
     },
     models: {
       title: "모델",
@@ -391,6 +400,8 @@ export const ko: Catalog = {
     notice: {
       slashUnavailable:
         "슬래시 명령을 사용할 수 없습니다. /로 시작하는 초안은 메시지로 전송됩니다. {detail}",
+      quitBlocked:
+        "CowBot이 아직 작업을 실행 중입니다. 종료하기 전에 완료될 때까지 기다리거나 채팅에서 중지하세요.",
       compactedOne: "{count}개 항목을 압축했습니다: {before} → {after} 토큰.",
       compactedOther: "{count}개 항목을 압축했습니다: {before} → {after} 토큰.",
       compactionRunning: "이 브랜치에서 이미 압축이 실행 중입니다.",
@@ -429,6 +440,7 @@ export const ko: Catalog = {
       cancelTasksOne: "이 채팅에서 실행 중인 작업을 취소할까요?",
       cancelTasksOther: "이 채팅에서 실행 중인 작업 {count}개를 모두 취소할까요?",
       cancelTaskDetail: "이 작업과 진행 중인 할당을 취소할까요?",
+      quitRunning: "아직 실행 중인 작업이나 응답이 있습니다. 종료하면 취소되고 진행 중인 작업이 사라집니다. 그래도 종료할까요?",
     },
     commandHint: {
       unknown: "알 수 없는 명령입니다. Esc를 눌러 메시지로 보내거나 /help를 입력하세요.",

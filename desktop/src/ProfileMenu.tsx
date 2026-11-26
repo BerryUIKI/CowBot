@@ -9,7 +9,8 @@ type MenuIconName =
   | "models"
   | "workspace"
   | "changelog"
-  | "learn";
+  | "learn"
+  | "quit";
 
 interface ProfileMenuProps {
   userName: string;
@@ -21,6 +22,7 @@ interface ProfileMenuProps {
   onWorkspace: () => void;
   onChangelog: () => void;
   onLearnMore: () => void;
+  onQuit: () => void;
 }
 
 function MenuIcon({ name }: { name: MenuIconName }) {
@@ -68,6 +70,13 @@ function MenuIcon({ name }: { name: MenuIconName }) {
           <path d="M12 11v5M12 8h.01" />
         </svg>
       );
+    case "quit":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+          <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
+          <path d="M10 17l-5-5 5-5M5 12h10" />
+        </svg>
+      );
   }
 }
 
@@ -86,6 +95,7 @@ export default function ProfileMenu({
   onWorkspace,
   onChangelog,
   onLearnMore,
+  onQuit,
 }: ProfileMenuProps) {
   const t = useT();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -182,6 +192,21 @@ export default function ProfileMenu({
           <span className="profile-menu-label">{item.label}</span>
         </button>
       ))}
+      <div className="profile-menu-separator" role="separator" />
+      <button
+        type="button"
+        role="menuitem"
+        className="profile-menu-item"
+        onClick={() => {
+          onQuit();
+          onClose();
+        }}
+      >
+        <span className="profile-menu-icon">
+          <MenuIcon name="quit" />
+        </span>
+        <span className="profile-menu-label">{t("profile.quit")}</span>
+      </button>
     </div>
   );
 }

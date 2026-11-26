@@ -32,6 +32,11 @@ export const es419: Catalog = {
     workspace: "Configuración del espacio de trabajo",
     changelog: "Ver el registro de cambios",
     learnMore: "Más información",
+    quit: "Salir de CowBot",
+  },
+  tray: {
+    open: "Abrir CowBot",
+    quit: "Salir de CowBot",
   },
   approval: {
     auto: "Automático",
@@ -126,6 +131,10 @@ export const es419: Catalog = {
       botTagsHint:
         "Agrega una pequeña etiqueta “bot” junto a los nombres de los agentes. Útil cuando compañeros de equipo y agentes comparten una conversación; está desactivada de forma predeterminada.",
       botTagsToggle: "Mostrar “bot” junto a los nombres de los agentes",
+      closeToTrayTitle: "Seguir ejecutándose en segundo plano",
+      closeToTrayHint:
+        "Al cerrar la ventana, CowBot se oculta en la bandeja del sistema en lugar de cerrarse, para que los turnos de los agentes y las ejecuciones en segundo plano continúen. Usa el icono de la bandeja o «Salir de CowBot» para terminarlo.",
+      closeToTrayToggle: "Al cerrar la ventana, CowBot sigue ejecutándose",
     },
     models: {
       title: "Modelos",
@@ -395,6 +404,8 @@ export const es419: Catalog = {
     notice: {
       slashUnavailable:
         "Los comandos de barra no están disponibles; los borradores que empiezan con / se envían como mensajes. {detail}",
+      quitBlocked:
+        "CowBot todavía está ejecutando algo. Espera a que termine o detenlo desde el chat antes de salir.",
       compactedOne: "Se compactó {count} entrada: {before} → {after} tokens.",
       compactedOther: "Se compactaron {count} entradas: {before} → {after} tokens.",
       compactionRunning: "Ya hay una compactación en curso para esta rama.",
@@ -435,6 +446,7 @@ export const es419: Catalog = {
       cancelTasksOther:
         "¿Cancelar las {count} tareas en ejecución de este chat?",
       cancelTaskDetail: "¿Cancelar esta tarea y su asignación activa?",
+      quitRunning: "Todavía hay tareas o respuestas en curso. Al salir se cancelan y se pierde el trabajo en curso. ¿Salir de todos modos?",
     },
     commandHint: {
       unknown: "Comando desconocido. Presiona Esc para enviarlo como mensaje o escribe /help.",

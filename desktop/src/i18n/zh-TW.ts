@@ -30,7 +30,12 @@ export const zhTW: Catalog = {
     "models": "模型設定",
     "workspace": "工作區設定",
     "changelog": "查看版本更新記錄",
-    "learnMore": "瞭解更多"
+    "learnMore": "瞭解更多",
+    "quit": "結束 CowBot"
+  },
+  "tray": {
+    "open": "開啟 CowBot",
+    "quit": "結束 CowBot"
   },
   "approval": {
     "auto": "自動",
@@ -115,7 +120,10 @@ export const zhTW: Catalog = {
       "hint": "此裝置的介面偏好。",
       "botTagsTitle": "代理標籤",
       "botTagsHint": "在代理名稱旁加上小型“機器人”標籤。當隊友和代理共用同一個對話時很有用；預設關閉。",
-      "botTagsToggle": "在代理名稱旁顯示“機器人”"
+      "botTagsToggle": "在代理名稱旁顯示“機器人”",
+      "closeToTrayTitle": "在背景繼續執行",
+      "closeToTrayHint": "關閉視窗時 CowBot 會隱藏到系統匣而非結束，代理回合與背景工作會繼續執行。要結束請使用系統匣圖示或「結束 CowBot」。",
+      "closeToTrayToggle": "關閉視窗後 CowBot 繼續執行"
     },
     "models": {
       "title": "模型",
@@ -374,6 +382,7 @@ export const zhTW: Catalog = {
     },
     "notice": {
       "slashUnavailable": "斜槓命令不可用；以 / 開頭的草稿將作為普通訊息傳送。{detail}",
+      "quitBlocked": "CowBot 仍在執行工作。請等待完成，或先在對話中停止，然後再結束。",
       "compactedOne": "已壓縮 {count} 條上下文：{before} → {after} tokens。",
       "compactedOther": "已壓縮 {count} 條上下文：{before} → {after} tokens。",
       "compactionRunning": "該分支已有壓縮任務在執行。",
@@ -409,7 +418,8 @@ export const zhTW: Catalog = {
       "bypass": "“略過權限”會執行所有工具呼叫。高風險呼叫仍遵循“設定 → 核准”中的工作區策略。繼續？",
       "cancelTasksOne": "取消此聊天中正在執行的任務？",
       "cancelTasksOther": "取消此聊天中全部 {count} 個正在執行的任務？",
-      "cancelTaskDetail": "取消此任務及其目前指派？"
+      "cancelTaskDetail": "取消此任務及其目前指派？",
+      "quitRunning": "仍有工作或回覆在執行。結束會取消它們並遺失進行中的工作。仍要結束嗎？"
     },
     "commandHint": {
       "unknown": "未知命令。按 Esc 作為訊息傳送，或輸入 /help。",

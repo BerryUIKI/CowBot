@@ -31,6 +31,11 @@ export const hi: Catalog = {
     workspace: "कार्यक्षेत्र सेटिंग्स",
     changelog: "चेंजलॉग देखें",
     learnMore: "और जानें",
+    quit: "CowBot बंद करें",
+  },
+  tray: {
+    open: "CowBot खोलें",
+    quit: "CowBot बंद करें",
   },
   approval: {
     auto: "स्वतः",
@@ -123,6 +128,10 @@ export const hi: Catalog = {
       botTagsHint:
         "एजेंट नामों के बगल में छोटा “बॉट” टैग जोड़ें। तब उपयोगी है जब साथी और एजेंट एक ही बातचीत साझा करते हैं; डिफ़ॉल्ट रूप से बंद।",
       botTagsToggle: "एजेंट नामों के बगल में “बॉट” दिखाएँ",
+      closeToTrayTitle: "पृष्ठभूमि में चलते रहें",
+      closeToTrayHint:
+        "विंडो बंद करने पर CowBot बंद होने के बजाय सिस्टम ट्रे में छिप जाता है, ताकि एजेंट टर्न और पृष्ठभूमि में चल रहे काम जारी रहें। इसे समाप्त करने के लिए ट्रे आइकन या “CowBot बंद करें” का उपयोग करें।",
+      closeToTrayToggle: "विंडो बंद करने पर CowBot चलता रहे",
     },
     models: {
       title: "मॉडल",
@@ -392,6 +401,8 @@ export const hi: Catalog = {
     notice: {
       slashUnavailable:
         "स्लैश कमांड उपलब्ध नहीं हैं; / से शुरू होने वाले ड्राफ़्ट संदेशों के रूप में भेजे जाते हैं। {detail}",
+      quitBlocked:
+        "CowBot अभी भी कुछ चला रहा है। बंद करने से पहले उसके पूरा होने की प्रतीक्षा करें या उसे चैट से रोकें।",
       compactedOne: "{count} प्रविष्टि संक्षिप्त की गई: {before} → {after} टोकन।",
       compactedOther: "{count} प्रविष्टियाँ संक्षिप्त की गईं: {before} → {after} टोकन।",
       compactionRunning: "इस ब्रांच के लिए संक्षिप्तीकरण पहले से चल रहा है।",
@@ -430,6 +441,7 @@ export const hi: Catalog = {
       cancelTasksOne: "इस चैट में चल रहा कार्य रद्द करें?",
       cancelTasksOther: "इस चैट में चल रहे सभी {count} कार्य रद्द करें?",
       cancelTaskDetail: "यह कार्य और इसका सक्रिय असाइनमेंट रद्द करें?",
+      quitRunning: "कुछ कार्य या उत्तर अभी भी चल रहे हैं। बंद करने पर वे रद्द हो जाएँगे और अधूरा काम खो जाएगा। फिर भी बंद करें?",
     },
     commandHint: {
       unknown: "अज्ञात कमांड। संदेश के रूप में भेजने के लिए Esc दबाएँ, या /help टाइप करें।",

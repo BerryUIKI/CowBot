@@ -31,6 +31,11 @@ export const zhCN: Catalog = {
     workspace: "工作区设置",
     changelog: "查看更新记录",
     learnMore: "了解更多",
+    quit: "退出 CowBot",
+  },
+  tray: {
+    open: "打开 CowBot",
+    quit: "退出 CowBot",
   },
   approval: {
     auto: "自动",
@@ -119,6 +124,10 @@ export const zhCN: Catalog = {
       botTagsHint:
         "在智能体名称旁添加一个小巧的“机器人”标签。当队友和智能体处于同一会话时很有用；默认关闭。",
       botTagsToggle: "在智能体名称旁显示“机器人”",
+      closeToTrayTitle: "在后台继续运行",
+      closeToTrayHint:
+        "关闭窗口时 CowBot 会隐藏到系统托盘而不是退出，智能体的回合和后台任务会继续运行。要结束请使用托盘图标或“退出 CowBot”。",
+      closeToTrayToggle: "关闭窗口后 CowBot 继续运行",
     },
     models: {
       title: "模型",
@@ -385,6 +394,8 @@ export const zhCN: Catalog = {
     notice: {
       slashUnavailable:
         "斜杠命令不可用；以 / 开头的草稿将作为普通消息发送。{detail}",
+      quitBlocked:
+        "CowBot 仍在执行任务。请等待完成，或先在对话中停止，然后再退出。",
       compactedOne: "已压缩 {count} 条上下文：{before} → {after} tokens。",
       compactedOther: "已压缩 {count} 条上下文：{before} → {after} tokens。",
       compactionRunning: "该分支已有压缩任务在运行。",
@@ -422,6 +433,7 @@ export const zhCN: Catalog = {
       cancelTasksOne: "取消此聊天中正在运行的任务？",
       cancelTasksOther: "取消此聊天中全部 {count} 个正在运行的任务？",
       cancelTaskDetail: "取消此任务及其当前分配？",
+      quitRunning: "还有任务或回复正在运行。退出会取消它们并丢失进行中的工作。仍要退出吗？",
     },
     commandHint: {
       unknown: "未知命令。按 Esc 作为消息发送，或输入 /help。",
