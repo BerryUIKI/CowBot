@@ -1463,6 +1463,13 @@ export const de: Catalog = {
     nothingBody:
       "Genehmigungen erscheinen hier, wenn ein laufender Agent ein Tool verwenden möchte.",
   },
+  offlineModelNotice: {
+    title: "In dieser Unterhaltung ist kein Modell verbunden",
+    body: "Antworten kommen vom Offline-Echomodell, das Ihre Eingabe wiederholt, statt sie zu beantworten. Verbinden Sie einen Modellanbieter, um echte Antworten zu erhalten.",
+    openSettings: "Modell verbinden",
+    dismiss: "Ausblenden",
+    dismissTitle: "Diesen Hinweis für diese Unterhaltung ausblenden",
+  },
   sideAnswer: {
     aria: "Nebenantwort",
     title: "Nebenantwort von {name}",

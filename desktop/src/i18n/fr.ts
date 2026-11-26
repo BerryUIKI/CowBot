@@ -1454,6 +1454,13 @@ export const fr: Catalog = {
     nothingBody:
       "Les approbations apparaissent ici lorsqu’un agent en cours demande à utiliser un outil.",
   },
+  offlineModelNotice: {
+    title: "Aucun modèle n'est connecté à cette conversation",
+    body: "Les réponses viennent du modèle d'écho hors ligne, qui répète votre message au lieu d'y répondre. Connectez un fournisseur de modèles pour obtenir de vraies réponses.",
+    openSettings: "Connecter un modèle",
+    dismiss: "Masquer",
+    dismissTitle: "Masquer ce rappel pour cette conversation",
+  },
   sideAnswer: {
     aria: "Réponse annexe",
     title: "Réponse annexe de {name}",

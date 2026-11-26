@@ -1384,6 +1384,13 @@ export const zhCN: Catalog = {
     nothingTitle: "没有待处理项。",
     nothingBody: "运行中的智能体请求使用工具时，审批会显示在这里。",
   },
+  offlineModelNotice: {
+    title: "此对话尚未连接模型",
+    body: "回复来自离线回显模型，它不会作答，只会重复你的提示词。连接一个模型供应商即可获得真实回复。",
+    openSettings: "连接模型",
+    dismiss: "关闭",
+    dismissTitle: "在此对话中不再显示此提醒",
+  },
   sideAnswer: {
     aria: "旁支回答",
     title: "来自 {name} 的旁支回答",

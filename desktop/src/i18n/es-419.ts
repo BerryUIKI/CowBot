@@ -1430,6 +1430,13 @@ export const es419: Catalog = {
     nothingBody:
       "Las aprobaciones aparecen aquí cuando un agente en ejecución pide usar una herramienta.",
   },
+  offlineModelNotice: {
+    title: "Esta conversación no tiene un modelo conectado",
+    body: "Las respuestas provienen del modelo de eco sin conexión, que repite tu mensaje en lugar de responderlo. Conecta un proveedor de modelos para obtener respuestas reales.",
+    openSettings: "Conectar un modelo",
+    dismiss: "Descartar",
+    dismissTitle: "Ocultar este aviso para esta conversación",
+  },
   sideAnswer: {
     aria: "Respuesta aparte",
     title: "Respuesta aparte de {name}",

@@ -1423,6 +1423,13 @@ export const ptBR: Catalog = {
     nothingBody:
       "As aprovações aparecem aqui quando um agente em execução pede para usar uma ferramenta.",
   },
+  offlineModelNotice: {
+    title: "Esta conversa não tem um modelo conectado",
+    body: "As respostas vêm do modelo de eco offline, que repete sua mensagem em vez de respondê-la. Conecte um provedor de modelos para receber respostas reais.",
+    openSettings: "Conectar um modelo",
+    dismiss: "Dispensar",
+    dismissTitle: "Ocultar este aviso para esta conversa",
+  },
   sideAnswer: {
     aria: "Resposta paralela",
     title: "Resposta paralela de {name}",

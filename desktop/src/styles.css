@@ -5423,6 +5423,46 @@ button {
   line-height: 1.45;
 }
 
+.offline-model-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 0 8px 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--brass);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brass) 5%, var(--panel, #1b1a18));
+}
+
+.offline-model-notice-body {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.offline-model-notice-title {
+  color: var(--paper);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.offline-model-notice-text {
+  color: var(--paper-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.offline-model-notice-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .side-answer {
   margin: 0 8px 10px;
   padding: 12px 14px;
