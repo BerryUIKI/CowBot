@@ -7,12 +7,13 @@ team sharing a workspace over HTTPS). This page covers the server.
 > **Status.** The server is Phase 2 and under active development. It hosts
 > accounts, workspaces, roles, channels, messages, tasks, approvals, audit, API
 > tokens, a live event stream, memory, conversations and their context,
-> previews, recorded prompts, templates, and package transfer. The desktop
-> cannot switch to a server from its settings yet — a client speaks to it
-> directly for now — and agent turns still run in the desktop's process with its
-> model provider, so the server stores and serves state rather than executing
-> work. Treat it as a small-team deployment on a network you control, not a
-> public service.
+> previews, recorded prompts, templates, and package transfer. A desktop
+> connects to it from Settings → Server (ADR-0053). Agent turns run in the
+> desktop's process with its model provider unless you set the four
+> `COWBOT_SERVER_LLM_*` variables, which let the server answer channel turns
+> itself (ADR-0055); without them the server stores and serves state rather
+> than executing work. Treat it as a small-team deployment on a network you
+> control, not a public service.
 
 ## What it needs
 

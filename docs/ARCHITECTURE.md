@@ -39,7 +39,7 @@
 CLI (cowbot) -- cowbot-client -- local mode or remote server
 ```
 
-- The desktop app runs in local mode by default and needs no server; server mode is provided by `RemoteClient`, though the desktop settings do not yet offer choosing a server.
+- The desktop app runs in local mode by default and needs no server; server mode is provided by `RemoteClient` and chosen in Settings → Server, which saves the connection and restarts into it (ADR-0053).
 - The server supports multiple users from v1; local mode auto-creates a single-user workspace, but the data model matches the server.
 
 ### 2.1 Implementation Order
