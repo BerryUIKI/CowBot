@@ -1426,6 +1426,13 @@ export const en = {
     nothingBody:
       "Approvals appear here when a running agent asks to use a tool.",
   },
+  offlineModelNotice: {
+    title: "This conversation has no model connected",
+    body: "Answers come from the offline echo model, which repeats your prompt instead of answering it. Connect a model provider to get real replies.",
+    openSettings: "Connect a model",
+    dismiss: "Dismiss",
+    dismissTitle: "Hide this reminder for this conversation",
+  },
   sideAnswer: {
     aria: "Side answer",
     title: "Side answer from {name}",

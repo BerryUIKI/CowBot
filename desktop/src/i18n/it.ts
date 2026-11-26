@@ -1440,6 +1440,13 @@ export const it: Catalog = {
     nothingBody:
       "Le approvazioni compaiono qui quando un agente in esecuzione chiede di usare uno strumento.",
   },
+  offlineModelNotice: {
+    title: "Questa conversazione non ha un modello collegato",
+    body: "Le risposte provengono dal modello echo offline, che ripete il tuo messaggio invece di rispondere. Collega un fornitore di modelli per ottenere risposte reali.",
+    openSettings: "Collega un modello",
+    dismiss: "Nascondi",
+    dismissTitle: "Nascondi questo promemoria per questa conversazione",
+  },
   sideAnswer: {
     aria: "Risposta a margine",
     title: "Risposta a margine di {name}",

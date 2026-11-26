@@ -1423,6 +1423,13 @@ export const id: Catalog = {
     nothingBody:
       "Persetujuan muncul di sini saat agen yang berjalan meminta untuk menggunakan alat.",
   },
+  offlineModelNotice: {
+    title: "Percakapan ini tidak memiliki model yang terhubung",
+    body: "Jawaban berasal dari model gema offline, yang mengulang pesan Anda alih-alih menjawabnya. Hubungkan penyedia model untuk mendapatkan balasan sungguhan.",
+    openSettings: "Hubungkan model",
+    dismiss: "Tutup",
+    dismissTitle: "Sembunyikan pengingat ini untuk percakapan ini",
+  },
   sideAnswer: {
     aria: "Jawaban sampingan",
     title: "Jawaban sampingan dari {name}",

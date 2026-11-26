@@ -1423,6 +1423,13 @@ export const ja: Catalog = {
     nothingBody:
       "実行中のエージェントがツールの使用を要求すると、ここに承認が表示されます。",
   },
+  offlineModelNotice: {
+    title: "この会話にはモデルが接続されていません",
+    body: "応答はオフラインのエコーモデルによるもので、回答せずに入力をそのまま繰り返します。実際の応答を得るにはモデルプロバイダーを接続してください。",
+    openSettings: "モデルを接続",
+    dismiss: "閉じる",
+    dismissTitle: "この会話ではこの通知を表示しない",
+  },
   sideAnswer: {
     aria: "サイドの回答",
     title: "{name} からのサイドの回答",

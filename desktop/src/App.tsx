@@ -27,6 +27,7 @@ import RichText from "./RichText";
 import Onboarding from "./Onboarding";
 import SettingsView, { settingsSections } from "./SettingsView";
 import type { SettingsSection } from "./SettingsView";
+import OfflineModelNotice from "./OfflineModelNotice";
 import SideAnswerPanel from "./SideAnswerPanel";
 import SlashCommandMenu from "./SlashCommandMenu";
 import CommandArgumentMenu from "./CommandArgumentMenu";
@@ -404,6 +405,12 @@ export default function App() {
     null,
   );
   const [notice, setNotice] = useState<string | null>(null);
+  /// Conversations the user dismissed the offline-model reminder in. It is a
+  /// per-chat nudge rather than a global setting, so switching to another chat
+  /// shows it there while a dismissed chat stays quiet.
+  const [offlineNoticeDismissed, setOfflineNoticeDismissed] = useState<
+    Set<string>
+  >(() => new Set());
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskDescription, setTaskDescription] = useState("");
   const [taskOutput, setTaskOutput] = useState("");
@@ -2972,6 +2979,20 @@ export default function App() {
 
   const activeModelProvider =
     modelSettings?.providers.find((provider) => provider.active) ?? null;
+  /// Whether the open conversation is answered by the offline echo model: no
+  /// connection supplies it. A conversation reports `provider_id: null` when no
+  /// connection is active, and a pinned conversation whose provider was deleted
+  /// falls back to the default, so this matches what the turn will actually use
+  /// (ADR-0012, ADR-0049). The echo model repeats the prompt, which reads as a
+  /// bad answer rather than as missing configuration.
+  const answersOnEchoModel = conversationContext
+    ? conversationContext.provider_id === null
+    : activeModelProvider === null;
+  const offlineNoticeKey = selectedChannel?.id ?? null;
+  const showOfflineModelNotice =
+    answersOnEchoModel &&
+    offlineNoticeKey !== null &&
+    !offlineNoticeDismissed.has(offlineNoticeKey);
   /// A conversation runs on its own recorded model; channels and direct chats
   /// run on the default (ADR-0049).
   const conversationScope =
@@ -4115,6 +4136,23 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              ) : null}
+
+              {showOfflineModelNotice ? (
+                <OfflineModelNotice
+                  onOpenModelSettings={() => {
+                    setSettingsSection("model");
+                    setView("settings");
+                  }}
+                  onDismiss={() =>
+                    setOfflineNoticeDismissed((dismissed) => {
+                      if (offlineNoticeKey === null) return dismissed;
+                      const next = new Set(dismissed);
+                      next.add(offlineNoticeKey);
+                      return next;
+                    })
+                  }
+                />
               ) : null}
 
               {sideAnswer ? (

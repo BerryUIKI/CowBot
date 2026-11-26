@@ -1404,6 +1404,13 @@ export const ko: Catalog = {
     nothingBody:
       "실행 중인 에이전트가 도구 사용을 요청하면 승인이 여기에 표시됩니다.",
   },
+  offlineModelNotice: {
+    title: "이 대화에는 연결된 모델이 없습니다",
+    body: "응답은 오프라인 에코 모델에서 나오며, 답변 대신 입력을 그대로 반복합니다. 실제 응답을 받으려면 모델 공급자를 연결하세요.",
+    openSettings: "모델 연결",
+    dismiss: "닫기",
+    dismissTitle: "이 대화에서 이 알림 숨기기",
+  },
   sideAnswer: {
     aria: "곁가지 답변",
     title: "{name}의 곁가지 답변",

@@ -1339,6 +1339,13 @@ export const zhTW: Catalog = {
     "nothingTitle": "沒有待處理項。",
     "nothingBody": "執行中的代理請求使用工具時，核准會顯示在這裡。"
   },
+  "offlineModelNotice": {
+    "title": "此對話尚未連接模型",
+    "body": "回覆來自離線回聲模型，它不會作答，只會重複你的提示詞。連接一個模型供應商即可獲得真實回覆。",
+    "openSettings": "連接模型",
+    "dismiss": "關閉",
+    "dismissTitle": "在此對話中不再顯示此提醒",
+  },
   "sideAnswer": {
     "aria": "旁支回答",
     "title": "來自 {name} 的旁支回答",
