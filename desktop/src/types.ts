@@ -24,6 +24,7 @@ import type {
   Note,
   PromptKind,
   PromptPlan,
+  Role,
   RuleDecision,
   TaskWorktree,
   TokenSource,
@@ -106,6 +107,7 @@ export type {
   RecallPreview,
   RecallSkipReason,
   ReplyMode,
+  Role,
   RouteSource,
   RoutingMode,
   RuleDecision,
@@ -155,6 +157,20 @@ export interface ClientUser {
 export interface ClientSession {
   user: ClientUser;
   workspace: Workspace;
+  /**
+   * What this account may do in `workspace`.
+   *
+   * A local workspace has one person at `owner`, so this is a real answer in
+   * both modes. It decides whether the member panel renders at all.
+   */
+  role: Role;
+  /**
+   * The roles `role` may hand out, strongest first.
+   *
+   * Comes from the server rather than being derived here: the picker offers
+   * exactly what the routes would accept.
+   */
+  grantable_roles: Role[];
 }
 
 export const approvalModes: ApprovalMode[] = [
@@ -461,11 +477,37 @@ export interface ServerSettings {
 export interface ServerWorkspace {
   id: string;
   name: string;
+  role: Role;
 }
 
 /** What a sign-in reachable without saving the configuration reports. */
 export interface ServerProbe {
   workspaces: ServerWorkspace[];
+}
+
+/** One member of the open workspace. */
+export interface MemberView {
+  user_id: string;
+  name: string;
+  email: string;
+  role: Role;
+}
+
+/**
+ * An invitation nobody has redeemed yet.
+ *
+ * The token is not part of it: the server keeps only a hash, so a listed
+ * invitation cannot be handed to anyone. Only {@link InviteGrant} carries one.
+ */
+export interface InviteView {
+  id: string;
+  role: Role;
+  expires_at: string;
+}
+
+/** A freshly minted invitation, with the only copy of its token. */
+export interface InviteGrant extends InviteView {
+  token: string;
 }
 
 export interface Project {

@@ -23,6 +23,9 @@ import type {
   ConversationTurn,
   CowEvent,
   IntegrationView,
+  InviteGrant,
+  InviteView,
+  MemberView,
   MemoryEntry,
   MemoryEntryUpdate,
   MemoryFilter,
@@ -46,6 +49,7 @@ import type {
   PromptSnapshotSettings,
   PromptSnapshotSummary,
   ProviderProtocol,
+  Role,
   RuleDecision,
   Run,
   ServerProbe,
@@ -766,6 +770,68 @@ export function useLocalBackend(): Promise<void> {
 /** Forget the saved server session and return to the local workspace. */
 export function disconnectServer(): Promise<void> {
   return invoke<void>("disconnect_server");
+}
+
+/**
+ * Join a server by redeeming an invitation, creating the account if needed.
+ *
+ * The counterpart of {@link connectServer} for someone who has never signed in:
+ * the invitation is the credential. Saves the connection and restarts.
+ */
+export function redeemInvite(
+  baseUrl: string,
+  inviteToken: string,
+  name: string,
+  email: string,
+  password: string,
+): Promise<void> {
+  return invoke<void>("redeem_invite", {
+    baseUrl,
+    inviteToken,
+    name,
+    email,
+    password,
+  });
+}
+
+/** Everyone in the open workspace, with their role. */
+export function getMembers(): Promise<MemberView[]> {
+  return invoke<MemberView[]>("get_members");
+}
+
+/** Change a member's role. The server decides whether this caller may. */
+export function setMemberRole(userId: string, role: Role): Promise<MemberView> {
+  return invoke<MemberView>("set_member_role", { userId, role });
+}
+
+/** Remove a member. Their account and their past messages stay. */
+export function removeMember(userId: string): Promise<void> {
+  return invoke<void>("remove_member", { userId });
+}
+
+/** Invitations that are still redeemable, without their tokens. */
+export function listInvites(): Promise<InviteView[]> {
+  return invoke<InviteView[]>("list_invites");
+}
+
+/** Mint an invitation and return its token. This is the only copy of it. */
+export function createInvite(role: Role): Promise<InviteGrant> {
+  return invoke<InviteGrant>("create_invite", { role });
+}
+
+/** Cancel an invitation nobody has redeemed yet. */
+export function revokeInvite(inviteId: string): Promise<void> {
+  return invoke<void>("revoke_invite", { inviteId });
+}
+
+/**
+ * Join a workspace this account was invited to, without leaving the one open.
+ *
+ * The new workspace appears in the picker afterwards; switching to it is the
+ * existing restart-into-it path.
+ */
+export function acceptInvite(token: string): Promise<ServerWorkspace> {
+  return invoke<ServerWorkspace>("accept_invite", { token });
 }
 
 export function switchWorkspace(database: string): Promise<void> {
