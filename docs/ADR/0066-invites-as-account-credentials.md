@@ -80,20 +80,22 @@ That case has its own path: sign in and `POST /api/v1/invites/accept`, which
 adds a workspace to an existing account. The desktop offers it beside the
 redeem form, so the 409 is not a dead end.
 
-### 4. The server states what a role may grant
+### 4. The server states what a role may grant, and who it may manage
 
 `Role::grantable` answers "which roles may this one hand out", and every
-workspace the API returns carries `grantable_roles` beside `role`.
+workspace the API returns carries `grantable_roles` beside `role`. Every listed
+member carries `manageable`, answered from the caller's role against that
+member's.
 
-This is deliberately server-side. The desktop's role picker needs the answer,
-and deriving it there from `can_grant` would be a second copy of the policy on
-the side that does not enforce it. The two would agree until one changed, and
-then a picker would offer a role the route refuses.
+Both are deliberately server-side. The desktop needs the answers — one to fill a
+role picker, one to decide whether a row shows its controls — and deriving
+either from `Role` on the client would be a second copy of the policy on the
+side that does not enforce it. The two would agree until one changed, and then a
+screen would offer a control the route refuses.
 
-The member panel has no "may I manage this person" flag either, and does not
-invent one: it shows controls on a row whose current role is in `grantable_roles`,
-which is exactly the set of people an admin may act on. Where the server refuses
-anyway — demoting the last owner — its message is shown rather than predicted.
+`manageable` is not the whole answer: the last owner may not be demoted or
+removed, which depends on the roll rather than on two roles. So a `true` can
+still be refused, and the refusal is shown rather than predicted.
 
 ### 5. The desktop learns its own role
 
@@ -125,8 +127,8 @@ limitation rather than a plan.
   changes three call sites (`probe`, `resume`, `connect`) to tolerate a zero
   workspace list, and the desktop would still need a screen for "you belong to
   nothing yet". The redeem route adds a door instead of widening an existing one.
-- **Derive `grantable_roles` in the desktop.** One more place for the policy to
-  live, on the wrong side of the boundary.
+- **Derive `grantable_roles` and `manageable` in the desktop.** One more place
+  for the policy to live, on the wrong side of the boundary.
 - **Notify members over the live stream.** See §6.
 
 ## Consequences
