@@ -2825,6 +2825,21 @@ pub fn set_close_to_tray(state: State<'_, AppState>, enabled: bool) -> Result<()
     crate::shell::set_close_to_tray(&state, enabled)
 }
 
+/// Whether a settled run or a waiting approval raises a system notification.
+#[tauri::command]
+pub fn get_notifications_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(load_config(&state)?.notifications_enabled)
+}
+
+/// Persist whether CowBot raises system notifications while it is hidden.
+#[tauri::command]
+pub fn set_notifications_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut config = load_config(&state)?;
+    config.notifications_enabled = enabled;
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))
+}
+
 /// Point the app at another folder for workspace databases and restart.
 #[tauri::command]
 pub fn set_database_directory(

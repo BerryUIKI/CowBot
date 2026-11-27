@@ -195,6 +195,13 @@ pub struct AppConfig {
     /// "close means quit" behaviour turns it off in Settings → General.
     #[serde(default = "close_to_tray_default")]
     pub close_to_tray: bool,
+    /// Whether a run that settles, or an approval that starts waiting, raises a
+    /// system notification while the window is hidden (ADR-0065).
+    ///
+    /// On by default: with the shell resident, nothing else tells a user who
+    /// closed the window that work is blocked or finished.
+    #[serde(default = "notifications_default")]
+    pub notifications_enabled: bool,
     /// Absolute folder that holds the workspace databases.
     ///
     /// Missing means the app data directory. The first-run guide offers a
@@ -232,6 +239,10 @@ fn close_to_tray_default() -> bool {
     true
 }
 
+fn notifications_default() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -242,6 +253,7 @@ impl Default for AppConfig {
             ui_locale: None,
             show_agent_bot_tags: false,
             close_to_tray: true,
+            notifications_enabled: true,
             database_dir: None,
             active_workspace_database: None,
             workspaces: Vec::new(),
@@ -915,6 +927,22 @@ mod tests {
     }
 
     #[test]
+    fn notifications_default_on_for_existing_configurations() {
+        let root = tempfile::tempdir().unwrap();
+        let path = config_path(root.path());
+        fs::write(&path, r#"{"version":1,"providers":[]}"#).unwrap();
+        assert!(load(&path).unwrap().notifications_enabled);
+
+        let config = AppConfig {
+            notifications_enabled: false,
+            ..AppConfig::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert!(!load(&path).unwrap().notifications_enabled);
+    }
+
+    #[test]
     fn save_and_load_roundtrip() {
         let root = tempfile::tempdir().unwrap();
         let path = config_path(root.path());
@@ -926,6 +954,7 @@ mod tests {
             ui_locale: None,
             show_agent_bot_tags: false,
             close_to_tray: true,
+            notifications_enabled: false,
             database_dir: None,
             active_workspace_database: Some("workspaces/one.db".to_string()),
             workspaces: vec![WorkspaceEntry {
