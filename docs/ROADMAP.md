@@ -145,6 +145,13 @@ Delivered:
 > last Owner cannot be demoted or removed. Membership changes append audit
 > events with the acting user (ADR-0044). Channel, task, and approval routes
 > reuse `require_member` and land with 2.3.
+>
+> The flow now runs end to end. An invitation can create the account it was sent
+> to (`POST /api/v1/invites/redeem`, ADR-0066), which it could not before: the
+> accept route needed a session and nothing in the server created accounts, so a
+> second person had no way in at all. The desktop manages the roster and the
+> codes from Settings → Server, and a workspace states `grantable_roles` so the
+> role pickers offer exactly what the routes accept.
 | 2.3 | Remote client mode | `cowbot-client` remote implementation; desktop sign-in and server connection; reconnection; local/team mode switch | 2.1, 2.2 |
 
 > **2.3 progress**: complete. `RemoteClient` implements the `Client` trait over

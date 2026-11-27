@@ -175,6 +175,27 @@ event, so Settings → General switches it without a restart. Uses
 `tauri-plugin-notification` in Rust only; no frontend plugin or ACL entry. See
 [ADR-0065](../docs/ADR/0065-desktop-notifications.md).
 
+## Members and invitations
+
+Settings → Server covers membership from both ends. A device with no account
+offers **Join with an invitation**: it calls `redeem_invite`, and the server
+creates the account from the invitation code (ADR-0066). A connected device
+offers the member and invitation panels in `ServerMembers.tsx` and a **Join
+another workspace** box for an account that already exists.
+
+`ServerMembers.tsx` renders from `ClientSession.grantable_roles` rather than
+deciding anything itself: the role pickers list what the server said this
+account may grant, and a row shows its controls when its current role is in that
+set. The member list is a snapshot read on open with a Refresh button, because
+nothing publishes a membership event on the live stream.
+
+The invitation code is shown once, with a copy button — the server keeps only a
+hash, so it cannot be displayed again. Losing a code means revoking it and
+minting another; spreading it means spreading an account at that role.
+
+Local mode has one member, which is a real row rather than an empty list, so
+the panel says so and offers no role or removal controls.
+
 ## Build
 
 ```bash

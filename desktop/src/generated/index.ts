@@ -72,6 +72,7 @@ export type { RecallCandidate } from "./RecallCandidate";
 export type { RecallPreview } from "./RecallPreview";
 export type { RecallSkipReason } from "./RecallSkipReason";
 export type { ReplyMode } from "./ReplyMode";
+export type { Role } from "./Role";
 export type { RouteSource } from "./RouteSource";
 export type { RoutingMode } from "./RoutingMode";
 export type { RuleDecision } from "./RuleDecision";

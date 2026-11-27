@@ -43,6 +43,7 @@ impl std::fmt::Display for WorkspaceId {
     }
 }
 
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS), ts(export))]
 /// Role of a user within a workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +106,19 @@ impl Role {
     /// Whether this role may invite people into the workspace.
     pub fn can_invite(self) -> bool {
         matches!(self, Role::Owner | Role::Admin)
+    }
+
+    /// The roles this one may hand out, strongest first.
+    ///
+    /// The server sends this with every workspace it returns, so a role picker
+    /// offers exactly what the route would accept. A client that re-derived it
+    /// from [`Role::can_grant`] would be a second copy of the policy, free to
+    /// drift from the one the server enforces.
+    pub fn grantable(self) -> Vec<Role> {
+        [Role::Owner, Role::Admin, Role::Member]
+            .into_iter()
+            .filter(|role| self.can_grant(*role))
+            .collect()
     }
 
     /// Whether this role may create, rename, or delete channels, agents, and
@@ -320,6 +334,16 @@ mod tests {
         assert!(!Role::Member.can_invite());
         assert!(!Role::Member.can_administer());
         assert!(Role::Member.can_write());
+    }
+
+    #[test]
+    fn a_role_offers_exactly_the_roles_it_may_grant() {
+        assert_eq!(
+            Role::Owner.grantable(),
+            vec![Role::Owner, Role::Admin, Role::Member]
+        );
+        assert_eq!(Role::Admin.grantable(), vec![Role::Member]);
+        assert!(Role::Member.grantable().is_empty());
     }
 
     #[test]

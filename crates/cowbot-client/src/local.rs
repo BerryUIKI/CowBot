@@ -20,6 +20,7 @@ use cowbot_core::conversation::{
     ConversationSettingsUpdate, ConversationTurn, TurnId,
 };
 use cowbot_core::error::{CowError, CowResult};
+use cowbot_core::identity::{Role, UserId};
 use cowbot_core::integration::{IntegrationBinding, IntegrationId, NewIntegration};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -84,9 +85,10 @@ pub fn latest_database_schema_version() -> i64 {
 
 use crate::{
     AgentUpdate, BindingView, Client, ClientSession, ClientUser, ConversationSummary, EventStream,
-    IntegrationView, MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate,
-    NewBinding, NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave,
-    RecalledMemory, SessionDecisionView, WorkspaceImport,
+    IntegrationView, InviteGrant, InviteView, MemberView, MemoryFilter, MemoryNotes, MemorySave,
+    MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation, NewIntegrationRequest,
+    NewMemory, NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView,
+    WorkspaceImport,
 };
 
 /// In-process client backed by `cowbot-store` and `cowbot-service`.
@@ -163,6 +165,15 @@ impl LocalClient {
         }
         let worktrees = WorktreeService::new(store.clone(), bus.clone());
         worktrees.reconcile().await?;
+        // A local workspace has one person, and bootstrap writes that person as
+        // its Owner, so the role is read rather than assumed. A database that
+        // predates the membership row still behaves like an owner: there is
+        // nobody else in it to be responsible for.
+        let role = store
+            .get_membership(&context.user.id, &context.workspace.id)
+            .await?
+            .map(|membership| membership.role)
+            .unwrap_or(Role::Owner);
         let session = ClientSession {
             user: ClientUser {
                 id: context.user.id,
@@ -170,6 +181,8 @@ impl LocalClient {
                 email: context.user.email,
             },
             workspace: context.workspace,
+            role,
+            grantable_roles: role.grantable(),
         };
 
         Ok(Self {
@@ -548,6 +561,8 @@ impl Client for LocalClient {
                 email: user.email,
             },
             workspace: self.session.workspace.clone(),
+            role: self.session.role,
+            grantable_roles: self.session.grantable_roles.clone(),
         })
     }
 
@@ -589,6 +604,8 @@ impl Client for LocalClient {
                 email,
             },
             workspace: self.session.workspace.clone(),
+            role: self.session.role,
+            grantable_roles: self.session.grantable_roles.clone(),
         })
     }
 
@@ -1167,6 +1184,60 @@ impl Client for LocalClient {
             .await
     }
 
+    async fn list_members(&self) -> CowResult<Vec<MemberView>> {
+        // One person, and the membership row bootstrap wrote says so. Reading
+        // it beats returning an empty list, which would look like a workspace
+        // nobody can be in.
+        let mut members = Vec::new();
+        for membership in self.store.list_members(&self.session.workspace.id).await? {
+            let Some(user) = self.store.get_user(&membership.user_id).await? else {
+                continue;
+            };
+            members.push(MemberView {
+                user_id: user.id,
+                name: user.name,
+                email: user.email,
+                role: membership.role,
+                // There is nobody else here to manage.
+                manageable: false,
+            });
+        }
+        Ok(members)
+    }
+
+    async fn set_member_role(&self, user_id: &UserId, role: Role) -> CowResult<MemberView> {
+        // A local workspace has exactly one member, so changing a role is never
+        // a thing to do here: refusing names the reason instead of pretending.
+        let _ = (user_id, role);
+        Err(no_members_to_manage())
+    }
+
+    async fn remove_member(&self, user_id: &UserId) -> CowResult<()> {
+        let _ = user_id;
+        Err(no_members_to_manage())
+    }
+
+    async fn list_invites(&self) -> CowResult<Vec<InviteView>> {
+        // Unlike the writes below, an empty list is true: nobody is invited to
+        // a workspace with one person in it.
+        Ok(Vec::new())
+    }
+
+    async fn create_invite(&self, role: Role) -> CowResult<InviteGrant> {
+        let _ = role;
+        Err(no_invites())
+    }
+
+    async fn revoke_invite(&self, invite_id: &str) -> CowResult<()> {
+        let _ = invite_id;
+        Err(no_invites())
+    }
+
+    async fn accept_invite(&self, token: &str) -> CowResult<RemoteWorkspace> {
+        let _ = token;
+        Err(no_invites())
+    }
+
     async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>> {
         let records = self
             .store
@@ -1322,6 +1393,27 @@ fn binding_view(binding: IntegrationBinding) -> BindingView {
 /// more useful than reporting true and offering a control that does nothing.
 fn supported_locally(_kind: cowbot_core::integration::IntegrationKind) -> bool {
     false
+}
+
+/// Why a local workspace cannot manage its membership.
+///
+/// It has one person, so there is no role to change and nobody to remove.
+/// Reporting that is more useful than a silent success over a set of one.
+fn no_members_to_manage() -> CowError {
+    CowError::Config(
+        "a local workspace has one person, so there are no roles or removals to make; \
+         connect to a server workspace to manage members"
+            .into(),
+    )
+}
+
+/// Why a local workspace cannot send or redeem invitations.
+fn no_invites() -> CowError {
+    CowError::Config(
+        "a local workspace has one person and no server to join it, so invitations need \
+         a server workspace"
+            .into(),
+    )
 }
 
 #[cfg(test)]
@@ -1650,6 +1742,44 @@ mod tests {
         assert!(channels.iter().any(|channel| {
             channel.agent_id.as_ref() == Some(&agent.id) && channel.name == "chief"
         }));
+    }
+
+    #[tokio::test]
+    async fn a_local_workspace_reports_its_one_person_and_no_invitations() {
+        let client = LocalClient::open_in_memory().await.unwrap();
+
+        let session = client.session().await.unwrap();
+        assert_eq!(session.role, Role::Owner);
+        assert_eq!(
+            session.grantable_roles,
+            vec![Role::Owner, Role::Admin, Role::Member]
+        );
+
+        // The membership row bootstrap wrote is a real answer, not an empty
+        // list: there is a person here, and the screen may say so.
+        let members = client.list_members().await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].role, Role::Owner);
+        assert_eq!(members[0].email, "local@cowbot.local");
+
+        // No invitations is true; minting one is not something to pretend.
+        assert!(client.list_invites().await.unwrap().is_empty());
+        let error = client
+            .create_invite(Role::Member)
+            .await
+            .expect_err("a local workspace has no server to invite into");
+        assert!(
+            error.to_string().contains("server workspace"),
+            "got {error}"
+        );
+        let error = client
+            .set_member_role(&members[0].user_id, Role::Admin)
+            .await
+            .expect_err("the one member is already the owner");
+        assert!(
+            error.to_string().contains("no roles or removals"),
+            "got {error}"
+        );
     }
 
     #[tokio::test]

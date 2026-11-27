@@ -243,7 +243,12 @@ impl AuthService {
         self.store.list_memberships(user_id).await
     }
 
-    fn rate_limited(&self, source: &str) -> bool {
+    /// Whether this source has spent its failed attempts for the window.
+    ///
+    /// Shared with `workspaces::redeem_invite`, the other unauthenticated route
+    /// that spends real work (an Argon2id hash) on request: one bucket per
+    /// source, so neither route becomes a cheap way to bypass the other's limit.
+    pub(crate) fn rate_limited(&self, source: &str) -> bool {
         let Ok(attempts) = self.attempts.lock() else {
             return false;
         };
@@ -254,7 +259,8 @@ impl AuthService {
         *first + window > Utc::now() && *count >= self.config.login_attempts
     }
 
-    fn record_failure(&self, source: &str) {
+    /// Count one failed attempt from `source`.
+    pub(crate) fn record_failure(&self, source: &str) {
         let Ok(mut attempts) = self.attempts.lock() else {
             return;
         };
@@ -283,7 +289,11 @@ pub const MIN_PASSWORD_CHARS: usize = 10;
 const DUMMY_HASH: &str =
     "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$YjW0eGJqS0lwV2J4RG5jWXl0U0JqR3BtV0x4c3JhYkE";
 
-fn hash_password(password: &str) -> CowResult<String> {
+/// Hash a password after checking it against the minimum.
+///
+/// Shared with `workspaces::redeem_invite`, which creates the account an
+/// invitation is redeemed into.
+pub(crate) fn hash_password(password: &str) -> CowResult<String> {
     if password.chars().count() < MIN_PASSWORD_CHARS {
         return Err(CowError::Config(format!(
             "the password must be at least {MIN_PASSWORD_CHARS} characters"

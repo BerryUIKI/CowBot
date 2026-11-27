@@ -218,6 +218,187 @@ async fn the_agent_route_lists_workspace_agents() {
 }
 
 #[tokio::test]
+async fn an_owner_invites_someone_who_redeems_their_way_into_the_workspace() {
+    let server = start_server().await;
+    let owner = client(&server).await;
+
+    // The owner is the only member, and knows what it may hand out.
+    let session = owner.session().await.unwrap();
+    assert_eq!(session.role, cowbot_core::identity::Role::Owner);
+    assert_eq!(
+        session.grantable_roles,
+        vec![
+            cowbot_core::identity::Role::Owner,
+            cowbot_core::identity::Role::Admin,
+            cowbot_core::identity::Role::Member,
+        ]
+    );
+    assert_eq!(owner.list_members().await.unwrap().len(), 1);
+
+    let grant = owner
+        .create_invite(cowbot_core::identity::Role::Member)
+        .await
+        .unwrap();
+    assert_eq!(grant.role, cowbot_core::identity::Role::Member);
+    assert!(!grant.token.is_empty());
+
+    // A client that has never signed in: no account, no session, just the
+    // token the owner handed over. This is the whole point of the route.
+    let newcomer = RemoteClient::redeem(
+        &server.base,
+        &grant.token,
+        "Newcomer",
+        "newcomer@example.com",
+        "newcomer-long-password",
+    )
+    .await
+    .expect("redeem");
+    let newcomer_session = newcomer.session().await.unwrap();
+    assert_eq!(newcomer_session.user.email, "newcomer@example.com");
+    assert_eq!(newcomer_session.workspace.id.0, server.workspace_id);
+    assert_eq!(newcomer_session.role, cowbot_core::identity::Role::Member);
+    assert!(
+        newcomer_session.grantable_roles.is_empty(),
+        "a member hands out nothing"
+    );
+
+    // The account is real: it can read the workspace, which needs membership.
+    assert!(newcomer.list_channels().await.is_ok());
+    assert_eq!(owner.list_members().await.unwrap().len(), 2);
+
+    // The invitation is spent, so it cannot mint a second account.
+    let error = RemoteClient::redeem(
+        &server.base,
+        &grant.token,
+        "Second",
+        "second@example.com",
+        "second-long-password",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not valid"), "got {error}");
+}
+
+#[tokio::test]
+async fn a_member_cannot_invite_and_the_owner_can_promote_then_remove_them() {
+    let server = start_server().await;
+    let owner = client(&server).await;
+    let grant = owner
+        .create_invite(cowbot_core::identity::Role::Member)
+        .await
+        .unwrap();
+    let newcomer = RemoteClient::redeem(
+        &server.base,
+        &grant.token,
+        "Newcomer",
+        "newcomer@example.com",
+        "newcomer-long-password",
+    )
+    .await
+    .expect("redeem");
+    let newcomer_id = newcomer.session().await.unwrap().user.id;
+
+    // A plain member may not invite: the policy is the server's, and the
+    // client surfaces its refusal rather than pre-empting it.
+    let error = newcomer
+        .create_invite(cowbot_core::identity::Role::Member)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("inviting"), "got {error}");
+
+    // The owner promotes them, and the promoted client sees the new role on its
+    // next read rather than keeping the role it signed in with.
+    let promoted = owner
+        .set_member_role(&newcomer_id, cowbot_core::identity::Role::Admin)
+        .await
+        .unwrap();
+    assert_eq!(promoted.role, cowbot_core::identity::Role::Admin);
+    let listed = owner.list_members().await.unwrap();
+    let member = listed
+        .iter()
+        .find(|member| member.user_id == newcomer_id)
+        .expect("the newcomer is listed");
+    assert_eq!(member.role, cowbot_core::identity::Role::Admin);
+
+    // Removing them keeps their account but ends their access to the
+    // workspace: the next read is a 404, not a 403, so they cannot probe it.
+    owner.remove_member(&newcomer_id).await.unwrap();
+    assert_eq!(owner.list_members().await.unwrap().len(), 1);
+    let error = newcomer.list_channels().await.unwrap_err();
+    assert!(
+        error.to_string().contains("not found") || error.to_string().contains("not available"),
+        "got {error}"
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_invitation_cannot_be_redeemed() {
+    let server = start_server().await;
+    let owner = client(&server).await;
+    let grant = owner
+        .create_invite(cowbot_core::identity::Role::Member)
+        .await
+        .unwrap();
+    assert_eq!(owner.list_invites().await.unwrap().len(), 1);
+
+    owner.revoke_invite(&grant.id).await.unwrap();
+    assert!(owner.list_invites().await.unwrap().is_empty());
+
+    let error = RemoteClient::redeem(
+        &server.base,
+        &grant.token,
+        "Late",
+        "late@example.com",
+        "late-long-password",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not valid"), "got {error}");
+}
+
+#[tokio::test]
+async fn a_signed_in_account_can_accept_an_invitation_to_a_second_workspace() {
+    let server = start_server().await;
+    let owner = client(&server).await;
+
+    // A second account that already exists and already has a workspace of its
+    // own: this is the path for someone the desktop knows, which redeem is not.
+    let other_workspace = cowbot_core::identity::Workspace::new("Second Team");
+    server
+        .store
+        .create_workspace(&other_workspace)
+        .await
+        .unwrap();
+    let other = cowbot_core::identity::User::new("Other", "other@example.com", "");
+    server.store.create_user(&other).await.unwrap();
+    server
+        .store
+        .add_member(&cowbot_core::identity::Membership::new(
+            other.id.clone(),
+            other_workspace.id.clone(),
+            cowbot_core::identity::Role::Owner,
+        ))
+        .await
+        .unwrap();
+    let issued = server.state.auth.issue(&other.id).await.unwrap();
+    let other_client = RemoteClient::resume(&server.base, &issued.token, None)
+        .await
+        .expect("resume");
+
+    let grant = owner
+        .create_invite(cowbot_core::identity::Role::Member)
+        .await
+        .unwrap();
+    let joined = other_client.accept_invite(&grant.token).await.unwrap();
+    assert_eq!(joined.id, server.workspace_id);
+    assert_eq!(joined.role, cowbot_core::identity::Role::Member);
+
+    // The account now sees both workspaces.
+    let workspaces = other_client.account_workspaces().await.unwrap();
+    assert_eq!(workspaces.len(), 2);
+}
+
+#[tokio::test]
 async fn a_local_only_operation_reports_server_mode_clearly() {
     let server = start_server().await;
     let client = client(&server).await;
@@ -482,7 +663,8 @@ async fn flaky_stub(failures: usize) -> FlakyStub {
                     "user": { "id": "user-1", "name": "Owner", "email": "owner@example.com" },
                     "workspaces": [{
                         "id": "ws-1", "name": "Test", "created_at": "2026-01-01T00:00:00Z",
-                        "role": "owner"
+                        "role": "owner",
+                        "grantable_roles": ["owner", "admin", "member"]
                     }]
                 }))
             }),
@@ -495,7 +677,8 @@ async fn flaky_stub(failures: usize) -> FlakyStub {
                     "user": { "id": "user-1", "name": "Owner", "email": "owner@example.com" },
                     "workspaces": [{
                         "id": "ws-1", "name": "Test", "created_at": "2026-01-01T00:00:00Z",
-                        "role": "owner"
+                        "role": "owner",
+                        "grantable_roles": ["owner", "admin", "member"]
                     }]
                 }))
             }),

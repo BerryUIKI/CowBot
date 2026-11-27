@@ -349,6 +349,44 @@ Agent turns still execute in the desktop's process with that machine's model
 provider; the server hosts the data and the collaboration surface, not the
 scheduler.
 
+## Adding people
+
+An empty database has one account — the owner's — and nothing in the server
+creates another. A team joins through an invitation.
+
+1. **An Owner or Admin mints a code.** In **Settings → Server → Invitations**,
+   choose the role it grants and press **Create invitation**. The code is shown
+   once; the server stores only its hash, so it cannot be shown again. Copy it
+   now.
+2. **Send it by whatever means you already use.** The server sends no email.
+3. **The invited person redeems it.** In their desktop app, **Settings →
+   Server → Join with an invitation** asks for this server's address, the code,
+   and the name, email, and password for their new account. CowBot creates the
+   account, joins them to the workspace at the invited role, and restarts into
+   it.
+
+A code is single use and expires after seven days. **Revoke** in the same panel
+cancels one immediately; redeeming a revoked or expired code fails with
+"the invitation is not valid" or "the invitation has expired", and the person
+should ask for a new one.
+
+Someone who already has an account here does not redeem — they use **Join
+another workspace** in the same section, which asks only for the code, adds the
+workspace to their account, and offers it in the workspace picker. Redeeming
+with an address that already has an account answers `409` and points at this
+path.
+
+Once inside, **Settings → Server → Members** lists everyone with their role. An
+Owner may change any role; an Admin may only move people between Member and a
+removal, and cannot promote a peer. The last Owner cannot be demoted or removed.
+The list is read when the panel opens — press **Refresh** after someone joins
+from another device.
+
+The routes behind this are `POST /api/v1/invites/redeem` (public; the invitation
+is the credential), `POST /api/v1/invites/accept` (signed in; adds a workspace),
+and the invitation and member routes 2.2 introduced. See
+[ADR-0066](ADR/0066-invites-as-account-credentials.md).
+
 ## Workspace data: memory, conversations, templates, packages
 
 Milestone 2.5 serves the rest of the workspace. Every route resolves the

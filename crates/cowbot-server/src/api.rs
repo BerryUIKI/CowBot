@@ -77,6 +77,11 @@ pub struct WorkspaceBody {
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub role: Role,
+    /// The roles `role` may hand out, strongest first.
+    ///
+    /// Sent rather than derived so the desktop's role picker offers exactly what
+    /// the routes would accept: one policy, on the side that enforces it.
+    pub grantable_roles: Vec<Role>,
 }
 
 /// Sign in and receive a bearer token.
@@ -88,16 +93,7 @@ pub async fn sign_in(
     if body.email.trim().is_empty() || body.password.is_empty() {
         return Err(ApiError::bad_request("email and password are required"));
     }
-    // The reverse proxy in front of a deployment is expected to set
-    // `X-Forwarded-For`; without one the whole server shares a single bucket.
-    let source = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown")
-        .to_string();
+    let source = request_source(&headers);
     let (issued, user) = match state
         .auth
         .sign_in(body.email.trim(), &body.password, &source)
@@ -121,7 +117,27 @@ pub async fn sign_in(
     )))
 }
 
-fn sign_in_body(
+/// The source a rate limiter counts against.
+///
+/// The reverse proxy in front of a deployment is expected to set
+/// `X-Forwarded-For`; without one the whole server shares a single bucket, which
+/// is the safe direction: a missing header must not make the limit disappear.
+///
+/// Only the first hop is read. A caller can set this header itself, so it is a
+/// bucketing key, not a claim of identity — the limits it feeds are about
+/// bounding repeated work, not about trusting who is asking.
+pub(crate) fn request_source(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+pub(crate) fn sign_in_body(
     issued: IssuedSession,
     user: UserBody,
     workspaces: Vec<WorkspaceBody>,
@@ -134,7 +150,10 @@ fn sign_in_body(
     }
 }
 
-async fn workspaces_for(state: &AppState, user: &User) -> Result<Vec<WorkspaceBody>, ApiError> {
+pub(crate) async fn workspaces_for(
+    state: &AppState,
+    user: &User,
+) -> Result<Vec<WorkspaceBody>, ApiError> {
     let mut result = Vec::new();
     for membership in state.auth.memberships(&user.id).await? {
         let Some(workspace) = state.store.get_workspace(&membership.workspace_id).await? else {
@@ -145,6 +164,7 @@ async fn workspaces_for(state: &AppState, user: &User) -> Result<Vec<WorkspaceBo
             name: workspace.name,
             created_at: workspace.created_at,
             role: membership.role,
+            grantable_roles: membership.role.grantable(),
         });
     }
     Ok(result)
