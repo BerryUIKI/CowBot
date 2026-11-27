@@ -55,8 +55,8 @@ CLI (cowbot) -- cowbot-client -- local mode or remote server
 ### 3.1 Identity and Workspace
 
 - Entities: `User`, `Workspace`, `Membership`, `Role` (Owner / Admin / Member).
-- Local mode: first launch auto-creates a local Owner and a default workspace.
-- Team mode: sign-up/sign-in, workspace invitations, member role management, API tokens.
+- Local mode: first launch auto-creates a local Owner and a default workspace. That membership is real, so the member surface answers in both modes.
+- Team mode: sign-in, workspace invitations, member role management, API tokens. A deployment provisions exactly one account (the owner) on an empty database; everyone else joins by redeeming an invitation, which creates the account it was addressed to (ADR-0066). An invitation is 256 random bits, single use, and expires in seven days; the server stores only its hash, so a listed invitation cannot be re-shared from the app. `Role::grantable` names what each role may hand out, and every workspace the API returns states it as `grantable_roles`, so a client's role picker offers exactly what the routes accept instead of re-deriving the policy.
 - v1 authentication: local accounts (Argon2id), opaque server session tokens, API tokens; OIDC/SSO is P1.
 
 ### 3.2 Collaboration

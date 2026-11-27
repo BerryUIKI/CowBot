@@ -169,6 +169,33 @@ Every one of these restarts CowBot; finish running tasks first. The session is
 stored on this device in `config.json`, beside model API keys, and is never
 returned to the interface.
 
+### Join a workspace
+
+A deployment starts with one account, the owner's, and everyone else joins
+through an invitation.
+
+- **If you have no account yet**, open **Settings → Server → Join with an
+  invitation**. Enter the server address, the code you were sent, and the name,
+  email, and password you want. CowBot creates the account, joins you to the
+  workspace, and restarts into it. This is the only way in without an existing
+  account.
+- **If you already have an account here** and were invited to a second
+  workspace, use **Join another workspace** in the same section. It asks only
+  for the code. The new workspace then appears in the workspace picker.
+- **To invite someone**, open **Settings → Server → Invitations**, choose the
+  role the invitation grants, and press **Create invitation**. The code is shown
+  once — copy it then and send it to them yourself, because the server sends no
+  email. Codes work once and expire after seven days; **Revoke** cancels one
+  immediately.
+- **To manage the team**, the **Members** panel lists everyone with their role.
+  An owner can change any role and remove anyone; an admin can move people
+  between member and removal but cannot promote a peer. The last owner cannot be
+  demoted or removed. Press **Refresh** after someone joins from another device.
+
+Removing someone keeps their account and the messages they already posted; it
+ends their access at their next request. See
+[ADR-0066](ADR/0066-invites-as-account-credentials.md).
+
 In server mode the controls that need this machine are hidden rather than
 failing: running a task, project worktrees and repositories, local workspace
 creation and switching, package export and import, context compaction, and the

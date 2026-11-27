@@ -30,7 +30,7 @@ server shares a workspace with a small team over HTTP and WebSocket.
 | Composer | Sixteen `/commands` as desktop actions, and `/btw` for a side question that never enters the conversation |
 | Streaming | Turns stream into a live bubble with a Stop button; a stopped turn keeps what it produced |
 | Packages | Export a workspace to `.cowpkg` and import it into a new workspace, with credentials redacted |
-| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace. A deployment can configure one model provider and answer channel turns itself, with no desktop running (ADR-0055) |
+| Server | Optional self-hosted HTTP/WebSocket API with accounts, sessions, workspace roles and invitations, a live event stream, API tokens, and workspace data surfaces; `RemoteClient` speaks it. Settings → Server signs in, picks a workspace, reconnects on drop, and switches back to the local workspace. An invitation creates the account it was sent to, so a deployment gains members without an operator, and the desktop manages the roster and the codes (ADR-0066). A deployment can configure one model provider and answer channel turns itself, with no desktop running (ADR-0055) |
 | Interface | Thirteen languages (English, Simplified and Traditional Chinese, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Brazilian Portuguese, Latin American and European Spanish), with a language picker, a device-local preference, and an account menu |
 | Updates | Signed in-app updates from GitHub Releases on Windows (NSIS), macOS (DMG), and Linux (AppImage) |
 
@@ -60,6 +60,16 @@ tracked.
 - **Switching backends restarts CowBot.** The transport is chosen at startup, so
   connecting, switching a server workspace, or returning to local mode reloads
   the window. The saved session survives the restart; only Disconnect forgets it.
+- **An invitation code travels out of band.** The server sends no mail, so an
+  inviter copies the code from Settings → Server and delivers it however they
+  already talk to that person. The code is shown once — the server keeps only a
+  hash — so a lost code means revoking it and minting another.
+- **The member list is a snapshot.** There is no membership event on the live
+  stream, so someone joining or changing role from another device appears after
+  **Refresh** or the next time the panel opens, not immediately.
+- **A workspace is created through the API, not the app.** Settings → Server
+  manages the roster and invitations of the workspace this device has open; it
+  cannot create a workspace.
 - **Remote access is limited to the served surfaces.** The server exposes HTTP
   and a workspace-scoped WebSocket, and `RemoteClient` implements the `Client`
   trait, but there is no public API reference or SDK beyond that Rust client. A
