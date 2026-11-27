@@ -136,6 +136,10 @@ export const en = {
       closeToTrayHint:
         "Closing the window hides CowBot to the system tray instead of quitting, so agent turns and background runs keep going. Use the tray icon or Quit CowBot to end it.",
       closeToTrayToggle: "Closing the window keeps CowBot running",
+      notificationsTitle: "Notifications",
+      notificationsHint:
+        "Show a system notification when a task finishes or an approval starts waiting while the window is hidden or minimised. Nothing is shown while you are looking at the window.",
+      notificationsToggle: "Notify me while CowBot is hidden",
     },
     models: {
       title: "Models",

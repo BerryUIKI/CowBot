@@ -139,6 +139,10 @@ export const de: Catalog = {
       closeToTrayHint:
         "Beim Schließen des Fensters wird CowBot in den Infobereich ausgeblendet statt beendet, damit Agenten-Turns und Hintergrundläufe weiterlaufen. Über das Symbol im Infobereich oder „CowBot beenden“ wird die App beendet.",
       closeToTrayToggle: "Beim Schließen läuft CowBot weiter",
+      notificationsTitle: "Benachrichtigungen",
+      notificationsHint:
+        "Zeigt eine Systembenachrichtigung, wenn eine Aufgabe endet oder eine Freigabe ansteht, während das Fenster ausgeblendet oder minimiert ist. Solange du das Fenster siehst, passiert nichts.",
+      notificationsToggle: "Benachrichtigen, während CowBot ausgeblendet ist",
     },
     models: {
       title: "Modelle",

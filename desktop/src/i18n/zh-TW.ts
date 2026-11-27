@@ -123,7 +123,10 @@ export const zhTW: Catalog = {
       "botTagsToggle": "在代理名稱旁顯示“機器人”",
       "closeToTrayTitle": "在背景繼續執行",
       "closeToTrayHint": "關閉視窗時 CowBot 會隱藏到系統匣而非結束，代理回合與背景工作會繼續執行。要結束請使用系統匣圖示或「結束 CowBot」。",
-      "closeToTrayToggle": "關閉視窗後 CowBot 繼續執行"
+      "closeToTrayToggle": "關閉視窗後 CowBot 繼續執行",
+      "notificationsTitle": "通知",
+      "notificationsHint": "視窗隱藏或最小化時，工作結束或出現待處理的核准會發出系統通知。視窗就在眼前時不會打擾。",
+      "notificationsToggle": "CowBot 隱藏時通知我"
     },
     "models": {
       "title": "模型",

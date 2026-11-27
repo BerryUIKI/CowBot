@@ -138,6 +138,10 @@ export const fr: Catalog = {
       closeToTrayHint:
         "Fermer la fenêtre masque CowBot dans la zone de notification au lieu de quitter, afin que les tours des agents et les exécutions en arrière-plan continuent. Utilisez l’icône de la zone de notification ou « Quitter CowBot » pour l’arrêter.",
       closeToTrayToggle: "Fermer la fenêtre laisse CowBot actif",
+      notificationsTitle: "Notifications",
+      notificationsHint:
+        "Affiche une notification système lorsqu’une tâche se termine ou qu’une approbation attend pendant que la fenêtre est masquée ou réduite. Rien ne s’affiche tant que vous avez la fenêtre sous les yeux.",
+      notificationsToggle: "Me notifier pendant que CowBot est masqué",
     },
     models: {
       title: "Modèles",

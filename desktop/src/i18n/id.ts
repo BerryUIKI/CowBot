@@ -133,6 +133,10 @@ export const id: Catalog = {
       closeToTrayHint:
         "Menutup jendela akan menyembunyikan CowBot ke baki sistem, bukan keluar, sehingga giliran agen dan proses latar belakang tetap berjalan. Gunakan ikon baki atau “Keluar dari CowBot” untuk mengakhirinya.",
       closeToTrayToggle: "Menutup jendela membuat CowBot tetap berjalan",
+      notificationsTitle: "Notifikasi",
+      notificationsHint:
+        "Tampilkan notifikasi sistem saat tugas selesai atau persetujuan mulai menunggu selama jendela disembunyikan atau diperkecil. Tidak ada yang ditampilkan saat Anda sedang melihat jendela.",
+      notificationsToggle: "Beri tahu saya saat CowBot disembunyikan",
     },
     models: {
       title: "Model",

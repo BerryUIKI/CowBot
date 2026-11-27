@@ -137,6 +137,10 @@ export const ja: Catalog = {
       closeToTrayHint:
         "ウィンドウを閉じても CowBot は終了せずにシステムトレイに隠れ、エージェントのターンやバックグラウンド実行が続きます。終了するにはトレイアイコンまたは「CowBot を終了」を使います。",
       closeToTrayToggle: "ウィンドウを閉じても CowBot を実行し続ける",
+      notificationsTitle: "通知",
+      notificationsHint:
+        "ウィンドウが非表示または最小化されている間に、タスクが終了したときや承認待ちが発生したときにシステム通知を表示します。ウィンドウを見ている間は表示されません。",
+      notificationsToggle: "CowBot が非表示のときに通知する",
     },
     models: {
       title: "モデル",

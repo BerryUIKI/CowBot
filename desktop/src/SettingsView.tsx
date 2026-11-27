@@ -26,6 +26,7 @@ import {
   exportWorkspace,
   getAuditEvents,
   getCloseToTray,
+  getNotificationsEnabled,
   getSessionDecisions,
   getWorkspacePolicy,
   importWorkspace,
@@ -33,6 +34,7 @@ import {
   listWorkspaces,
   setBypassCritical as saveBypassCritical,
   setCloseToTray as saveCloseToTray,
+  setNotificationsEnabled as saveNotificationsEnabled,
   setPermissionRuleEnabled,
   switchWorkspace,
   updateUserProfile,
@@ -158,6 +160,8 @@ export default function SettingsView({
   const [botTagError, setBotTagError] = useState<string | null>(null);
   const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
   const [closeToTrayError, setCloseToTrayError] = useState<string | null>(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -213,6 +217,13 @@ export default function SettingsView({
       })
       .catch((error) => {
         if (!cancelled) setCloseToTrayError(errorMessage(error));
+      });
+    getNotificationsEnabled()
+      .then((stored) => {
+        if (!cancelled) setNotificationsEnabled(stored);
+      })
+      .catch((error) => {
+        if (!cancelled) setNotificationsError(errorMessage(error));
       });
     return () => {
       cancelled = true;
@@ -633,6 +644,38 @@ export default function SettingsView({
               {closeToTrayError ? (
                 <p className="settings-status is-error" role="alert">
                   {closeToTrayError}
+                </p>
+              ) : null}
+              <div className="settings-language">
+                <div>
+                  <span className="settings-card-title">
+                    {t("settings.general.notificationsTitle")}
+                  </span>
+                  <p className="settings-hint">
+                    {t("settings.general.notificationsHint")}
+                  </p>
+                </div>
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={notificationsEnabled ?? true}
+                    disabled={notificationsEnabled === null}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setNotificationsError(null);
+                      setNotificationsEnabled(enabled);
+                      saveNotificationsEnabled(enabled).catch((error) => {
+                        setNotificationsEnabled(!enabled);
+                        setNotificationsError(errorMessage(error));
+                      });
+                    }}
+                  />
+                  {t("settings.general.notificationsToggle")}
+                </label>
+              </div>
+              {notificationsError ? (
+                <p className="settings-status is-error" role="alert">
+                  {notificationsError}
                 </p>
               ) : null}
             </section>
