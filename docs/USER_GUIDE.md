@@ -236,9 +236,16 @@ running when its window does not.
   task or a reply is still running, the tray's Quit is refused: CowBot reopens
   the window and says so. The account menu's Quit asks first and then ends the
   run.
-- **Nothing tells you while the window is closed.** There are no system
-  notifications, so a run that finishes — or an approval that is waiting — is
-  only visible once you reopen the window. Leave the window open in that case.
+- **Notifications cover the two things worth interrupting for.** While the
+  window is hidden or minimised, a system notification appears when a task run
+  finishes or fails, and when an approval is waiting for you. Nothing is shown
+  while you are looking at the window. Clicking the notification reopens
+  CowBot. The copy is English whatever the interface language, and channel
+  replies do not notify — those appear when you reopen the window. Switch it
+  off in **Settings → General → Notifications**.
+- **Nothing else tells you while the window is closed.** The tray icon carries
+  no badge or count, so replies and pending work are only visible once you
+  reopen the window. Leave the window open when you are waiting on a reply.
 - **Closing the window can quit instead.** Turn off **Settings → General →
   Keep running in the background** to make the close button end CowBot, as it
   did before 0.1.18.

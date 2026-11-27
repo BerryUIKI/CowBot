@@ -140,6 +140,10 @@ export const it: Catalog = {
       closeToTrayHint:
         "Chiudendo la finestra CowBot si nasconde nella barra delle applicazioni invece di uscire, così i turni degli agenti e le esecuzioni in background continuano. Usa l’icona della barra o «Esci da CowBot» per terminarlo.",
       closeToTrayToggle: "Chiudere la finestra lascia CowBot in esecuzione",
+      notificationsTitle: "Notifiche",
+      notificationsHint:
+        "Mostra una notifica di sistema quando un’attività termina o un’approvazione resta in attesa mentre la finestra è nascosta o ridotta a icona. Nulla viene mostrato mentre hai la finestra sott’occhio.",
+      notificationsToggle: "Avvisami mentre CowBot è nascosto",
     },
     models: {
       title: "Modelli",

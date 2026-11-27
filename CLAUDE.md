@@ -143,7 +143,7 @@ Changing a boundary means changing an ADR first — read `docs/ARCHITECTURE.md` 
 - **The frontend never touches SQLite or `cowbot-service`.** All desktop access goes through Tauri commands wrapping `Client`; API keys never cross back to the frontend.
 - **The server never learns adapters by name** — it asks the registry.
 - **Tests must be deterministic**: no live APIs, no secrets. Fakes live beside the shared layer (e.g. the fake adapter in `cowbot-integrations`).
-- **A new capability lands with an ADR** (`docs/ADR/0065-...` is next, 0001–0064 exist) and updates `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/LIMITATIONS.md` where affected.
+- **A new capability lands with an ADR** (`docs/ADR/0066-...` is next, 0001–0065 exist) and updates `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/LIMITATIONS.md` where affected.
 
 ## Desktop App
 
@@ -151,7 +151,7 @@ Changing a boundary means changing an ADR first — read `docs/ARCHITECTURE.md` 
 
 The UI is conversation-first: a searchable sidebar merging agent direct chats and group channels with pinned-first ordering and live background task cards; a bubble timeline with streaming, reasoning, tool chips, a stop button, and a floating composer; a right-side inspector (Task, Context, Approvals, Background) that keeps detail beside the chat; context meters with a colored stacked bar and a compaction popover; group routing controls and per-participant context tabs; slash commands and `/btw` side questions; Markdown plus sandboxed HTML artifacts; Settings for model providers (vendor-first catalogue, three protocols, model discovery, multiple models per provider), team/templates, memory, approvals and permission rules, audit and recorded prompts, projects, workspace transfer, server, and About/updates. The interface ships 13 locales (en, zh-CN, zh-TW, fr, de, hi, id, it, ja, ko, pt-BR, es-ES, es-419) through typed catalogues; `ui_locale` is device-local. The shell is resident by default — the window's × hides to a tray icon, and `close_to_tray` in `config.json` (Settings → General) restores close-means-quit.
 
-`desktop/src-tauri` keeps providers, onboarding, update, locale, database folder, workspace registry, and project registry in `config.json`; exposes Tauri commands for the whole `Client` surface (session, channels, conversations, context previews, prompt snapshots, memory, projects, worktrees, models, onboarding, app, workspace, server); forwards client events on `cowbot-event` and group replies on `cowbot-channel-reply`. `src/shell.rs` keeps it resident: the main window's close is intercepted and hides it to a tray icon, and the tray's Quit refuses while `AppState.running` or `AppState.replies` is non-empty (ADR-0064). Release builds come from `.github/workflows/release.yml` on `v*` tags (unsigned NSIS/MSI, universal DMG, deb/AppImage) with `TAURI_SIGNING_PRIVATE_KEY`-signed updater artifacts and a `latest.json` manifest (ADR-0018); tags must match `desktop/src-tauri/tauri.conf.json`.
+`desktop/src-tauri` keeps providers, onboarding, update, locale, database folder, workspace registry, and project registry in `config.json`; exposes Tauri commands for the whole `Client` surface (session, channels, conversations, context previews, prompt snapshots, memory, projects, worktrees, models, onboarding, app, workspace, server); forwards client events on `cowbot-event` and group replies on `cowbot-channel-reply`. `src/shell.rs` keeps it resident: the main window's close is intercepted and hides it to a tray icon, and the tray's Quit refuses while `AppState.running` or `AppState.replies` is non-empty (ADR-0064). `src/notify.rs` subscribes the same client and shows a system notification for a settled task run or a waiting approval, but only while the window is hidden or minimised and the device switch is on; its copy is English because the shell has no locale (ADR-0065). Release builds come from `.github/workflows/release.yml` on `v*` tags (unsigned NSIS/MSI, universal DMG, deb/AppImage) with `TAURI_SIGNING_PRIVATE_KEY`-signed updater artifacts and a `latest.json` manifest (ADR-0018); tags must match `desktop/src-tauri/tauri.conf.json`.
 
 ## Website
 
@@ -169,11 +169,11 @@ Phase 1 (local MVP) is complete and Phase 2 milestones 2.1–2.5 are implemented
 - Project-scoped knowledge bases and embeddings; isolated sandbox backends (Docker/WASM); memory-aware routing; expiry/retention automation; per-agent group extraction.
 - Consolidated group-plan approval and turn grouping in the background panel; merging a task worktree branch back or opening a PR from the app.
 - Prompt-cache optimisation for Anthropic and Responses (M5); linking audit events and tool calls to the LLM call and snapshot that produced them.
-- Desktop system notifications while the window is hidden (a finished run, a waiting approval) and a launch-at-login switch; the tray carries no status badge, because a hidden webview's timers are throttled (ADR-0064).
+- Desktop notifications are English-only and cover just two events (a settled task run, a waiting approval); a launch-at-login switch and a tray status badge do not exist, because a hidden webview's timers are throttled (ADR-0064, ADR-0065).
 
 ## Documentation Map
 
 - `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/USER_GUIDE.md`, `docs/DEVELOPMENT.md`, `docs/LIMITATIONS.md`, `docs/PROVIDER_CAPABILITIES.md`, `docs/SERVER.md`, `docs/COLLABORATION.md`, `SECURITY.md`
-- `docs/ADR/` — 0001–0064, indexed in `docs/ADR/README.md`; `TEMPLATE.md` for new records. **Read the relevant ADR before changing an established boundary.**
+- `docs/ADR/` — 0001–0065, indexed in `docs/ADR/README.md`; `TEMPLATE.md` for new records. **Read the relevant ADR before changing an established boundary.**
 - `docs/plans/` — M1 usage accounting, M2 conversations and context, M3 group conversations and routing, M4 agent memory and shared notes, M6 projects and product structure, plus the IM integration and server-turn plans
 - `docs/TEMPLATE_FORMAT.md`, `docs/PACKAGE_FORMAT.md`, `docs/REFERENCES.md`, `docs/releases/`

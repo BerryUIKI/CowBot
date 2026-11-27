@@ -692,6 +692,15 @@ export function setCloseToTray(enabled: boolean): Promise<void> {
   return invoke<void>("set_close_to_tray", { enabled });
 }
 
+/** Whether a settled run or a waiting approval raises a system notification. */
+export function getNotificationsEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_notifications_enabled");
+}
+
+export function setNotificationsEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("set_notifications_enabled", { enabled });
+}
+
 /**
  * The tray's Quit was refused because a task or channel turn is still running.
  *

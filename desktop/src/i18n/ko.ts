@@ -132,6 +132,10 @@ export const ko: Catalog = {
       closeToTrayHint:
         "창을 닫으면 CowBot이 종료되지 않고 시스템 트레이로 숨겨져 에이전트 턴과 백그라운드 실행이 계속됩니다. 종료하려면 트레이 아이콘이나 “CowBot 종료”를 사용하세요.",
       closeToTrayToggle: "창을 닫아도 CowBot 계속 실행",
+      notificationsTitle: "알림",
+      notificationsHint:
+        "창이 숨겨져 있거나 최소화된 동안 작업이 끝나거나 승인이 대기하면 시스템 알림을 표시합니다. 창을 보고 있는 동안에는 아무것도 표시되지 않습니다.",
+      notificationsToggle: "CowBot이 숨겨져 있을 때 알림",
     },
     models: {
       title: "모델",

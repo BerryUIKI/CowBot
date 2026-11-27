@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod migration;
+mod notify;
 mod shell;
 mod startup;
 mod workspace_tools;
@@ -149,6 +150,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         // The tray exists before the window is shown, so a user who closes the
         // window immediately still has a way back (ADR-0064).
         .setup(|app| {
@@ -181,6 +183,8 @@ pub fn run() {
             commands::set_tray_labels,
             commands::get_close_to_tray,
             commands::set_close_to_tray,
+            commands::get_notifications_enabled,
+            commands::set_notifications_enabled,
             commands::set_database_directory,
             commands::get_session,
             commands::update_user_profile,
@@ -479,6 +483,7 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
             client.clone() as Arc<dyn Client>,
         );
         install_events(app, client.clone() as Arc<dyn Client>);
+        notify::install(app, client.clone() as Arc<dyn Client>);
         app.manage(AppState {
             client: client.clone() as Arc<dyn Client>,
             local_client: None,
@@ -547,6 +552,7 @@ pub(crate) async fn finish(app: &tauri::AppHandle) -> Result<(), String> {
     let tools = AppState::rooted_tools(&data_dir, config_path.clone(), client.clone());
 
     install_events(app, client.clone() as Arc<dyn Client>);
+    notify::install(app, client.clone() as Arc<dyn Client>);
     app.manage(AppState {
         client: client.clone() as Arc<dyn Client>,
         local_client: Some(client.clone()),

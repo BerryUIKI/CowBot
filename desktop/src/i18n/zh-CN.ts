@@ -128,6 +128,10 @@ export const zhCN: Catalog = {
       closeToTrayHint:
         "关闭窗口时 CowBot 会隐藏到系统托盘而不是退出，智能体的回合和后台任务会继续运行。要结束请使用托盘图标或“退出 CowBot”。",
       closeToTrayToggle: "关闭窗口后 CowBot 继续运行",
+      notificationsTitle: "通知",
+      notificationsHint:
+        "窗口隐藏或最小化时，任务结束或出现待处理的审批会发出系统通知。窗口正在你眼前时不会打扰。",
+      notificationsToggle: "CowBot 隐藏时通知我",
     },
     models: {
       title: "模型",

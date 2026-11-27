@@ -135,6 +135,10 @@ export const ptBR: Catalog = {
       closeToTrayHint:
         "Fechar a janela oculta o CowBot na bandeja do sistema em vez de encerrá-lo, para que os turnos dos agentes e as execuções em segundo plano continuem. Use o ícone da bandeja ou “Sair do CowBot” para encerrar.",
       closeToTrayToggle: "Fechar a janela mantém o CowBot em execução",
+      notificationsTitle: "Notificações",
+      notificationsHint:
+        "Mostra uma notificação do sistema quando uma tarefa termina ou uma aprovação fica aguardando enquanto a janela está oculta ou minimizada. Nada aparece enquanto você está vendo a janela.",
+      notificationsToggle: "Notificar enquanto o CowBot está oculto",
     },
     models: {
       title: "Modelos",

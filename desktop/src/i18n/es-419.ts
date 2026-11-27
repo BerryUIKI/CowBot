@@ -135,6 +135,10 @@ export const es419: Catalog = {
       closeToTrayHint:
         "Al cerrar la ventana, CowBot se oculta en la bandeja del sistema en lugar de cerrarse, para que los turnos de los agentes y las ejecuciones en segundo plano continúen. Usa el icono de la bandeja o «Salir de CowBot» para terminarlo.",
       closeToTrayToggle: "Al cerrar la ventana, CowBot sigue ejecutándose",
+      notificationsTitle: "Notificaciones",
+      notificationsHint:
+        "Muestra una notificación del sistema cuando una tarea termina o una aprobación queda en espera mientras la ventana está oculta o minimizada. No aparece nada mientras tienes la ventana a la vista.",
+      notificationsToggle: "Avisarme mientras CowBot está oculto",
     },
     models: {
       title: "Modelos",

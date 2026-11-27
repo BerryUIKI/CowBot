@@ -205,8 +205,11 @@ Delivered:
 > ending those runs; the tray reveals the window and offers Quit, and Quit is
 > refused while a run or a reply is in flight. `close_to_tray` defaults to on and
 > Settings → General restores close-means-quit
-> ([ADR-0064](ADR-0064-desktop-background-residency.md)). System notifications
-> while the window is hidden and a launch-at-login switch remain open.
+> ([ADR-0064](ADR-0064-desktop-background-residency.md)). A settled task run and
+> a waiting approval now raise a system notification while the window is hidden
+> or minimised, with a device-local switch and English copy
+> ([ADR-0065](ADR-0065-desktop-notifications.md)). A launch-at-login switch, a
+> tray status badge, and action buttons on the approval toast remain open.
 
 ### 5.2 Phase 2 Exit Criteria
 
