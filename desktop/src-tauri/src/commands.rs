@@ -1,8 +1,9 @@
 use cowbot_agent::{AgentInstance, Crew, StandardRoles};
 use cowbot_client::{
-    AgentUpdate, BindingView, Client, ConversationSummary, IntegrationView, MemoryFilter,
-    MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation,
-    NewIntegrationRequest, NewMemory, NewTask, NoteSave, RecalledMemory,
+    AgentUpdate, BindingView, Client, ConversationSummary, IntegrationView, InviteGrant,
+    InviteView, MemberView, MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate,
+    MemoryUpdate, NewBinding, NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave,
+    RecalledMemory,
 };
 use cowbot_core::agent::{AgentId, AgentProfile};
 use cowbot_core::approval::{Approval, ApprovalId, ApprovalLevel, BypassCritical, WorkspacePolicy};
@@ -19,7 +20,7 @@ use cowbot_core::conversation::{
     ContextProjection, ContextUsageState, ConversationContext, ConversationSettingsUpdate,
     ConversationTurn, RoutingMode, TurnId,
 };
-use cowbot_core::identity::WorkspaceId;
+use cowbot_core::identity::{Role, UserId, WorkspaceId};
 use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemoryKind, MemorySettings, MemoryStatus};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -449,6 +450,90 @@ pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentProfile>
         .list_agents()
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Everyone in the current workspace, with their role.
+#[tauri::command]
+pub async fn get_members(state: State<'_, AppState>) -> Result<Vec<MemberView>, String> {
+    state
+        .client
+        .list_members()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Change a member's role. The server decides whether this caller may.
+#[tauri::command]
+pub async fn set_member_role(
+    state: State<'_, AppState>,
+    user_id: String,
+    role: Role,
+) -> Result<MemberView, String> {
+    state
+        .client
+        .set_member_role(&UserId::new(user_id), role)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Remove a member from the workspace. Their account and history stay.
+#[tauri::command]
+pub async fn remove_member(state: State<'_, AppState>, user_id: String) -> Result<(), String> {
+    state
+        .client
+        .remove_member(&UserId::new(user_id))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Invitations that are still redeemable, without their tokens.
+#[tauri::command]
+pub async fn list_invites(state: State<'_, AppState>) -> Result<Vec<InviteView>, String> {
+    state
+        .client
+        .list_invites()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Mint an invitation and return its token. This is the only copy of it.
+#[tauri::command]
+pub async fn create_invite(state: State<'_, AppState>, role: Role) -> Result<InviteGrant, String> {
+    state
+        .client
+        .create_invite(role)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Cancel an invitation nobody has redeemed yet.
+#[tauri::command]
+pub async fn revoke_invite(state: State<'_, AppState>, invite_id: String) -> Result<(), String> {
+    state
+        .client
+        .revoke_invite(&invite_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Join a workspace this account was invited to, without leaving the current
+/// one. The screen offers the new workspace in its picker afterwards; switching
+/// to it is the existing restart-into-it path.
+#[tauri::command]
+pub async fn accept_invite(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<ServerWorkspaceView, String> {
+    let joined = state
+        .client
+        .accept_invite(&token)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ServerWorkspaceView {
+        id: joined.id,
+        name: joined.name,
+        role: joined.role,
+    })
 }
 
 #[tauri::command]
@@ -3041,6 +3126,9 @@ pub fn get_server_settings(state: State<'_, AppState>) -> Result<ServerView, Str
 pub struct ServerWorkspaceView {
     pub id: String,
     pub name: String,
+    /// What this account may do in it, so the picker can say so and the member
+    /// panel knows what the newly opened workspace will allow.
+    pub role: Role,
 }
 
 /// The account and workspaces a sign-in would open, before anything is saved.
@@ -3078,6 +3166,7 @@ pub async fn probe_server(
             .map(|workspace| ServerWorkspaceView {
                 id: workspace.id,
                 name: workspace.name,
+                role: workspace.role,
             })
             .collect(),
     })
@@ -3128,6 +3217,58 @@ pub async fn connect_server(
     app.restart();
 }
 
+/// Join a server by redeeming an invitation, creating the account if needed.
+///
+/// The counterpart of `connect_server` for someone who has never signed in: the
+/// invitation is the credential, so there is no password to sign in with first
+/// (ADR-0066). On success the connection is saved and the app restarts into it,
+/// exactly as signing in does — the session the server issued is the same kind.
+#[tauri::command]
+pub async fn redeem_invite(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    base_url: String,
+    invite_token: String,
+    name: String,
+    email: String,
+    password: String,
+) -> Result<(), String> {
+    ensure_no_running_tasks(&state)?;
+    let base_url = config::normalize_base_url(&base_url)?;
+    if invite_token.trim().is_empty() {
+        return Err("Enter the invitation code you were given.".to_string());
+    }
+    if name.trim().is_empty() || email.trim().is_empty() || password.is_empty() {
+        return Err("Enter your name, email, and a password.".to_string());
+    }
+
+    // Nothing is written until the server has accepted the code, so a wrong or
+    // expired one leaves this device pointed where it was.
+    let client = cowbot_client::RemoteClient::redeem(
+        &base_url,
+        invite_token.trim(),
+        name.trim(),
+        email.trim(),
+        &password,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let session = client.session().await.map_err(|error| error.to_string())?;
+
+    let mut config = load_config(&state)?;
+    config.backend = config::BackendMode::Server;
+    config.server = Some(config::ServerConnection {
+        base_url,
+        email: session.user.email.clone(),
+        workspace_id: session.workspace.id.0.clone(),
+        workspace_name: session.workspace.name.clone(),
+        token: client.token().to_string(),
+    });
+    config::save(&state.config_path, &config)
+        .map_err(|error| format!("failed to write {}: {error}", state.config_path.display()))?;
+    app.restart();
+}
+
 /// One of the account's server workspaces, for switching without signing in
 /// again.
 #[tauri::command]
@@ -3146,6 +3287,7 @@ pub async fn list_server_workspaces(
         .map(|workspace| ServerWorkspaceView {
             id: workspace.id,
             name: workspace.name,
+            role: workspace.role,
         })
         .collect())
 }
