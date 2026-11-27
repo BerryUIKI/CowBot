@@ -181,6 +181,72 @@ async fn a_member_lists_the_workspace_members_but_a_stranger_cannot() {
 }
 
 #[tokio::test]
+async fn each_listed_member_says_whether_the_caller_may_manage_them() {
+    let f = fixture().await;
+    let (member_id, member_token) = add_user(&f, "member@example.com").await;
+    join(&f, &member_id, cowbot_core::identity::Role::Member).await;
+    let (admin_id, admin_token) = add_user(&f, "admin@example.com").await;
+    join(&f, &admin_id, cowbot_core::identity::Role::Admin).await;
+
+    // An owner may manage everyone, itself included; the last-owner rule lives
+    // above this flag, so a `true` does not promise the route will agree.
+    let (_, listing) = call(
+        f.router.clone(),
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", f.workspace_id),
+        None,
+        Some(&f.owner_token),
+    )
+    .await;
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|member| member["manageable"] == true),
+        "an owner manages every row: {listing}"
+    );
+
+    // An admin may manage the member and not the owner or a peer.
+    let (_, listing) = call(
+        f.router.clone(),
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", f.workspace_id),
+        None,
+        Some(&admin_token),
+    )
+    .await;
+    let rows = listing.as_array().unwrap();
+    let manageable = |id: &str| {
+        rows.iter()
+            .find(|row| row["user"]["id"] == id)
+            .map(|row| row["manageable"].clone())
+            .unwrap()
+    };
+    assert_eq!(manageable(&f.owner_id), json!(false));
+    assert_eq!(manageable(&admin_id), json!(false));
+    assert_eq!(manageable(&member_id), json!(true));
+
+    // A plain member manages nobody, not even itself.
+    let (_, listing) = call(
+        f.router,
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", f.workspace_id),
+        None,
+        Some(&member_token),
+    )
+    .await;
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|member| member["manageable"] == false),
+        "a member manages no row: {listing}"
+    );
+}
+
+#[tokio::test]
 async fn creating_a_workspace_makes_the_creator_its_owner() {
     let f = fixture().await;
     let (status, created) = call(

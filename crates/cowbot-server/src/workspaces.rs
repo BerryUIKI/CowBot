@@ -97,6 +97,14 @@ pub async fn create_workspace(
 pub struct MemberBody {
     pub user: UserBody,
     pub role: Role,
+    /// Whether the caller may change or remove this person.
+    ///
+    /// Answered here rather than inferred by the client: the policy weighs the
+    /// caller's role against the target's (`Role::can_manage`), and a screen
+    /// that guessed it would offer a control the route refuses. The last-owner
+    /// rule is not part of this — it depends on the roll, not on two roles — so
+    /// a `true` here can still be refused, and that message is worth showing.
+    pub manageable: bool,
 }
 
 pub async fn list_members(
@@ -105,7 +113,7 @@ pub async fn list_members(
     Path(workspace_id): Path<String>,
 ) -> Result<Json<Vec<MemberBody>>, ApiError> {
     let workspace_id = WorkspaceId::new(workspace_id);
-    require_member(&state, &user, &workspace_id).await?;
+    let actor = require_member(&state, &user, &workspace_id).await?;
     let mut result = Vec::new();
     for membership in state.store.list_members(&workspace_id).await? {
         let Some(member) = state.store.get_user(&membership.user_id).await? else {
@@ -114,6 +122,7 @@ pub async fn list_members(
         result.push(MemberBody {
             user: UserBody::from(&member),
             role: membership.role,
+            manageable: actor.can_manage(membership.role),
         });
     }
     Ok(Json(result))
@@ -183,6 +192,8 @@ pub async fn update_member(
     Ok(Json(MemberBody {
         user: UserBody::from(&member),
         role: body.role,
+        // The change just succeeded, so this caller manages the new role too.
+        manageable: actor.can_manage(body.role),
     }))
 }
 

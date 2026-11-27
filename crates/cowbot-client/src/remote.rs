@@ -1677,6 +1677,8 @@ impl From<IntegrationBody> for IntegrationView {
 struct MemberBody {
     user: MemberUserBody,
     role: Role,
+    #[serde(default)]
+    manageable: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1693,6 +1695,7 @@ impl From<MemberBody> for MemberView {
             name: body.user.name,
             email: body.user.email,
             role: body.role,
+            manageable: body.manageable,
         }
     }
 }

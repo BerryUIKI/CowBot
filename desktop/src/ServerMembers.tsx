@@ -17,14 +17,10 @@ import type { InviteGrant, InviteView, MemberView, Role } from "./types";
  * Settings → Server → Members and Invitations (ADR-0066).
  *
  * The panel renders what this account may actually do: a plain member sees no
- * member panel at all, and the role pickers offer only what the server said
- * this account may grant. Nothing here re-derives the policy — the server
- * states `grantable_roles` with every workspace it returns.
- *
- * Controls appear on a row whose *current* role is in that set. For an admin
- * that is exactly the set of people they may manage (members, not peers); for
- * an owner it is everyone. Where the server refuses anyway — demoting the last
- * owner — its message is shown rather than predicted here.
+ * member panel at all, a row offers controls only where the server said
+ * `manageable`, and the role pickers offer only what the server said this
+ * account may grant. None of that is derived here — the server states it with
+ * every member and every workspace it returns.
  *
  * The list is a snapshot. There is no membership event on the live stream, so
  * someone joining from another device shows up on the next open or refresh.
@@ -196,13 +192,11 @@ export default function ServerMembers({ grantableRoles }: Props) {
 
         <ul className="settings-list">
           {members.map((member) => {
-            // Manageable is not a field the API returns; what this account may
-            // grant is the closest thing it says, and the two agree for every
-            // role but Owner-as-target (where the server has a last-owner rule
-            // of its own that it reports itself).
-            const manage = grantableRoles.includes(member.role);
+            // The server decides who this account may manage. Deriving it here
+            // from the role would be a second copy of the policy, and a picker
+            // that offered a control the route refuses is worse than none.
             const choices = choicesFor(member);
-            const canChangeRole = manage && choices.length > 1;
+            const canChangeRole = member.manageable && choices.length > 1;
             return (
               <li key={member.user_id} className="settings-card">
                 <div className="settings-card-head">
@@ -223,7 +217,7 @@ export default function ServerMembers({ grantableRoles }: Props) {
                   ) : (
                     <span className="settings-badge">{roleLabel(member.role)}</span>
                   )}
-                  {manage ? (
+                  {member.manageable ? (
                     <button
                       type="button"
                       className="ghost-button danger-text"

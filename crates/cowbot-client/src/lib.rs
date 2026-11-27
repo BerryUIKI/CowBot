@@ -88,6 +88,12 @@ pub struct MemberView {
     pub name: String,
     pub email: String,
     pub role: Role,
+    /// Whether this caller may change or remove them.
+    ///
+    /// The server weighs the caller's role against this one, so the screen does
+    /// not have to — and a "last owner" refusal can still arrive on top of a
+    /// `true`, which is worth showing rather than predicting.
+    pub manageable: bool,
 }
 
 /// An invitation that has not been redeemed yet. The token is not part of it:

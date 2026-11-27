@@ -491,6 +491,14 @@ export interface MemberView {
   name: string;
   email: string;
   role: Role;
+  /**
+   * Whether this account may change or remove them.
+   *
+   * The server weighs the caller's role against this one. A `true` can still be
+   * refused — the last owner may not be demoted — and that message is shown
+   * rather than predicted here.
+   */
+  manageable: boolean;
 }
 
 /**

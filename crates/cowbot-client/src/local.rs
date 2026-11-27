@@ -1198,6 +1198,8 @@ impl Client for LocalClient {
                 name: user.name,
                 email: user.email,
                 role: membership.role,
+                // There is nobody else here to manage.
+                manageable: false,
             });
         }
         Ok(members)
