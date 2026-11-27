@@ -26,7 +26,7 @@ use cowbot_core::conversation::{
 };
 use cowbot_core::error::{CowError, CowResult};
 use cowbot_core::event::{Event, EventPayload};
-use cowbot_core::identity::{Workspace, WorkspaceId};
+use cowbot_core::identity::{Role, UserId, Workspace, WorkspaceId};
 use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemorySettings};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -45,10 +45,10 @@ use tokio::sync::mpsc;
 
 use crate::{
     AgentUpdate, BindingHealthView, BindingView, Client, ClientSession, ClientUser,
-    ConversationPreview, EventStream, IntegrationView, MemoryFilter, MemoryNotes, MemorySave,
-    MemorySettingsUpdate, MemoryUpdate, NewBinding, NewConversation, NewIntegrationRequest,
-    NewMemory, NewTask, NoteSave, RecalledMemory, RemoteWorkspace, SessionDecisionView,
-    TaskRunPreview,
+    ConversationPreview, EventStream, IntegrationView, InviteGrant, InviteView, MemberView,
+    MemoryFilter, MemoryNotes, MemorySave, MemorySettingsUpdate, MemoryUpdate, NewBinding,
+    NewConversation, NewIntegrationRequest, NewMemory, NewTask, NoteSave, RecalledMemory,
+    RemoteWorkspace, SessionDecisionView, TaskRunPreview,
 };
 
 /// First wait before the event socket reconnects after a drop.
@@ -82,6 +82,10 @@ pub struct RemoteClient {
     base: String,
     token: String,
     workspace: Workspace,
+    /// What this account may do in `workspace`, as the server reported it.
+    role: Role,
+    /// The roles `role` may hand out, as the server reported them.
+    grantable_roles: Vec<Role>,
     user: ClientUser,
 }
 
@@ -122,6 +126,11 @@ struct ServerWorkspace {
     id: String,
     name: String,
     created_at: chrono::DateTime<chrono::Utc>,
+    role: Role,
+    /// What `role` may hand out. The server states the policy so the desktop
+    /// offers exactly what the routes would accept.
+    #[serde(default)]
+    grantable_roles: Vec<Role>,
 }
 
 impl ServerWorkspace {
@@ -129,15 +138,20 @@ impl ServerWorkspace {
         RemoteWorkspace {
             id: self.id,
             name: self.name,
+            role: self.role,
         }
     }
 
-    fn into_workspace(self) -> Workspace {
-        Workspace {
-            id: WorkspaceId(self.id),
-            name: self.name,
-            created_at: self.created_at,
-        }
+    fn into_workspace(self) -> (Workspace, Role, Vec<Role>) {
+        (
+            Workspace {
+                id: WorkspaceId(self.id),
+                name: self.name,
+                created_at: self.created_at,
+            },
+            self.role,
+            self.grantable_roles,
+        )
     }
 }
 
@@ -188,11 +202,14 @@ impl RemoteClient {
                 CowError::Config("this account does not belong to a workspace".into())
             })?,
         };
+        let (workspace, role, grantable_roles) = chosen.into_workspace();
         Ok(Self {
             http,
             base,
             token: token.to_string(),
-            workspace: chosen.into_workspace(),
+            workspace,
+            role,
+            grantable_roles,
             user: ClientUser {
                 id: cowbot_core::identity::UserId(me.user.id),
                 name: me.user.name,
@@ -266,6 +283,53 @@ impl RemoteClient {
             .send()
             .await
             .map_err(transport)?;
+        Self::from_sign_in_body(http, base, response, workspace_id).await
+    }
+
+    /// Join a workspace by redeeming an invitation, creating the account if the
+    /// caller has none.
+    ///
+    /// The server answers with the same body as sign-in, because redeeming it
+    /// both creates the account and issues the session; this binds to the
+    /// workspace the invitation named, which is the only one the new account
+    /// belongs to. See ADR-0066 for why an invitation is enough to create an
+    /// account.
+    pub async fn redeem(
+        base_url: &str,
+        token: &str,
+        name: &str,
+        email: &str,
+        password: &str,
+    ) -> CowResult<Self> {
+        let base = base_url.trim_end_matches('/').to_string();
+        let http = HttpClient::builder().build().map_err(|error| {
+            CowError::Config(format!("the HTTP client could not start: {error}"))
+        })?;
+        check_api_version(&http, &base).await?;
+        let response = http
+            .post(format!("{base}/api/v1/invites/redeem"))
+            .json(&json!({
+                "token": token,
+                "name": name,
+                "email": email,
+                "password": password,
+            }))
+            .send()
+            .await
+            .map_err(transport)?;
+        Self::from_sign_in_body(http, base, response, None).await
+    }
+
+    /// Read a sign-in shaped answer into a bound client.
+    ///
+    /// Sign-in and invitation redemption answer with the same document, so the
+    /// part that turns it into a client lives once.
+    async fn from_sign_in_body(
+        http: HttpClient,
+        base: String,
+        response: reqwest::Response,
+        workspace_id: Option<&str>,
+    ) -> CowResult<Self> {
         let status = response.status();
         let body: Value = response.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
@@ -294,6 +358,8 @@ impl RemoteClient {
                 name: chosen.name.clone(),
                 created_at: chosen.created_at,
             },
+            role: chosen.role,
+            grantable_roles: chosen.grantable_roles.clone(),
             user: ClientUser {
                 id: cowbot_core::identity::UserId(sign_in.user.id),
                 name: sign_in.user.name,
@@ -600,6 +666,8 @@ impl Client for RemoteClient {
         Ok(ClientSession {
             user: self.user.clone(),
             workspace: self.workspace.clone(),
+            role: self.role,
+            grantable_roles: self.grantable_roles.clone(),
         })
     }
 
@@ -1422,6 +1490,75 @@ impl Client for RemoteClient {
         .await
     }
 
+    async fn list_members(&self) -> CowResult<Vec<MemberView>> {
+        let body = self
+            .request::<Vec<MemberBody>>(Method::GET, self.workspace_path("/members"), None)
+            .await?;
+        Ok(body.into_iter().map(MemberView::from).collect())
+    }
+
+    async fn set_member_role(&self, user_id: &UserId, role: Role) -> CowResult<MemberView> {
+        let path = self.workspace_path(&format!("/members/{}", user_id.0));
+        let body = self
+            .request::<MemberBody>(Method::PATCH, path, Some(json!({ "role": role })))
+            .await?;
+        Ok(MemberView::from(body))
+    }
+
+    async fn remove_member(&self, user_id: &UserId) -> CowResult<()> {
+        let path = self.workspace_path(&format!("/members/{}", user_id.0));
+        self.send_empty(Method::DELETE, path).await
+    }
+
+    async fn list_invites(&self) -> CowResult<Vec<InviteView>> {
+        let body = self
+            .request::<Vec<InviteSummaryBody>>(Method::GET, self.workspace_path("/invites"), None)
+            .await?;
+        Ok(body
+            .into_iter()
+            .map(|invite| InviteView {
+                id: invite.id,
+                role: invite.role,
+                expires_at: invite.expires_at,
+            })
+            .collect())
+    }
+
+    async fn create_invite(&self, role: Role) -> CowResult<InviteGrant> {
+        let path = self.workspace_path("/invites");
+        let body = self
+            .request::<InviteGrantBody>(Method::POST, path, Some(json!({ "role": role })))
+            .await?;
+        Ok(InviteGrant {
+            id: body.id,
+            role: body.role,
+            expires_at: body.expires_at,
+            token: body.token,
+        })
+    }
+
+    async fn revoke_invite(&self, invite_id: &str) -> CowResult<()> {
+        let path = self.workspace_path(&format!("/invites/{invite_id}"));
+        self.send_empty(Method::DELETE, path).await
+    }
+
+    async fn accept_invite(&self, token: &str) -> CowResult<RemoteWorkspace> {
+        // The accept route names no workspace: the invitation already carries
+        // one, and the server reads it from there rather than trusting a path.
+        let body = self
+            .request::<WorkspaceBody>(
+                Method::POST,
+                "/api/v1/invites/accept".to_string(),
+                Some(json!({ "token": token })),
+            )
+            .await?;
+        Ok(RemoteWorkspace {
+            id: body.id,
+            name: body.name,
+            role: body.role,
+        })
+    }
+
     async fn list_integrations(&self) -> CowResult<Vec<IntegrationView>> {
         let body = self
             .request::<Vec<IntegrationBody>>(
@@ -1532,6 +1669,55 @@ impl From<IntegrationBody> for IntegrationView {
             binding_count: body.binding_count,
         }
     }
+}
+
+/// One member as the server nests it. The user fields are flattened into
+/// [`MemberView`] so the wire shape stays on this side of the trait.
+#[derive(Debug, serde::Deserialize)]
+struct MemberBody {
+    user: MemberUserBody,
+    role: Role,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MemberUserBody {
+    id: String,
+    name: String,
+    email: String,
+}
+
+impl From<MemberBody> for MemberView {
+    fn from(body: MemberBody) -> Self {
+        Self {
+            user_id: UserId(body.user.id),
+            name: body.user.name,
+            email: body.user.email,
+            role: body.role,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct InviteSummaryBody {
+    id: String,
+    role: Role,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct InviteGrantBody {
+    id: String,
+    role: Role,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    token: String,
+}
+
+/// One workspace as the server states the caller's place in it.
+#[derive(Debug, serde::Deserialize)]
+struct WorkspaceBody {
+    id: String,
+    name: String,
+    role: Role,
 }
 
 #[derive(Debug, Deserialize)]

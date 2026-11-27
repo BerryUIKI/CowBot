@@ -17,7 +17,7 @@ use cowbot_core::conversation::{
 };
 use cowbot_core::error::CowResult;
 use cowbot_core::event::Event;
-use cowbot_core::identity::{UserId, Workspace};
+use cowbot_core::identity::{Role, UserId, Workspace};
 use cowbot_core::integration::{IntegrationId, IntegrationKind};
 use cowbot_core::memory::{MemoryEntry, MemorySettings, Note};
 use cowbot_core::permission::{PermissionRule, RuleDecision};
@@ -59,6 +59,18 @@ pub struct ClientUser {
 pub struct ClientSession {
     pub user: ClientUser,
     pub workspace: Workspace,
+    /// What this account may do in `workspace`.
+    ///
+    /// A local workspace has one person at [`Role::Owner`], which is what
+    /// `bootstrap_local_named` writes, so this is a real answer in both modes
+    /// rather than a server-only field.
+    pub role: Role,
+    /// The roles [`ClientSession::role`] may hand out, strongest first.
+    ///
+    /// The screen hides the member list from a plain member and offers only
+    /// these roles in a picker; both come from the server, so neither is a
+    /// second copy of the policy.
+    pub grantable_roles: Vec<Role>,
 }
 
 /// A workspace a remote account can enter.
@@ -66,6 +78,37 @@ pub struct ClientSession {
 pub struct RemoteWorkspace {
     pub id: String,
     pub name: String,
+    pub role: Role,
+}
+
+/// One member of the current workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MemberView {
+    pub user_id: UserId,
+    pub name: String,
+    pub email: String,
+    pub role: Role,
+}
+
+/// An invitation that has not been redeemed yet. The token is not part of it:
+/// the server keeps only a hash and returns the plain token exactly once, when
+/// the invitation is created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InviteView {
+    pub id: String,
+    pub role: Role,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A freshly created invitation, including the token to hand out.
+///
+/// This is the only time the token exists outside the person it is given to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InviteGrant {
+    pub id: String,
+    pub role: Role,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub token: String,
 }
 
 /// One remembered session approval decision.
@@ -515,6 +558,28 @@ pub trait Client: Send + Sync {
 
     async fn list_agents(&self) -> CowResult<Vec<AgentProfile>>;
     async fn update_agent(&self, update: &AgentUpdate) -> CowResult<AgentProfile>;
+
+    /// Everyone in the current workspace.
+    ///
+    /// A local workspace has exactly one person, which is a real answer rather
+    /// than an empty list: the membership row exists.
+    async fn list_members(&self) -> CowResult<Vec<MemberView>>;
+    /// Change a member's role. The server decides whether this caller may.
+    async fn set_member_role(&self, user_id: &UserId, role: Role) -> CowResult<MemberView>;
+    /// Remove a member. Their account and their past messages stay.
+    async fn remove_member(&self, user_id: &UserId) -> CowResult<()>;
+    /// Invitations that are still redeemable, without their tokens.
+    async fn list_invites(&self) -> CowResult<Vec<InviteView>>;
+    /// Mint an invitation. The returned token is the only copy.
+    async fn create_invite(&self, role: Role) -> CowResult<InviteGrant>;
+    /// Cancel an invitation that has not been redeemed.
+    async fn revoke_invite(&self, invite_id: &str) -> CowResult<()>;
+    /// Join a workspace this account was invited to.
+    ///
+    /// Needs a session, so it is for someone who already has an account; an
+    /// invitation for someone who does not is redeemed through
+    /// [`RemoteClient::redeem`](crate::RemoteClient::redeem), which creates one.
+    async fn accept_invite(&self, token: &str) -> CowResult<RemoteWorkspace>;
 
     /// The workspace's IM integrations, including retired ones (ADR-0056).
     ///
