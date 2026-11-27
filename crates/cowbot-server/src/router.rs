@@ -145,6 +145,10 @@ pub fn app(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(api::health))
         .route("/api/v1/auth/sign-in", post(api::sign_in))
+        // Redeeming an invitation is how someone with no account gets one, so
+        // the invitation token is the credential and no session is required
+        // (ADR-0066).
+        .route("/api/v1/invites/redeem", post(workspaces::redeem_invite))
         // A webhook endpoint authenticates by verifying the body, never by a
         // session, so it sits on the public router (ADR-0062). The integration
         // id in the path chooses whose secret is used.

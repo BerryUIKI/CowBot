@@ -93,6 +93,41 @@ async fn call(
     (status, json)
 }
 
+/// One request carrying an `X-Forwarded-For`, so a rate limiter counts it
+/// against a source the test chooses.
+async fn call_from(
+    router: Router,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    token: Option<&str>,
+    source: &str,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-forwarded-for", source);
+    if let Some(token) = token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    let request = match body {
+        Some(body) => builder
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+        None => builder.body(Body::empty()).unwrap(),
+    };
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, json)
+}
+
 /// Create a second account and issue it a session, returning (id, token).
 ///
 /// The account is not yet a member of any workspace.
@@ -573,4 +608,319 @@ async fn an_unprivileged_caller_cannot_probe_valid_enum_values() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// A token nobody has ever had, so a test can tell "already used" from "made
+/// up" without creating one.
+const UNKNOWN_INVITE: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Create one invitation and return its token.
+async fn invite(fixture: &Fixture, role: &str) -> String {
+    let (status, body) = call(
+        fixture.router.clone(),
+        "POST",
+        &format!("/api/v1/workspaces/{}/invites", fixture.workspace_id),
+        Some(json!({ "role": role })),
+        Some(&fixture.owner_token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    body["token"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn redeeming_an_invite_creates_the_account_and_signs_it_in() {
+    let f = fixture().await;
+    let token = invite(&f, "member").await;
+
+    // No bearer token: the invitation is the credential, and this person has no
+    // account to sign in with yet.
+    let (status, body) = call(
+        f.router.clone(),
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Newcomer",
+            "email": "Newcomer@Example.com",
+            "password": "newcomer-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(body["user"]["name"], "Newcomer");
+    // The address is normalized, so signing in with either spelling works.
+    assert_eq!(body["user"]["email"], "newcomer@example.com");
+    assert_eq!(body["workspaces"][0]["id"], f.workspace_id);
+    assert_eq!(body["workspaces"][0]["role"], "member");
+    let session = body["token"].as_str().unwrap().to_string();
+
+    // The session it handed back works immediately.
+    let (status, members) = call(
+        f.router.clone(),
+        "GET",
+        &format!("/api/v1/workspaces/{}/members", f.workspace_id),
+        None,
+        Some(&session),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {members}");
+    assert_eq!(members.as_array().unwrap().len(), 2);
+
+    // And the password it chose signs in on its own.
+    let (status, signed_in) = call(
+        f.router.clone(),
+        "POST",
+        "/api/v1/auth/sign-in",
+        Some(json!({
+            "email": "newcomer@example.com",
+            "password": "newcomer-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {signed_in}");
+
+    // A member may not invite, which is what the invitation's role bought them.
+    let (status, _) = call(
+        f.router,
+        "POST",
+        &format!("/api/v1/workspaces/{}/invites", f.workspace_id),
+        Some(json!({ "role": "member" })),
+        Some(&session),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_redeemed_invite_cannot_be_redeemed_again() {
+    let f = fixture().await;
+    let token = invite(&f, "member").await;
+    let (status, _) = call(
+        f.router.clone(),
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "First",
+            "email": "first@example.com",
+            "password": "first-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Same token, a different person: the invitation is gone, so this reads the
+    // same as a token that never existed.
+    let (status, _) = call(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Second",
+            "email": "second@example.com",
+            "password": "second-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_unknown_invite_reads_as_missing_rather_than_invalid() {
+    let f = fixture().await;
+    let (status, body) = call(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": UNKNOWN_INVITE,
+            "name": "Nobody",
+            "email": "nobody@example.com",
+            "password": "nobody-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn redeeming_cannot_take_an_email_that_already_has_an_account() {
+    let f = fixture().await;
+    let token = invite(&f, "member").await;
+    let (status, body) = call(
+        f.router.clone(),
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Impostor",
+            "email": "owner@example.com",
+            "password": "impostor-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "body: {body}");
+
+    // The invitation survives a conflicting attempt, so the right person can
+    // still use it.
+    let (status, _) = call(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Right Person",
+            "email": "right@example.com",
+            "password": "right-person-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn an_expired_invite_cannot_create_an_account() {
+    let f = fixture().await;
+    let token = invite(&f, "member").await;
+    let invites = f
+        .store
+        .list_invites(&cowbot_core::identity::WorkspaceId::new(
+            f.workspace_id.clone(),
+        ))
+        .await
+        .unwrap();
+    f.store
+        .set_invite_expiry(
+            &invites[0].id,
+            chrono::Utc::now() - chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = call(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Late",
+            "email": "late@example.com",
+            "password": "late-long-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn a_short_password_is_refused_before_any_account_exists() {
+    let f = fixture().await;
+    let token = invite(&f, "member").await;
+    let (status, body) = call(
+        f.router.clone(),
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Short",
+            "email": "short@example.com",
+            "password": "short",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert!(f
+        .store
+        .get_user_by_email("short@example.com")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_redeemed_account_is_listed_at_the_role_it_was_invited_at() {
+    let f = fixture().await;
+    let token = invite(&f, "admin").await;
+    let (status, body) = call(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Second Admin",
+            "email": "second-admin@example.com",
+            "password": "second-admin-password",
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(body["workspaces"][0]["role"], "admin");
+    // An admin may hand out a member and nothing stronger; the response states
+    // it so the desktop's picker never has to derive the policy itself.
+    assert_eq!(body["workspaces"][0]["grantable_roles"], json!(["member"]));
+}
+
+#[tokio::test]
+async fn repeated_failed_redemptions_from_one_source_are_rate_limited() {
+    let f = fixture().await;
+    let source = "203.0.113.9";
+    let attempt = json!({
+        "token": UNKNOWN_INVITE,
+        "name": "Guesser",
+        "email": "guesser@example.com",
+        "password": "guesser-long-password",
+    });
+    for _ in 0..10 {
+        let (status, _) = call_from(
+            f.router.clone(),
+            "POST",
+            "/api/v1/invites/redeem",
+            Some(attempt.clone()),
+            None,
+            source,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    // The eleventh is refused before the token is even looked up.
+    let (status, body) = call_from(
+        f.router.clone(),
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(attempt),
+        None,
+        source,
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "body: {body}");
+
+    // A different source is untouched: the bucket is per caller.
+    let token = invite(&f, "member").await;
+    let (status, _) = call_from(
+        f.router,
+        "POST",
+        "/api/v1/invites/redeem",
+        Some(json!({
+            "token": token,
+            "name": "Elsewhere",
+            "email": "elsewhere@example.com",
+            "password": "elsewhere-long-password",
+        })),
+        None,
+        "198.51.100.4",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 }

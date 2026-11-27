@@ -5,15 +5,15 @@
 //! than `403`, so membership cannot be probed from the outside (ADR-0044).
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::{DateTime, Duration, Utc};
 use cowbot_core::audit::{AuditEvent, AuditSource};
-use cowbot_core::identity::{Invite, Membership, Role, UserId, Workspace, WorkspaceId};
+use cowbot_core::identity::{Invite, Membership, Role, User, UserId, Workspace, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 use crate::api::UserBody;
-use crate::auth::{hash_token, random_token, AuthenticatedUser};
+use crate::auth::{hash_password, hash_token, random_token, AuthenticatedUser};
 use crate::error::ApiError;
 use crate::router::AppState;
 
@@ -27,6 +27,9 @@ pub struct WorkspaceBody {
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub role: Role,
+    /// The roles `role` may hand out, strongest first. See the same field on
+    /// the sign-in body: the server states the policy, the desktop renders it.
+    pub grantable_roles: Vec<Role>,
 }
 
 /// Every workspace the caller belongs to.
@@ -44,6 +47,7 @@ pub async fn list_workspaces(
             name: workspace.name,
             created_at: workspace.created_at,
             role: membership.role,
+            grantable_roles: membership.role.grantable(),
         });
     }
     Ok(Json(result))
@@ -83,6 +87,7 @@ pub async fn create_workspace(
             name: workspace.name,
             created_at: workspace.created_at,
             role: Role::Owner,
+            grantable_roles: Role::Owner.grantable(),
         }),
     ))
 }
@@ -400,8 +405,127 @@ pub async fn accept_invite(
             name: workspace.name,
             created_at: workspace.created_at,
             role: invite.role,
+            grantable_roles: invite.role.grantable(),
         }),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RedeemInviteRequest {
+    pub token: String,
+    pub name: String,
+    pub email: String,
+    pub password: String,
+}
+
+/// Turn an invitation into an account and a session, in one step.
+///
+/// This is the public route, so it takes no authenticated user: the invitation
+/// is the credential. That is the point — the other accept route
+/// ([`accept_invite`]) needs a session, and someone who has never signed in has
+/// no way to get one. A 256-bit single-use token with a seven-day expiry is
+/// proof enough that this person was invited, and it arrives out of band,
+/// exactly where a password reset link would.
+///
+/// The account is created at the invitation's role and the invitation is
+/// deleted, so redeeming twice is impossible. Everything else — a short
+/// password, an unknown or expired token, an email already in use — is refused
+/// before anything is written.
+pub async fn redeem_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RedeemInviteRequest>,
+) -> Result<(StatusCode, Json<crate::api::SignInBody>), ApiError> {
+    // Same per-source bucket as sign-in: this route also hashes a password on
+    // an unauthenticated request, so leaving it unlimited would be the cheaper
+    // way to make the server spend CPU.
+    let source = crate::api::request_source(&headers);
+    if state.auth.rate_limited(&source) {
+        return Err(ApiError::too_many_requests(
+            "too many attempts; wait a moment and try again",
+        ));
+    }
+
+    let name = body.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err(ApiError::bad_request("a name must be 1 to 80 characters"));
+    }
+    let email = body.email.trim().to_lowercase();
+    if !looks_like_email(&email) {
+        return Err(ApiError::bad_request("enter a valid email address"));
+    }
+
+    let invite = state
+        .store
+        .find_invite_by_token_hash(&hash_token(body.token.trim()))
+        .await?
+        .ok_or_else(|| {
+            state.auth.record_failure(&source);
+            // One message for "no such token" and "already used", so the route
+            // cannot be asked which tokens ever existed.
+            ApiError::not_found("the invitation is not valid")
+        })?;
+    if invite.expires_at <= Utc::now() {
+        state.store.delete_invite(&invite.id).await?;
+        state.auth.record_failure(&source);
+        return Err(ApiError::bad_request("the invitation has expired"));
+    }
+    // Checked before the password is hashed, so a known address costs no work.
+    if state.store.get_user_by_email(&email).await?.is_some() {
+        state.auth.record_failure(&source);
+        return Err(ApiError::conflict(
+            "that email already has an account; sign in and accept the invitation instead",
+        ));
+    }
+
+    // `hash_password` enforces the minimum length; a short password is the one
+    // failure here that is not an attack, so it does not count against the
+    // source.
+    let password_hash = hash_password(&body.password)?;
+    let user = User {
+        password_hash,
+        ..User::new(name, &email, "")
+    };
+    state.store.create_user(&user).await?;
+    state
+        .store
+        .add_member(&Membership::new(
+            user.id.clone(),
+            invite.workspace_id.clone(),
+            invite.role,
+        ))
+        .await?;
+    state.store.delete_invite(&invite.id).await?;
+    audit(
+        &state,
+        &invite.workspace_id,
+        &user.id.0,
+        "member.joined",
+        invite.role.as_str(),
+    )
+    .await?;
+
+    let issued = state.auth.issue(&user.id).await?;
+    let workspaces = crate::api::workspaces_for(&state, &user).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(crate::api::sign_in_body(
+            issued,
+            crate::api::UserBody::from(&user),
+            workspaces,
+        )),
+    ))
+}
+
+/// A shape check, not a deliverability check.
+///
+/// The server sends no mail, so this only keeps an address that could never be
+/// signed in with out of the table.
+fn looks_like_email(email: &str) -> bool {
+    email
+        .split_once('@')
+        .map(|(local, domain)| !local.is_empty() && !domain.is_empty() && !domain.contains('@'))
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]
@@ -447,6 +571,7 @@ pub async fn rename_workspace(
         name: workspace.name,
         created_at: workspace.created_at,
         role: actor,
+        grantable_roles: actor.grantable(),
     }))
 }
 
