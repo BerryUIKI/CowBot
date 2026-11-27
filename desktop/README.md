@@ -163,6 +163,18 @@ completed always quits rather than hiding, so a failure the user still has to
 answer is never hidden. See
 [ADR-0064](../docs/ADR/0064-desktop-background-residency.md).
 
+`src/notify.rs` closes the remaining gap: while the window is hidden or
+minimised, a finished or failed task run and a waiting approval raise a system
+notification, and clicking it calls the same `reveal` the tray does. Channel
+replies never notify, and nothing is shown while the window is in front of the
+user. `TaskCompleted`/`TaskFailed` arrive once per assignment, so the subscriber
+deduplicates on the task id. The copy is English — the shell cannot read the
+interface locale, and a notification fires when no window may exist to report
+one. `notifications_enabled` in `config.json` is read at the moment of each
+event, so Settings → General switches it without a restart. Uses
+`tauri-plugin-notification` in Rust only; no frontend plugin or ACL entry. See
+[ADR-0065](../docs/ADR/0065-desktop-notifications.md).
+
 ## Build
 
 ```bash

@@ -222,9 +222,17 @@ tracked.
   extension (a bare GNOME session, for instance) does not show status icons, and
   a hidden window is then only reachable through the account menu's quit —
   which is to say not at all. Nothing detects this and warns you.
-- **Nothing tells you when work finishes while the window is hidden.** There are
-  no system notifications: a finished run and a waiting approval are only
-  visible once you open the window. The tray icon carries no badge or count.
+- **Notifications are English and largely unclickable.** A finished run and a
+  waiting approval raise a system notification while the window is hidden
+  ([ADR-0065](ADR/0065-desktop-notifications.md)), but its title and body are
+  always English whatever the interface language, because the shell cannot read
+  the locale. On Windows a click is only reported while the toast is still on
+  screen; once it has gone to the Action Center, clicking reopens the app but
+  tells it nothing about which task the notification was for. Channel replies
+  never notify, so a reply that arrives while you are away is invisible.
+- **A notification is not retracted.** A toast shown for a run that was
+  cancelled from another device, or that failed a moment later, stays on screen
+  until dismissed.
 - **Slash commands are executed by the desktop only.** The CLI shares the
   catalogue and parser but does not run commands. There is no command history,
   and `/model` cannot reach a model on an inactive provider.
